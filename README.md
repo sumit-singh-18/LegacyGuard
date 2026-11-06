@@ -158,3 +158,7 @@ claude plugin marketplace remove legacyguard
 ## Prefer a zip?
 
 On this repository's GitHub page choose Code, then Download ZIP. Unzip it, open a terminal, type `sh ` with a space after it, drag `install.sh` into the window and press Enter. `README_GUARDRAIL.txt` has the same steps in plain text.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
