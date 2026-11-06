@@ -38,4 +38,4 @@ Update
   Unzip the new version and run install.sh again.
 
 Remove
-  claude plugin uninstall legacyguard@legacyguard
+  claude plugin uninstall legacyguard@turnback-lab

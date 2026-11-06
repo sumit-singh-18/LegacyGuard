@@ -7,8 +7,8 @@ It makes no model calls and needs no API key. It runs on your Claude Code plan. 
 ## Install
 
 ```bash
-claude plugin marketplace add AtCloudDiwash/legacy-guard
-claude plugin install legacyguard@legacyguard
+claude plugin marketplace add turnback-lab/legacy-guard
+claude plugin install legacyguard@turnback-lab
 ```
 
 After that the guard loads in every Claude Code session. Without GitHub: unzip the download package (`dist/legacyguard.zip`, built by `tools/build_package.py`) and run `sh install.sh` once.

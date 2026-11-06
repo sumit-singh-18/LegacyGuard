@@ -2,7 +2,16 @@
   "name": "legacyguard",
   "version": "0.4.0",
   "description": "Guardrails for Claude Code on a Python backend: contract checks before writes and old-versus-new behavioral diffs after them.",
-  "author": { "name": "LegacyGuard team" },
+  "author": {
+    "name": "turnback-lab"
+  },
   "license": "MIT",
-  "keywords": ["guardrails", "behavioral-diff", "python", "regression"]
+  "keywords": [
+    "guardrails",
+    "behavioral-diff",
+    "python",
+    "regression"
+  ],
+  "homepage": "https://github.com/turnback-lab/legacy-guard",
+  "repository": "https://github.com/turnback-lab/legacy-guard"
 }

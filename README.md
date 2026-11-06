@@ -17,11 +17,11 @@ It runs by itself in the background. You use Claude Code the way you always do.
 Copy these two lines into your terminal, one at a time:
 
 ```bash
-claude plugin marketplace add AtCloudDiwash/legacy-guard
+claude plugin marketplace add turnback-lab/legacy-guard
 ```
 
 ```bash
-claude plugin install legacyguard@legacyguard
+claude plugin install legacyguard@turnback-lab
 ```
 
 Check that it worked:
@@ -30,7 +30,7 @@ Check that it worked:
 claude plugin list
 ```
 
-You should see `legacyguard@legacyguard` with status `enabled`.
+You should see `legacyguard@turnback-lab` with status `enabled`.
 
 ## 2. Open a Python project
 
@@ -118,11 +118,11 @@ Both are also saved in your project under `.legacyguard/reports/`.
 ## Update
 
 ```bash
-claude plugin marketplace update legacyguard
+claude plugin marketplace update turnback-lab
 ```
 
 ```bash
-claude plugin update legacyguard@legacyguard
+claude plugin update legacyguard@turnback-lab
 ```
 
 Then restart Claude.
@@ -130,11 +130,11 @@ Then restart Claude.
 ## Remove
 
 ```bash
-claude plugin uninstall legacyguard@legacyguard
+claude plugin uninstall legacyguard@turnback-lab
 ```
 
 ```bash
-claude plugin marketplace remove legacyguard
+claude plugin marketplace remove turnback-lab
 ```
 
 ## What it does not do
@@ -150,14 +150,19 @@ claude plugin marketplace remove legacyguard
 | Message | What to do |
 | --- | --- |
 | `Unknown command: /legacyguard:status` | The guard is not installed, or Claude was not restarted after installing. Run `claude plugin list` |
-| `Cannot add marketplace "legacyguard": its source doesn't match…` | An older copy is installed. Run the two "Remove" commands, then the two "Install" commands |
+| `Cannot add marketplace …: its source doesn't match…` | A copy from another place is installed. Run the two "Remove" commands, then the two "Install" commands |
+| You installed before this project moved to turnback-lab | Run `claude plugin uninstall legacyguard@legacyguard` and `claude plugin marketplace remove legacyguard`, then the two "Install" commands |
 | `LegacyGuard needs Python 3.10 or newer…` | Install Python 3.12 from python.org, then start Claude again |
 | `LegacyGuard could not install its dependencies…` | Check your internet connection and start Claude again |
 | "not set up here" from `/legacyguard:status` | The folder is not a git repository with Python code in it (at least three Python files). Start Claude inside your project, or run `git init` and commit your files first |
 
 ## Prefer a zip?
 
-On this repository's GitHub page choose Code, then Download ZIP. Unzip it, open a terminal, type `sh ` with a space after it, drag `install.sh` into the window and press Enter. `README_GUARDRAIL.txt` has the same steps in plain text.
+On this repository's GitHub page choose Code, then Download ZIP, and unzip it. Open a terminal, type `sh ` with a space after it, drag `install.sh` from the unzipped folder into the window and press Enter. It ends with "LegacyGuard is installed".
+
+## Team
+
+Built by turnback-lab for the University of Southern Mississippi Hatchathon 2026 (Legacy Tech track).
 
 ## Licence
 

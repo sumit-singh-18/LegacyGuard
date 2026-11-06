@@ -1,6 +1,8 @@
 {
-  "name": "legacyguard",
-  "owner": { "name": "LegacyGuard team" },
+  "name": "turnback-lab",
+  "owner": {
+    "name": "turnback-lab"
+  },
   "description": "Guardrails for Claude Code on a Python backend.",
   "plugins": [
     {
