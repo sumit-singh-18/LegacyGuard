@@ -35,6 +35,72 @@ def _with_pool(st, base, values: list):
     return st.one_of(st.sampled_from(values), base) if values else base
 
 
+SEQUENCES = ("list", "List", "Sequence", "MutableSequence", "Iterable", "Iterator", "Collection", "KeysView", "ValuesView")
+SETS = ("set", "Set", "frozenset", "FrozenSet", "AbstractSet")
+MAPPINGS = ("dict", "Dict", "Mapping", "MutableMapping")
+TYPE_VARIABLE = re.compile(r"_?[A-Z][A-Za-z0-9]{0,2}|_T\w*|Any|object|Hashable")
+
+
+def _is_type_variable(ann: str) -> bool:
+    return bool(TYPE_VARIABLE.fullmatch(ann))
+
+
+def _split_top(text: str, sep: str) -> list[str]:
+    """Split on a separator that is not inside brackets: 'tuple[int,int]|None' on '|' has two parts."""
+    parts, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+        elif ch == sep and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return parts
+
+
+def _collection_strategy(ann: str, st, pool: list):
+    """Strategies for the shapes real signatures use: tuple[float, float] ranges, list[T], Iterable[str], unions (FR-40)."""
+    union = _split_top(ann, "|")
+    if len(union) > 1:
+        built = [s for s in (_strategy_for(part, None, st, pool) for part in union) if s is not None]
+        return st.one_of(*built) if built else None
+    m = re.fullmatch(r"(\w+)\[(.+)\]", ann)
+    if not m:
+        return None
+    outer, inner = m.group(1), _split_top(m.group(2), ",")
+    if outer in ("tuple", "Tuple"):
+        if len(inner) == 2 and inner[1] == "...":
+            one = _strategy_for(inner[0], None, st, pool)
+            return st.lists(one, min_size=1, max_size=4).map(tuple) if one is not None else None
+        parts = [_strategy_for(i, None, st, pool) for i in inner]
+        if any(p is None for p in parts):
+            return None
+        both = st.tuples(*parts)
+        if len(inner) == 2 and inner[0] == inner[1] and inner[0] in ("int", "float"):
+            # A pair of numbers is nearly always (low, high). Half the draws are put in that order.
+            return st.one_of(both.map(lambda t: tuple(sorted(t)) if all(v == v for v in t) else t), both)
+        return both
+    if outer in SEQUENCES and len(inner) == 1:
+        one = _strategy_for(inner[0], None, st, pool)
+        return st.lists(one, max_size=4) if one is not None else None
+    if outer in SETS and len(inner) == 1:
+        one = _strategy_for(inner[0], None, st, pool)
+        return st.lists(one, max_size=4).map(_as_set) if one is not None else None
+    if outer in MAPPINGS and len(inner) == 2 and inner[0] == "str":
+        one = _strategy_for(inner[1], None, st, pool)
+        return st.dictionaries(st.text("abc", max_size=3), one, max_size=3) if one is not None else None
+    return None
+
+
+def _as_set(values: list):
+    try:
+        return set(values)
+    except TypeError:
+        return set()
+
+
 def _strategy_for(annotation: str | None, default: str | None, st, pool: list | None = None):
     pool = pool or []
     strs = [v for v in pool if isinstance(v, str)]
@@ -68,15 +134,11 @@ def _strategy_for(annotation: str | None, default: str | None, st, pool: list | 
             base = st.dates(dt.date(2000, 1, 1), dt.date(2040, 12, 31))
         elif ann == "datetime":
             base = st.datetimes(dt.datetime(2000, 1, 1), dt.datetime(2040, 12, 31))
+        elif _is_type_variable(ann):
+            # list[_T] or item: _T: any value will do, and the project's own example values are the likeliest fit
+            base = _with_pool(st, st.one_of(st.text("abcxyz", min_size=1, max_size=4), st.integers(0, 20)), strs + ints)
         else:
-            m = re.fullmatch(r"(?:list|List)\[(.+)\]", ann)
-            if m:
-                inner = _strategy_for(m.group(1), None, st, pool)
-                base = st.lists(inner, max_size=4) if inner is not None else None
-            m = re.fullmatch(r"(?:dict|Dict)\[str,(.+)\]", ann)
-            if m and base is None:
-                inner = _strategy_for(m.group(1), None, st, pool)
-                base = st.dictionaries(st.text("abc", max_size=3), inner, max_size=3) if inner is not None else None
+            base = _collection_strategy(ann, st, pool)
         if base is not None:
             return st.one_of(st.none(), base) if optional else base
     if default:
@@ -103,7 +165,8 @@ def _strategy_for(annotation: str | None, default: str | None, st, pool: list | 
     return _with_pool(st, st.one_of(money, fine, st.integers(-100, 100), st.text("abcxyz", max_size=4), st.none()), pool)
 
 
-MAX_GRID = 150
+MAX_GRID = 400
+MAX_OPTIONAL_VALUES = 10
 GRID_PER_PARAM = 8
 SMALL_INTS = [0, 1, 2, 3]
 # Values where rounding rules part ways. Random floats almost never land on a tie.
@@ -139,16 +202,38 @@ def _grid_values(p: dict, pool: list) -> list | None:
     ints = [v for v in pool if isinstance(v, int) and not isinstance(v, bool)]
     nums = [v for v in pool if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)]
     floats = [float(v) for v in nums if not float(v).is_integer()]
+    members = _split_top(ann, "|") if ann else []
+    if len(members) > 1:
+        # float | str: the likely values of each member, a few of each
+        merged: list = []
+        for member in members:
+            merged += (_grid_values({**p, "annotation": member, "default": None}, pool) or [])[:6]
+        return merged or None
     if ann == "bool":
         return [False, True]
     if ann == "int":
         return list(dict.fromkeys(SMALL_INTS + ints))[:GRID_PER_PARAM]
     if ann == "float":
-        return list(dict.fromkeys(floats[:4] + TIE_FLOATS + [float(v) for v in nums][:4])) + SPECIAL_FLOATS
+        return list(dict.fromkeys(TIE_FLOATS + floats[:4] + [float(v) for v in nums][:4])) + SPECIAL_FLOATS
     if ann == "Decimal":
         return list(dict.fromkeys([Decimal(str(v)) for v in nums][:GRID_PER_PARAM] + TIE_DECIMALS + [Decimal(str(v)) for v in TIE_FLOATS])) + SPECIAL_DECIMALS
     if ann == "str":
         return strs[:GRID_PER_PARAM] or None
+    if _is_type_variable(ann):
+        return (strs[:6] + list(dict.fromkeys(ints))[:4]) or None
+    m = re.fullmatch(r"(?:tuple|Tuple)\[(int|float),(int|float)\]", ann)
+    if m:
+        # (low, high) ranges from the example numbers, smallest spans first: (1, 100), (1, 255), ...
+        ordered = sorted({v for v in nums if isinstance(v, (int, float)) and not is_special(v)})[:6]
+        pairs = [(a, b) for i, a in enumerate(ordered) for b in ordered[i + 1:]]
+        return (pairs[:8] + [(1, 100), (0, 1), (1, 255)])[:10]
+    m = re.fullmatch(r"(\w+)\[([^\[\],]+)\]", ann)
+    if m and m.group(1) in SEQUENCES:
+        inner = m.group(2)
+        values = strs if inner == "str" or _is_type_variable(inner) else ints if inner == "int" else [float(v) for v in nums] if inner == "float" else []
+        values = list(dict.fromkeys(values))
+        # the examples as one list, and shorter prefixes of it: lengths 4, 3 and 2 behave differently under division
+        return [values[:n] for n in (4, 3, 2, 1) if len(values) >= n] or None
     if ann:
         return None
     if p.get("default") is not None:
@@ -176,7 +261,10 @@ def _grid(sym, pool: list | None) -> list[dict]:
                 return []  # a required parameter we have no likely values for
             required.append((p, values))
         elif values is not None:
-            optional.append((p, values))
+            # Short lists for options, so the whole grid fits and nothing is left to a random sample:
+            # Odoo's float_round(2.675, precision_digits=2) was in the sample only one run in three.
+            ordinary = [v for v in values if not is_special(v)][:MAX_OPTIONAL_VALUES]
+            optional.append((p, ordinary + [v for v in values if is_special(v)]))
     if not required and not optional:
         return []
     import itertools

@@ -21,6 +21,9 @@ MAX_CALLS = 40
 MAX_TEXT = 60
 QUOTED = re.compile(r"""(['"`])([^'"`\n]{1,40})\1""")
 NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
+# 00:20:00, 2024-01-31, 10.0.0.1: values with parts, often written in prose without quotes
+STRUCTURED = re.compile(r"(?<![\w:/-])\d+(?:[:/-]\d+)+(?![\w:/-])|(?<![\w.])\d+(?:\.\d+){2,}(?![\w.])")
+SEPARATORS = (":", ",", "-", "/", ".", ";", "|")
 
 
 # ---- gates ----
@@ -128,6 +131,7 @@ def _simple(value, depth: int = 0) -> bool:
 def _from_text(text: str) -> list:
     """Quoted tokens and numbers in prose, such as a docstring's 'human_to_bytes("10M")' or '"1-5,8,10-12" => [...]'."""
     out: list = [m.group(2) for m in QUOTED.finditer(text)]
+    out += [m.group(0) for m in STRUCTURED.finditer(text)]
     for m in NUMBER.finditer(text):
         token = m.group(0)
         out.append(float(token) if "." in token else int(token))
@@ -274,6 +278,20 @@ def _variants(values: list) -> list:
         elif isinstance(v, float):
             out += [v + 0.005, round(v, 2) + 0.005]
         elif isinstance(v, str) and len(v) <= 20:
+            # One part more and one part fewer. Code that splits a value usually handles the documented shape
+            # and decides something about the others ("1:2:3:4" where "h:m:s" is expected).
+            for sep in SEPARATORS:
+                parts = v.split(sep)
+                if 2 <= len(parts) <= 5 and all(parts):
+                    out.append(sep.join(parts + [parts[-1]]))
+                    if len(parts) > 2:
+                        out.append(sep.join(parts[:-1]))
+                    # Zero is the usual default, so a part that is zero cannot show whether it was read:
+                    # '00:20:00:00' gives 0 seconds whether the third part is used or ignored.
+                    nonzero = [q if q.strip("0") else "7" for q in parts]
+                    if nonzero != parts:
+                        out += [sep.join(nonzero), sep.join(nonzero + [nonzero[-1]])]
+                    break
             m = FIRST_NUMBER.search(v)
             if m and "." not in m.group(0):
                 # Three fractions, because which one lands past the half depends on the multiplier that follows

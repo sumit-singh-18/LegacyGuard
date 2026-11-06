@@ -4,6 +4,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -34,6 +35,8 @@ class Target:
     old_gate: list = field(default_factory=list)  # statements the edit changed, as line ranges in the baseline file
     new_gate: list = field(default_factory=list)  # the same, in the edited file
     source: str = ""                               # the function's text before the edit, for example values
+    via: str = ""                                  # not edited itself: "calls states_in_range" (FR-41)
+    via_file: str = ""                             # the file whose edit made this function worth running
 
 
 @dataclass
@@ -50,6 +53,9 @@ class Result:
     dropped_invalid: int = 0
     differences: list[dict] = field(default_factory=list)
     only_special: bool = False  # every differing input contains NaN or infinity; ordinary values agree
+    only_float_noise: bool = False  # every difference is in the last digits of a float
+    via: str = ""
+    via_file: str = ""
 
     @property
     def subject(self) -> str:
@@ -206,6 +212,27 @@ def show_call(target: Target, item: dict) -> str:
     return f"{name}({', '.join(parts)})"
 
 
+FLOAT_NOISE = 1e-9
+
+
+def _float_noise(a, b) -> bool:
+    """True if two results have the same shape and differ only in floats that agree to nine digits."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        if a.get("t") == "float" and b.get("t") == "float":
+            try:
+                x, y = float(a["v"]), float(b["v"])
+            except (TypeError, ValueError):
+                return False
+            if x == y or (x != x and y != y):
+                return True
+            scale = max(abs(x), abs(y))
+            return scale != float("inf") and abs(x - y) <= FLOAT_NOISE * max(scale, 1e-300)
+        return a.keys() == b.keys() and all(_float_noise(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_float_noise(x, y) for x, y in zip(a, b))
+    return a == b
+
+
 def _has_special(item: dict) -> bool:
     for a in item.get("args", []):
         try:
@@ -264,15 +291,17 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         if _key(ca) != _key(cn):
             r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca), "after": _show_outcome(cn), "source": item["source"],
                                   "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
-                                  "special": _has_special(item)})
+                                  "special": _has_special(item),
+                                  "noise": ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
     if r.differences:
         r.status = DIFFERENT
         # The example a person reads first: from real tests, then the repo's own examples, ordinary values before
         # NaN and infinity, a returned value before an error, and short before long.
-        r.differences.sort(key=lambda d: (d["source"] != "tests", d["source"] != "examples", d["special"],
+        r.differences.sort(key=lambda d: (d["noise"], d["source"] != "tests", d["source"] != "examples", d["special"],
                                           d["before_raw"]["k"] != "return" or d["after_raw"]["k"] != "return",
                                           len(d["call"]) + len(d["before"]) + len(d["after"])))
         r.only_special = all(d["special"] for d in r.differences)
+        r.only_float_noise = all(d["noise"] for d in r.differences)
         return r
     if blocked:
         r.reason = " and ".join(sorted(BLOCK_REASON.get(k, k) for k in blocked))
@@ -292,6 +321,34 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         return r
     r.status = DONE
     return r
+
+
+ALIAS = re.compile(r"^[ \t]*(?:type[ \t]+)?([A-Z]\w*)[ \t]*(?::[ \t]*(?:typing\.)?TypeAlias)?[ \t]*=[ \t]*([^\n#]+?)[ \t]*(?:#.*)?$", re.M)
+ALIAS_VALUE = re.compile(r"[\w.\[\], |\"']+")
+BUILDABLE = re.compile(r"\b(int|float|str|bool|Decimal|date|datetime|list|tuple|dict|set|None|Sequence|Iterable|Mapping)\b")
+
+
+def _aliases(text: str) -> dict[str, str]:
+    """Type names defined in the same file, such as `NumberOrString: TypeAlias = float | str` (FR-40).
+
+    Only definitions that are made of types the input builder knows are kept, so a constant is never mistaken for one."""
+    out = {}
+    for name, value in ALIAS.findall(text):
+        value = value.strip().strip("\"'")
+        if ALIAS_VALUE.fullmatch(value) and BUILDABLE.search(value) and not value[0].isdigit():
+            out[name] = value.replace(" ", "")
+    return out
+
+
+def _resolve_aliases(params: list[dict], aliases: dict[str, str]) -> list[dict]:
+    if not aliases:
+        return params
+    pattern = re.compile(r"\b(" + "|".join(map(re.escape, aliases)) + r")\b")
+    out = []
+    for p in params:
+        ann = p.get("annotation")
+        out.append({**p, "annotation": pattern.sub(lambda m: aliases[m.group(1)], ann)} if ann else p)
+    return out
 
 
 def _index(cfg):
@@ -325,8 +382,15 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
     roots: set[str] = set()
     extra = cfg.raw.get("source_roots") or []
     conn = _index(cfg)
+    alias_cache: dict[str, dict] = {}
     for t in targets[:MAX_FUNCTIONS]:
-        items, reason = input_lib.build({"qualname": t.qualname, "kind": t.kind, "params": t.params}, harvest.get(f"{t.file}::{t.qualname}"), int(bd["max_inputs"]), cfg.state_dir,
+        if t.file not in alias_cache:
+            try:
+                alias_cache[t.file] = _aliases((Path(work_root) / t.file).read_text(errors="replace"))
+            except OSError:
+                alias_cache[t.file] = {}
+        params = _resolve_aliases(t.params, alias_cache[t.file])
+        items, reason = input_lib.build({"qualname": t.qualname, "kind": t.kind, "params": params}, harvest.get(f"{t.file}::{t.qualname}"), int(bd["max_inputs"]), cfg.state_dir,
                                         examples=_examples(cfg, conn, t))
         if reason:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason=reason)
@@ -361,21 +425,29 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             results[t.qualname] = compare_one(t, items, a.get(key) if a else None, b.get(key) if b else None, n.get(key) if n else None, use_self)
             if setup_note and results[t.qualname].status == UNTESTED:
                 results[t.qualname].reason += f" (the project's Django settings did not load: {setup_note})"
+    for t in targets:
+        results[t.qualname].via, results[t.qualname].via_file = t.via, t.via_file
     return [results[t.qualname] for t in targets]
 
 
 def format_note(results: list[Result]) -> str:
     """One factual line per function that was checked without finding a difference, or could not be checked."""
     lines = []
-    for r in results[:4]:
+    own = [r for r in results if not r.via]
+    callers = [r for r in results if r.via and r.status == DONE]
+    for r in own[:4]:
         if r.status == DONE:
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
                          f"({r.inputs_completed} returned a value). The inputs are the repo's own examples plus guesses, so this is not a proof; "
                          "values it did not try can still differ.")
         elif r.status == UNTESTED:
             lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. Nothing is known about this edit from execution.")
-    if len(results) > 4:
-        lines.append(f"+{len(results) - 4} more functions; /legacyguard:status lists them.")
+    if len(own) > 4:
+        lines.append(f"+{len(own) - 4} more functions; /legacyguard:status lists them.")
+    if callers:
+        names = ", ".join(c.qualname for c in callers[:5])
+        lines.append(f"{len(callers)} function{'s that call' if len(callers) != 1 else ' that calls'} the edited code {'were' if len(callers) != 1 else 'was'} also run "
+                     f"({names}): no difference on the inputs tried. Callers that could not be run are not listed.")
     return "\n".join(lines)
 
 
@@ -383,10 +455,15 @@ def format_wake(result: Result, finding_id: str) -> str:
     """The counterexample text Claude receives (FR-15). Factual, replayable, within the context limit."""
     total = result.inputs_compared
     lines = [f"LegacyGuard behavior difference [{finding_id}] in {result.subject}: {len(result.differences)} of {total} inputs differ between the session baseline and the current code."]
+    if result.via:
+        lines.append(f"This function was not edited. It {result.via}, which was edited in {result.via_file}.")
     for d in result.differences[:MAX_SHOWN]:
         lines.append(f"{d['call']}  before {d['before']}  after {d['after']}  [{d['source']}]")
     if result.only_special:
         lines.append("Every differing input contains NaN or infinity. On the ordinary values tried, old and new code agree.")
+    if result.only_float_noise:
+        lines.append("Every difference found is in the last digits of a float (the two results agree to nine digits). That can be plain float "
+                     "arithmetic, or the visible edge of a rounding change: a value on a rounding boundary can still come out a whole step different.")
     if result.reason:
         lines.append(f"Also: {result.reason}.")
     lines.append(f"Whether the request intended this is unknown. If it did not, revising the code clears this and the check re-runs by itself. "

@@ -68,7 +68,10 @@ def story(data: dict) -> list[dict]:
             if f["status"] == ledger.FAILURE:
                 steps.append({"kind": "broke", "id": f["id"], "text": f"The edit to {name} broke it: {_clean(f['evidence'])[:200]}."})
             else:
-                steps.append({"kind": "broke", "id": f["id"], "text": f"The edit to {name} changed what it returns: {_first_example(f)}."})
+                if f.get("via"):
+                    steps.append({"kind": "broke", "id": f["id"], "text": f"{name} was not edited, but it {f['via']} (edited in {f['via_file']}) and now returns something else: {_first_example(f)}."})
+                else:
+                    steps.append({"kind": "broke", "id": f["id"], "text": f"The edit to {name} changed what it returns: {_first_example(f)}."})
             if f["state"] == "resolved":
                 ok = verified.get(key)
                 proof = f" The guard ran it again: {ok['evidence']}, all matching the original." if ok else ""
@@ -80,7 +83,10 @@ def story(data: dict) -> list[dict]:
             elif f["state"] == "open":
                 steps.append({"kind": "open", "id": f["id"], "text": f"{name} still behaves differently from the original. If you asked for that, accept it with /legacyguard:waive {f['id']} \"<reason>\"."})
         elif f["kind"] == "verified" and f["state"] != "superseded" and key not in had_difference:
-            steps.append({"kind": "checked", "id": f["id"], "text": f"{name} changed, and old and new code agree: {f['evidence']}."})
+            if f.get("via"):
+                steps.append({"kind": "checked", "id": f["id"], "text": f"{name} was not edited; it {f['via']}, so it was run too, and old and new code agree: {f['evidence']}."})
+            else:
+                steps.append({"kind": "checked", "id": f["id"], "text": f"{name} changed, and old and new code agree: {f['evidence']}."})
         elif f["kind"] == "untested" and f["state"] != "superseded":
             why = _clean(f["evidence"]).replace("untested because: ", "").replace("untested because it ", "it ")[:160]
             steps.append({"kind": "unchecked", "id": f["id"], "text": f"{name} changed but could not be checked by running it: {why}."})

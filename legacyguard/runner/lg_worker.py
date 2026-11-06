@@ -131,7 +131,15 @@ def _with_timeout(fn):
 
 def _resolve(module, qualname):
     """(callable or None, needs_instance class or None, reason)."""
-    mod = importlib.import_module(module)
+    try:
+        mod = importlib.import_module(module)
+    except Exception:  # noqa: BLE001
+        # The package's start-up can fail after this module has loaded: humanize/__init__.py imports every
+        # submodule and then a _version file that exists only in an installed copy. A module that is in
+        # sys.modules after such a failure ran to the end, so its functions are the real ones.
+        mod = sys.modules.get(module)
+        if mod is None or getattr(getattr(mod, "__spec__", None), "_initializing", False):
+            raise
     parts = qualname.split(".")
     obj = mod
     owner = None
