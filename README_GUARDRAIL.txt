@@ -25,6 +25,8 @@ Use
   For the fullest checks, the project's own libraries should be installed in a .venv folder inside the project.
   Without that, code that needs those libraries is reported "Untested".
 
+(From GitHub, without a zip: see README.md for the two-line install.)
+
 See what happened (type inside Claude)
   /legacyguard:status    the report: what you asked, what broke, what fixed it, what was not checked
   /legacyguard:map       the map: what changed and what depends on it

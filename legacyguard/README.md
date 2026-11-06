@@ -6,7 +6,12 @@ It makes no model calls and needs no API key. It runs on your Claude Code plan. 
 
 ## Install
 
-From the download package (`dist/legacyguard.zip`, built by `tools/build_package.py`): unzip it and run `sh install.sh` once. After that the guard loads in every Claude Code session. Run it again to update.
+```bash
+claude plugin marketplace add AtCloudDiwash/legacy-guard
+claude plugin install legacyguard@legacyguard
+```
+
+After that the guard loads in every Claude Code session. Without GitHub: unzip the download package (`dist/legacyguard.zip`, built by `tools/build_package.py`) and run `sh install.sh` once.
 
 ```bash
 claude --plugin-dir ./legacyguard                    # development, without installing
