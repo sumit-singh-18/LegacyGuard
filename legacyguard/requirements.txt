@@ -1,0 +1,6 @@
+tree-sitter>=0.23
+tree-sitter-python>=0.23
+hypothesis>=6.100
+coverage>=7.4
+PyYAML>=6.0
+mcp>=2.0,<3

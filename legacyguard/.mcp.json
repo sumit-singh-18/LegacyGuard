@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "guard": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp_launch.py"]
+    }
+  }
+}

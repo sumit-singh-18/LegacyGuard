@@ -1,0 +1,20 @@
+{
+  "description": "LegacyGuard checks. All hooks fail open.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py"], "timeout": 300, "statusMessage": "LegacyGuard: preparing baseline" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/prompt_context.py"], "timeout": 10 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write", "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/pre_edit.py"], "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write", "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/post_edit.py"], "asyncRewake": true, "timeout": 150 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/stop_audit.py"], "timeout": 240, "statusMessage": "LegacyGuard: auditing session" } ] }
+    ]
+  }
+}

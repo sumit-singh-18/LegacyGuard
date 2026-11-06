@@ -1,0 +1,12 @@
+{
+  "name": "legacyguard",
+  "owner": { "name": "LegacyGuard team" },
+  "description": "Guardrails for Claude Code on a Python backend.",
+  "plugins": [
+    {
+      "name": "legacyguard",
+      "source": "./legacyguard",
+      "description": "Contract checks before writes and old-versus-new behavioral diffs after them."
+    }
+  ]
+}
