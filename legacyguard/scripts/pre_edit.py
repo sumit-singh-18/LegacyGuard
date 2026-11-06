@@ -73,15 +73,15 @@ def _risk_context(cfg, rel, before, after, data):
 
 
 def handle(event: dict):
-    root, cfg = load_guard(event)
-    if cfg is None:
-        return None
-    from guardlib import baseline, checks, ledger, paths, policy, symbols, virtual, waivers
-
     tool_input = event.get("tool_input") or {}
     file_path = tool_input.get("file_path")
     if not file_path:
         return None
+    root, cfg = load_guard(event, file_path)
+    if cfg is None:
+        return None
+    from guardlib import baseline, checks, ledger, paths, policy, symbols, virtual, waivers
+
     rel = paths.relative_to_root(file_path, root)
 
     if rel is not None and (rel == ".legacyguard" or rel.startswith(".legacyguard/")):

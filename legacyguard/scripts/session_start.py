@@ -43,7 +43,7 @@ def handle(event: dict):
             from guardlib import autosetup
             found = autosetup.setup(root)
             if found is None:
-                return hook_output("SessionStart", system_message=" ".join(messages) or None)
+                return start_children(root, event, messages)
             messages.append(autosetup.notice(found))
             cfg = cfgmod.load_config(root)
     except cfgmod.ConfigDisabled:
@@ -59,6 +59,48 @@ def handle(event: dict):
     except Exception as exc:  # noqa: BLE001 - a failed baseline must not take the summary down with it
         log_error(root, f"session_start: {exc!r}")
     return hook_output("SessionStart", context=summary(cfg), system_message=" ".join(messages) or None)
+
+
+CHILD_TIME_BUDGET_S = 150
+
+
+def start_children(root: str, event: dict, messages: list):
+    """Claude was started in a folder that is not a project. Guard the projects directly inside it (FR-38)."""
+    import time
+    from pathlib import Path
+    from guardlib import autosetup, projects
+    from guardlib import config as cfgmod
+    began, names, skipped = time.time(), [], []
+    for child in projects.children(root):
+        if len(names) >= projects.MAX_CHILDREN or time.time() - began > CHILD_TIME_BUDGET_S:
+            skipped.append(Path(child).name)
+            continue
+        try:
+            try:
+                cfg = cfgmod.load_config(child)
+            except cfgmod.ConfigMissing:
+                if autosetup.setup(child) is None:
+                    continue
+                cfg = cfgmod.load_config(child)
+        except cfgmod.ConfigError:
+            continue  # switched off, or a settings file that does not parse: left alone
+        try:
+            start_session(cfg, event)
+        except Exception as exc:  # noqa: BLE001 - one project failing must not stop the others
+            log_error(child, f"session_start: {exc!r}")
+            continue
+        names.append(Path(child).name)
+    if not names:
+        return hook_output("SessionStart", system_message=" ".join(messages) or None)
+    listing = ", ".join(names)
+    notice = f"LegacyGuard is watching {len(names)} project{'s' if len(names) != 1 else ''} inside this folder: {listing}."
+    if skipped:
+        notice += f" Not started: {', '.join(skipped)}. Start Claude inside one of them to guard it."
+    messages.append(notice)
+    context = (f"LegacyGuard is active for these projects inside the current folder: {listing}. Each is guarded separately, with its own settings "
+               "in <project>/.legacyguard/config.yaml. After each edit a background check runs old and new code on the same inputs; "
+               "differences arrive as counterexamples. Available guard tools: impact, contract, diff_report (MCP server guard).")
+    return hook_output("SessionStart", context=context, system_message=" ".join(messages))
 
 
 def start_session(cfg, event):

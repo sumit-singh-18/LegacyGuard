@@ -8,7 +8,7 @@ from pathlib import Path
 
 from guardlib import paths
 
-STATE_GITIGNORE = """# Written by LegacyGuard. config.yaml and waivers.json stay committable.
+OLD_STATE_GITIGNORE = """# Written by LegacyGuard. config.yaml and waivers.json stay committable.
 baseline/
 index.db
 index.db-*
@@ -20,6 +20,11 @@ coverage.db-*
 harvest.json
 reports/
 .hypothesis/
+"""
+STATE_GITIGNORE = """# Written by LegacyGuard. Everything in this folder is ignored by git, this file included,
+# so the guard never adds to your project's list of changes.
+# To share the settings with your team:  git add -f .legacyguard/config.yaml
+*
 """
 
 
@@ -41,7 +46,8 @@ def baseline_dir(cfg) -> Path:
 def ensure_state_dir(cfg) -> None:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     gi = cfg.state_dir / ".gitignore"
-    if not gi.exists():
+    # A file the guard wrote itself is brought up to date; one the developer changed is left alone.
+    if not gi.exists() or gi.read_text() == OLD_STATE_GITIGNORE:
         gi.write_text(STATE_GITIGNORE)
 
 

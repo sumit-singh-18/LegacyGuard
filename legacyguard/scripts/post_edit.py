@@ -7,16 +7,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from _common import Wake, load_guard, run_hook
+from _common import Wake, hook_output, load_guard, run_hook
 
 
 def handle(event: dict):
-    root, cfg = load_guard(event)
+    file_path = (event.get("tool_input") or {}).get("file_path")
+    root, cfg = load_guard(event, file_path)
     if cfg is None:
         return None
     from guardlib import baseline, engine, ledger, paths, symbols, virtual
     from runner import diff as differ
-    file_path = (event.get("tool_input") or {}).get("file_path")
     rel = paths.relative_to_root(file_path, root) if file_path else None
     if rel is None:
         return None
@@ -40,7 +40,10 @@ def handle(event: dict):
             data["wakeups"] += 1
     if wake:
         raise Wake("\n\n".join(differ.format_wake(r, f["id"]) for f, r in wake[:2]))
-    return None
+    # No difference: Claude is told what was run and what that does and does not show, as context only (D-045).
+    # Without it Claude cannot know the edit was checked, and repeats the work or assumes nothing looked.
+    note = differ.format_note(results)
+    return hook_output("PostToolUse", context=note) if note else None
 
 
 if __name__ == "__main__":

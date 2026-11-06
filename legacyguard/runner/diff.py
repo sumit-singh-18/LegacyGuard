@@ -49,6 +49,7 @@ class Result:
     dropped_nondeterministic: int = 0
     dropped_invalid: int = 0
     differences: list[dict] = field(default_factory=list)
+    only_special: bool = False  # every differing input contains NaN or infinity; ordinary values agree
 
     @property
     def subject(self) -> str:
@@ -205,6 +206,16 @@ def show_call(target: Target, item: dict) -> str:
     return f"{name}({', '.join(parts)})"
 
 
+def _has_special(item: dict) -> bool:
+    for a in item.get("args", []):
+        try:
+            if input_lib.is_special(lg_codec.decode(a["value"])):
+                return True
+        except Exception:  # noqa: BLE001 - a value we cannot decode here is simply not counted as special
+            continue
+    return False
+
+
 def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | None, n: dict | None, use_self_diff: bool) -> Result:
     r = Result(target.file, target.qualname, UNTESTED, target.code_hash, inputs_tried=len(items))
     if a is None or n is None or (use_self_diff and b is None):
@@ -252,10 +263,16 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             r.inputs_completed += 1
         if _key(ca) != _key(cn):
             r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca), "after": _show_outcome(cn), "source": item["source"],
-                                  "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn})
+                                  "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
+                                  "special": _has_special(item)})
     if r.differences:
         r.status = DIFFERENT
-        r.differences.sort(key=lambda d: (d["source"] != "tests", len(d["call"])))
+        # The example a person reads first: from real tests, then the repo's own examples, ordinary values before
+        # NaN and infinity, a returned value before an error, and short before long.
+        r.differences.sort(key=lambda d: (d["source"] != "tests", d["source"] != "examples", d["special"],
+                                          d["before_raw"]["k"] != "return" or d["after_raw"]["k"] != "return",
+                                          len(d["call"]) + len(d["before"]) + len(d["after"])))
+        r.only_special = all(d["special"] for d in r.differences)
         return r
     if blocked:
         r.reason = " and ".join(sorted(BLOCK_REASON.get(k, k) for k in blocked))
@@ -347,12 +364,29 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
     return [results[t.qualname] for t in targets]
 
 
+def format_note(results: list[Result]) -> str:
+    """One factual line per function that was checked without finding a difference, or could not be checked."""
+    lines = []
+    for r in results[:4]:
+        if r.status == DONE:
+            lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
+                         f"({r.inputs_completed} returned a value). The inputs are the repo's own examples plus guesses, so this is not a proof; "
+                         "values it did not try can still differ.")
+        elif r.status == UNTESTED:
+            lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. Nothing is known about this edit from execution.")
+    if len(results) > 4:
+        lines.append(f"+{len(results) - 4} more functions; /legacyguard:status lists them.")
+    return "\n".join(lines)
+
+
 def format_wake(result: Result, finding_id: str) -> str:
     """The counterexample text Claude receives (FR-15). Factual, replayable, within the context limit."""
     total = result.inputs_compared
     lines = [f"LegacyGuard behavior difference [{finding_id}] in {result.subject}: {len(result.differences)} of {total} inputs differ between the session baseline and the current code."]
     for d in result.differences[:MAX_SHOWN]:
         lines.append(f"{d['call']}  before {d['before']}  after {d['after']}  [{d['source']}]")
+    if result.only_special:
+        lines.append("Every differing input contains NaN or infinity. On the ordinary values tried, old and new code agree.")
     if result.reason:
         lines.append(f"Also: {result.reason}.")
     lines.append(f"Whether the request intended this is unknown. If it did not, revising the code clears this and the check re-runs by itself. "

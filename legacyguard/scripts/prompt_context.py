@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from _common import hook_output, load_guard, run_hook
+from _common import active_guards, hook_output, run_hook
 
 MAX_SYMBOLS = 3
 MAX_PROMPTS_STORED = 20
@@ -37,31 +37,37 @@ def named_symbols(conn, prompt: str) -> list[str]:
 
 
 def handle(event: dict):
-    root, cfg = load_guard(event)
-    if cfg is None:
+    guards = active_guards(event)
+    if not guards:
         return None
     from guardlib import impact, ledger
     from indexer import db
     prompt = event.get("prompt") or ""
     if prompt.lstrip().startswith("/"):
         return None  # a slash command is the developer using a tool, not a change request; its words are not code names
-    with ledger.locked(cfg.state_dir) as data:
-        data["prompt_text"] = (data["prompt_text"] + [prompt])[-MAX_PROMPTS_STORED:]
-    if not db.exists(cfg.root):
+    blocks, more, indexed = [], 0, False
+    for cfg in guards:  # one project, or each project in the folder Claude was started in (FR-38)
+        with ledger.locked(cfg.state_dir) as data:
+            data["prompt_text"] = (data["prompt_text"] + [prompt])[-MAX_PROMPTS_STORED:]
+        if not db.exists(cfg.root):
+            continue
+        indexed = True
+        conn = db.connect(cfg.root)
+        try:
+            symbols = named_symbols(conn, prompt)
+            room = MAX_SYMBOLS - len(blocks)
+            blocks += [impact.impact_text(conn, cfg, s) for s in symbols[:max(0, room)]]
+            more += max(0, len(symbols) - max(0, room))
+        finally:
+            conn.close()
+    if not indexed:
         return hook_output("UserPromptSubmit", context="LegacyGuard has no index yet, so no blast-radius data is available. The developer can run /legacyguard:index.")
-    conn = db.connect(cfg.root)
-    try:
-        symbols = named_symbols(conn, prompt)
-        if not symbols:
-            return None
-        blocks = [impact.impact_text(conn, cfg, s) for s in symbols[:MAX_SYMBOLS]]
-        more = len(symbols) - MAX_SYMBOLS
-        text = "LegacyGuard impact data for code this prompt names. Sources are in brackets; name matches can over-match.\n" + "\n".join(blocks)
-        if more > 0:
-            text += f"\n+{more} more functions. The impact tool answers for any of them."
-        return hook_output("UserPromptSubmit", context=text)
-    finally:
-        conn.close()
+    if not blocks:
+        return None
+    text = "LegacyGuard impact data for code this prompt names. Sources are in brackets; name matches can over-match.\n" + "\n".join(blocks)
+    if more > 0:
+        text += f"\n+{more} more functions. The impact tool answers for any of them."
+    return hook_output("UserPromptSubmit", context=text)
 
 
 if __name__ == "__main__":

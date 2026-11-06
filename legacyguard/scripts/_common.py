@@ -113,12 +113,15 @@ def hook_output(event_name: str, *, context: str | None = None, decision: str | 
     return out or None
 
 
-def load_guard(event: dict):
-    """(root, Config), or (root, None) when the guard is inactive for this repo. Fails open."""
-    from guardlib import config as cfgmod
-    from guardlib.paths import find_root
-    root = find_root(event.get("cwd") or os.getcwd())
-    try:
-        return root, cfgmod.load_config(root)
-    except (cfgmod.ConfigMissing, cfgmod.ConfigError):
-        return root, None
+def load_guard(event: dict, file_path: str | None = None):
+    """(root, Config), or (root, None) when the guard is inactive for this repo. Fails open.
+
+    With a file path, the file's own repo decides, so an edit is checked even when Claude was started one folder up."""
+    from guardlib import projects
+    return projects.for_file(event.get("cwd") or os.getcwd(), file_path, event.get("session_id"))
+
+
+def active_guards(event: dict) -> list:
+    """Every project this session is guarding: one, or several when Claude was started in a folder of projects."""
+    from guardlib import projects
+    return projects.active(event.get("cwd") or os.getcwd(), event.get("session_id"))

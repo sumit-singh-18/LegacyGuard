@@ -14,8 +14,8 @@ server = MCPServer("legacyguard")
 
 
 def _load():
-    root = find_root(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
-    return cfgmod.load_config(root)
+    from guardlib import projects
+    return projects.for_command(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())[0]
 
 
 @server.tool()

@@ -58,11 +58,19 @@ When Claude stops, the guard writes `.legacyguard/reports/<session>.html` next t
 
 Edges come from matching names. A solid edge means one test runs both functions; a dashed edge is a name match only.
 
+## Several projects in one folder
+
+If you start Claude in a folder that only holds projects, the guard starts in each git repo directly inside it (up to five) and says which. Each keeps its own settings, findings, report and map. `/legacyguard:status` from that folder shows the project used most recently.
+
+## The guard's files and git
+
+Everything under `.legacyguard/` is ignored by git, so the guard adds nothing to your list of changes. To share the settings with your team: `git add -f .legacyguard/config.yaml`.
+
 ## Limits
 
 - Python only. One service per repo.
 - The diff compares return values and exceptions, not side effects.
 - Functions that need a database, the network, or objects it can't build are reported `Untested`.
-- A `Verified pass` means no difference on the inputs tried.
+- A `Verified pass` means no difference on the inputs tried, and that at least one input ran the changed lines. It is not a proof. In a session where Claude may run code, Claude's own comparison of a small function can cover more cases than the guard's.
 - Edits made through shell commands are seen only at Stop.
 - The map labels API routes as entry points. Scheduled jobs are not indexed, so they appear as ordinary callers.

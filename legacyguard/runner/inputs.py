@@ -25,6 +25,11 @@ def _hypothesis(state_dir: Path):
     return hypothesis, st
 
 
+def _with_specials(st, base, specials: list):
+    """One draw in ten is an unusual value; the rest are as before."""
+    return st.integers(0, 9).flatmap(lambda i: st.sampled_from(specials) if i == 0 else base)
+
+
 def _with_pool(st, base, values: list):
     """Half the draws come from the project's own example values, when it has any of the right kind."""
     return st.one_of(st.sampled_from(values), base) if values else base
@@ -36,6 +41,7 @@ def _strategy_for(annotation: str | None, default: str | None, st, pool: list | 
     ints = [v for v in pool if isinstance(v, int) and not isinstance(v, bool)]
     nums = [v for v in pool if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)]
     ann = (annotation or "").replace("typing.", "").replace("decimal.", "").replace("datetime.", "").replace(" ", "").strip("\"'")
+    ann = ann or _type_from_default(default)
     money = st.decimals(min_value=Decimal("-100000"), max_value=Decimal("100000"), places=2, allow_nan=False, allow_infinity=False)
     rate = st.decimals(min_value=Decimal("0"), max_value=Decimal("1"), places=3, allow_nan=False, allow_infinity=False)
     # Three decimal places: one value in ten ends in 5, the tie that separates rounding rules at two places.
@@ -53,7 +59,7 @@ def _strategy_for(annotation: str | None, default: str | None, st, pool: list | 
         elif ann == "int":
             base = _with_pool(st, st.one_of(st.integers(-1000, 1000), st.integers(-2**40, 2**40)), ints)
         elif ann == "float":
-            base = _with_pool(st, st.floats(-1e6, 1e6, allow_nan=False, allow_infinity=False), [float(v) for v in nums])
+            base = _with_specials(st, _with_pool(st, st.floats(-1e6, 1e6, allow_nan=False, allow_infinity=False), [float(v) for v in nums]), SPECIAL_FLOATS)
         elif ann == "str":
             base = _with_pool(st, st.text(TEXT_ALPHABET, max_size=16), strs)
         elif ann == "bool":
@@ -103,12 +109,32 @@ SMALL_INTS = [0, 1, 2, 3]
 # Values where rounding rules part ways. Random floats almost never land on a tie.
 TIE_FLOATS = [0.5, 1.5, 2.5, 0.125, 2.675, 1.005]
 TIE_DECIMALS = [Decimal("0.005"), Decimal("1.005"), Decimal("2.675"), Decimal("-0.125")]
+# Values code rarely plans for. Two versions that agree on every ordinary number can still part ways here
+# (boltons clamp: min(max(x, lo), hi) and max(min(x, hi), lo) differ only for a NaN bound with a Decimal value).
+SPECIAL_FLOATS = [0.0, float("inf"), float("-inf"), float("nan")]
+SPECIAL_DECIMALS = [Decimal("NaN"), Decimal("Infinity")]
+CONSTRUCTOR_DEFAULT = re.compile(r"(float|int|str|bool|Decimal)\(.*\)")
+
+
+def _type_from_default(default: str | None) -> str:
+    """lower=float('-inf') says what the parameter takes even without a type hint. settings.X says nothing."""
+    m = CONSTRUCTOR_DEFAULT.fullmatch((default or "").replace("decimal.", "").strip())
+    return m.group(1) if m else ""
+
+
+def is_special(value) -> bool:
+    if isinstance(value, float):
+        return value != value or value in (float("inf"), float("-inf"))
+    if isinstance(value, Decimal):
+        return not value.is_finite()
+    return False
 
 
 def _grid_values(p: dict, pool: list) -> list | None:
     """A short list of likely values for one parameter, or None to leave it at its default."""
     ann = (p.get("annotation") or "").replace("typing.", "").replace("decimal.", "").replace(" ", "").strip("\"'")
     ann = re.sub(r"^Optional\[(.+)\]$", r"\1", ann).replace("|None", "").replace("None|", "")
+    ann = ann or _type_from_default(p.get("default"))
     strs = [v for v in pool if isinstance(v, str)]
     ints = [v for v in pool if isinstance(v, int) and not isinstance(v, bool)]
     nums = [v for v in pool if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)]
@@ -118,9 +144,9 @@ def _grid_values(p: dict, pool: list) -> list | None:
     if ann == "int":
         return list(dict.fromkeys(SMALL_INTS + ints))[:GRID_PER_PARAM]
     if ann == "float":
-        return list(dict.fromkeys(floats + TIE_FLOATS + [float(v) for v in nums]))[:GRID_PER_PARAM + len(TIE_FLOATS)]
+        return list(dict.fromkeys(floats[:4] + TIE_FLOATS + [float(v) for v in nums][:4])) + SPECIAL_FLOATS
     if ann == "Decimal":
-        return list(dict.fromkeys([Decimal(str(v)) for v in nums][:GRID_PER_PARAM] + TIE_DECIMALS + [Decimal(str(v)) for v in TIE_FLOATS]))
+        return list(dict.fromkeys([Decimal(str(v)) for v in nums][:GRID_PER_PARAM] + TIE_DECIMALS + [Decimal(str(v)) for v in TIE_FLOATS])) + SPECIAL_DECIMALS
     if ann == "str":
         return strs[:GRID_PER_PARAM] or None
     if ann:
@@ -129,7 +155,7 @@ def _grid_values(p: dict, pool: list) -> list | None:
         return None  # an untyped parameter with a default: the default is the one value known to be valid
     # Nothing says what this parameter takes. The project's examples come first, then the tie values in the
     # forms money usually arrives in: a float and an exact Decimal.
-    return strs[:16] + list(dict.fromkeys(nums))[:6] + TIE_FLOATS + TIE_DECIMALS
+    return strs[:16] + list(dict.fromkeys(nums))[:6] + TIE_FLOATS + TIE_DECIMALS + SPECIAL_FLOATS[1:] + SPECIAL_DECIMALS
 
 
 def _grid(sym, pool: list | None) -> list[dict]:
@@ -172,6 +198,49 @@ def _grid(sym, pool: list | None) -> list[dict]:
             continue
         if args:
             out.append({"args": args, "source": "generated", "weak": weak})
+    return _crossed(required, optional, weak) + out
+
+
+MAX_CROSSED = 81
+
+
+def _representatives(values: list) -> list:
+    """One value of each kind: text, an ordinary number, an exact Decimal, NaN, infinity."""
+    picks: list = []
+    def first(test):
+        for v in values:
+            if test(v):
+                picks.append(v)
+                return
+    first(lambda v: isinstance(v, str))
+    first(lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and not is_special(v))
+    first(lambda v: isinstance(v, Decimal) and not is_special(v))
+    first(lambda v: isinstance(v, float) and v != v)
+    if len(picks) < 3:
+        picks += [v for v in values if not is_special(v) and not any(v is q for q in picks)][:3 - len(picks)]
+    return picks
+
+
+def _crossed(required: list, optional: list, weak: bool) -> list[dict]:
+    """A few representative values of every parameter, all combined (FR-37).
+
+    Varying one option at a time cannot find a break that needs two of them set: boltons' clamp rewrite differs only
+    for a Decimal value with one ordinary bound and one NaN bound."""
+    import itertools
+    import random
+    chosen = [(p, _representatives(v), "pos") for p, v in required] + [(p, _representatives(v), "kw") for p, v in optional]
+    if not 2 <= len(chosen) <= 4 or not any(o for _, o, kind in chosen if kind == "kw"):
+        return []  # with no optional parameters the main grid is already a full product
+    combos = list(itertools.product(*[v for _, v, _ in chosen]))
+    if len(combos) > MAX_CROSSED:
+        combos = random.Random(0).sample(combos, MAX_CROSSED)
+    out = []
+    for combo in combos:
+        try:
+            args = [{"name": p["name"], "kind": kind, "value": lg_codec.encode_input(v)} for (p, _, kind), v in zip(chosen, combo)]
+        except Exception:  # noqa: BLE001
+            continue
+        out.append({"args": args, "source": "generated", "weak": weak})
     return out
 
 

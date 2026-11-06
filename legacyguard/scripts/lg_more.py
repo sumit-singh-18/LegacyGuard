@@ -9,14 +9,16 @@ from pathlib import Path
 
 def _cfg():
     from guardlib import config as cfgmod
-    from guardlib.paths import find_root
-    root = find_root(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    from guardlib import projects
     try:
-        return cfgmod.load_config(root)
+        cfg, note = projects.for_command(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     except cfgmod.ConfigMissing:
-        sys.exit("LegacyGuard is not set up here: no .legacyguard/config.yaml.")
+        sys.exit("LegacyGuard is not set up here: this folder is not a Python git project, and no project inside it is guarded.")
     except cfgmod.ConfigError as exc:
         sys.exit(f"LegacyGuard config is invalid: {exc}")
+    if note:
+        print(note + "\n")
+    return cfg
 
 
 def cmd_status(args) -> int:
