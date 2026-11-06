@@ -21,6 +21,7 @@ class Impact:
     frozen: bool = False
     contract_files: list[str] = field(default_factory=list)
     coverage_known: bool = True
+    not_followed: list[str] = field(default_factory=list)  # names too common to follow callers through
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -45,6 +46,19 @@ def _callers_of(conn, name: str) -> list:
                            WHERE c.called_name = ?""", (name,)).fetchall()
 
 
+COMMON_NAME_DEFS = 3
+
+
+def _too_common(conn, name: str) -> bool:
+    """A name that says nothing about who is called: __init__, or one defined in many places (put, update, run).
+
+    Following callers through such a name pulls in every class in the repo. On Home Assistant one light's
+    __init__ calling a colour helper put the login and token classes on the map."""
+    if name.startswith("__") and name.endswith("__"):
+        return True
+    return conn.execute("SELECT COUNT(*) FROM symbols WHERE name = ?", (name,)).fetchone()[0] > COMMON_NAME_DEFS
+
+
 def compute(conn, cfg, symbol: str, depth: int = HOPS) -> Impact | None:
     rows = find_symbols(conn, symbol)
     if not rows:
@@ -54,6 +68,7 @@ def compute(conn, cfg, symbol: str, depth: int = HOPS) -> Impact | None:
     seen: OrderedDict[tuple, dict] = OrderedDict()
     frontier = {r["name"] for r in rows}
     done = set(frontier)
+    not_followed: set[str] = set()
     for hop in range(1, max(1, depth) + 1):
         next_frontier = set()
         for name in sorted(frontier):
@@ -64,7 +79,10 @@ def compute(conn, cfg, symbol: str, depth: int = HOPS) -> Impact | None:
                 seen[key] = {"qualname": c["qualname"], "file": c["file"], "hop": hop, "sources": ["names"], "via": name}
                 if c["name"] not in done:
                     done.add(c["name"])
-                    next_frontier.add(c["name"])
+                    if _too_common(conn, c["name"]):
+                        not_followed.add(c["name"])
+                    else:
+                        next_frontier.add(c["name"])
         frontier = next_frontier
     covered = {(r["file"], r["qualname"]) for r in conn.execute("SELECT DISTINCT file, qualname FROM test_cover")}
     imp.coverage_known = bool(covered)
@@ -77,6 +95,7 @@ def compute(conn, cfg, symbol: str, depth: int = HOPS) -> Impact | None:
         if item["file"] in co:
             item["sources"].append(f"history {round(co[item['file']]['confidence'] * 100)}%")
     imp.callers = list(seen.values())
+    imp.not_followed = sorted(not_followed)
 
     handlers = {(target["file"], target["qualname"])} | set(seen)
     for r in conn.execute("SELECT method, path, handler_qualname, handler_file, source FROM routes"):

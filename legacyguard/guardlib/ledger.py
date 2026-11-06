@@ -28,7 +28,7 @@ def _path(state_dir: Path) -> Path:
 def fresh(session_id: str | None) -> dict:
     return {"session_id": session_id, "started": dt.datetime.now().isoformat(timespec="seconds"), "baseline_commit": None, "dirty_files": [],
             "baseline_ok": False, "prompt_text": [], "prompts_used": 0, "wakeups": 0, "next_id": 1, "findings": [], "stop_blocked_for": [],
-            "outside_notified": [], "context_sent": [], "edits": 0, "report": None}
+            "outside_notified": [], "context_sent": [], "edits": 0, "report": None, "callers_run": {}}
 
 
 def load(state_dir: Path) -> dict:

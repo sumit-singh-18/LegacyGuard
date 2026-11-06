@@ -104,12 +104,23 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
     for r in results:
         via = {"via": r.via, "via_file": r.via_file} if r.via else {}
         if r.via:
+            # What happened to each caller is kept for the session map, whether or not it becomes a finding.
+            outcome = {differ.DONE: "agree", differ.DIFFERENT: "differ", differ.BROKEN: "differ"}.get(r.status, "not_run")
+            data.setdefault("callers_run", {})[f"{r.file}::{r.qualname}"] = {
+                "status": outcome, "inputs": r.inputs_compared, "via": r.via, "reason": (r.reason or "")[:160],
+                "example": (f"{r.differences[0]['call']} gave {r.differences[0]['before']} before and {r.differences[0]['after']} after"
+                            if r.differences else "")[:300]}
             # A caller is in the report only when it shows something the edited function's own result does not.
             # Its agreement on a few inputs says little while the function it calls is known to differ or went
             # unchecked, and a second finding for a break already reported at its source is noise.
             was_open = any(f["kind"] == "behavior_difference" and f["file"] == r.file and f["item"] == r.qualname and f["state"] == "open"
                            for f in data["findings"])
-            source_status = edited.get(r.via.split()[-1])
+            callee = r.via.split()[-1]
+            source_status = edited.get(callee)
+            if source_status is None and any(f["kind"] == "behavior_difference" and f["state"] == "open" and not f.get("via") and f["file"] == r.via_file
+                                             and f["item"].rsplit(".", 1)[-1] == callee for f in data["findings"]):
+                # At Stop only the callers may be re-run; the edited function's own open difference is already in the ledger.
+                source_status = differ.DIFFERENT
             if r.status == differ.UNTESTED:
                 continue
             if r.status == differ.DONE and not was_open:

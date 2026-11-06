@@ -15,8 +15,9 @@ from indexer import db as idb
 from indexer import names
 
 CHANGED_KINDS = ("behavior_difference", "verified", "untested")
-MAX_CALLERS = 60
-NOTE = ("Edges come from matching function names, so one can be wrong and dynamic calls are missing. "
+MAX_CALLERS = 30
+NOTE = ("The guard runs each edited function and up to six functions that call it directly; the rest of the map is who depends on the change. "
+        "Edges come from matching function names, so one can be wrong and dynamic calls are missing. "
         "A solid edge means one test runs both functions; a dashed edge is a name match only. "
         "Only API routes are labeled as entry points; scheduled jobs are not indexed.")
 
@@ -41,6 +42,8 @@ def _changed(data: dict) -> dict[tuple, dict]:
             "id": f"{file}::{item}", "name": item, "file": file, "kind": "changed", "layer": 0, "status": top["status"], "state": top["state"],
             "outcome": report.outcome(top), "turned_back": top["status"] == ledger.VERIFIED and any(f["state"] == "resolved" for f in fs),
             "tests": None, "routes": [], "sources": [], "via": None,
+            # a caller with a finding of its own: it was not edited, the function it calls was (FR-41)
+            "affected": next((f"it {f['via']}, which was edited in {f['via_file']}" for f in fs if f.get("via")), None),
             "findings": [{"id": f["id"], "status": f["status"], "state": f["state"], "outcome": report.outcome(f), "evidence": str(f["evidence"])[:600]} for f in fs]}
     return out
 
@@ -54,7 +57,8 @@ def build(cfg, data: dict) -> dict:
     model = {"session": data.get("session_id"), "mode": cfg.mode, "baseline": (data.get("baseline_commit") or "")[:10], "budget": cfg.budget,
              "prompts": data.get("prompts_used", 0), "wakeups": data.get("wakeups", 0), "generated": dt.datetime.now().isoformat(timespec="minutes"),
              "counts": counts, "turned_back": sum(1 for f in visible if f["state"] == "resolved"), "statuses": list(ledger.STATUSES),
-             "index": idb.exists(cfg.root), "coverage": True, "truncated": 0, "note": NOTE, "footer": report.FOOTER}
+             "index": idb.exists(cfg.root), "coverage": True, "truncated": 0, "note": NOTE, "footer": report.FOOTER, "not_followed": []}
+    ran = data.get("callers_run") or {}
     if model["index"] and changed:
         conn = idb.connect(cfg.root)
         try:
@@ -86,7 +90,9 @@ def build(cfg, data: dict) -> dict:
                     route_of.setdefault((r["handler_file"], r["handler_qualname"]), []).append(r["route"])
                 node["routes"] = sorted(set(node["routes"]) | set(route_of.get((file, item), [])))
                 by_hop: dict[int, list[dict]] = {}
-                for c in imp.callers:
+                model["not_followed"] = sorted(set(model["not_followed"]) | set(getattr(imp, "not_followed", [])))
+                # callers the guard ran come first in each step, so the cap never hides them
+                for c in sorted(imp.callers, key=lambda c: (c["hop"], f"{c['file']}::{c['qualname']}" not in ran)):
                     cid = f"{c['file']}::{c['qualname']}"
                     if cid not in nodes:
                         if callers_added >= MAX_CALLERS:
@@ -94,7 +100,8 @@ def build(cfg, data: dict) -> dict:
                             continue
                         callers_added += 1
                         nodes[cid] = {"id": cid, "name": c["qualname"], "file": c["file"], "kind": "caller", "layer": c["hop"], "status": None, "state": None,
-                                      "tests": (not c.get("no_test")) if imp.coverage_known else None, "routes": [], "sources": c["sources"], "via": c["via"], "findings": []}
+                                      "tests": (not c.get("no_test")) if imp.coverage_known else None, "routes": [], "sources": c["sources"], "via": c["via"], "findings": [],
+                                      "ran": ran.get(cid)}
                     target = nodes[cid]
                     if target["kind"] == "caller":
                         target["layer"] = min(target["layer"], c["hop"])
@@ -137,7 +144,7 @@ svg text{fill:var(--ink)}.col{font-size:12px;fill:var(--muted)}.nm{font:600 12px
 .s-ok rect{fill:var(--ok-bg);stroke:var(--ok);stroke-width:2}.s-fail rect{fill:var(--fail-bg);stroke:var(--fail);stroke-width:2}.s-diff rect{fill:var(--diff-bg);stroke:var(--diff);stroke-width:2}
 .s-risk rect{fill:var(--risk-bg);stroke:var(--risk);stroke-width:2}.s-unt rect{fill:var(--unt-bg);stroke:var(--unt);stroke-width:2}
 .c-notest rect{fill:var(--risk-bg);stroke:var(--risk)}.c-unknown rect{stroke-dasharray:3 3}
-.e{fill:none;stroke:var(--edge);stroke-width:1.4}.e.guess{stroke-dasharray:5 4}.dim{opacity:.16}.fade{opacity:.3}
+.e{fill:none;stroke:var(--edge);stroke-width:1.4}.e.guess{stroke-dasharray:5 4}.dim{opacity:.42}.fade{opacity:.3}
 table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;border-bottom:1px solid var(--soft);text-align:left;vertical-align:top;font-size:13px}th{color:var(--muted);font-weight:600;white-space:nowrap}
 td.ev{overflow-wrap:anywhere;min-width:220px}tr.go{cursor:pointer}tr.go:hover td{background:var(--soft)}
 #story{margin:12px 20px 0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 14px}#story:empty{display:none}
@@ -156,13 +163,14 @@ const cut=(s,n)=>s.length>n?s.slice(0,n-1)+'…':s;
 const N=new Map(M.nodes.map(n=>[n.id,n])),W=224,H=46,GX=78,GY=12,PX=44,PY=34;
 const SC={'Verified pass':'ok','Confirmed failure':'fail','Behavior difference — intent unknown':'diff','Potential risk (static only)':'risk','Untested':'unt'};
 let sel=null,fade=false;
-const cls=n=>n.kind==='changed'?'s-'+(SC[n.status]||'unt'):(n.tests===false?'c-notest':(n.tests===true?'c-test':'c-unknown'));
-function sub(n){let t;if(n.kind==='changed')t=n.status+(n.turned_back?' · turned back':(n.state==='waived'?' · waived':''));
+const cls=n=>n.kind==='changed'?'s-'+(SC[n.status]||'unt'):(n.ran&&n.ran.status==='agree'?'s-ok':(n.ran&&n.ran.status==='differ'?'s-diff':(n.tests===false?'c-notest':(n.tests===true?'c-test':'c-unknown'))));
+function sub(n){let t;if(n.kind==='changed')t=(n.affected?'not edited · ':'')+n.status+(n.turned_back?' · turned back':(n.state==='waived'?' · waived':''));
+ else if(n.ran)t=n.ran.status==='agree'?'run too: old and new agree':(n.ran.status==='differ'?'run too: result changed':'tried, could not be run');
  else t=n.tests===false?'no test reaches it':(n.tests===true?'tests reach it':'test reach unknown');
  return n.routes.length?t+' · '+n.routes[0]:t}
 function layout(){const cols=[];for(const n of M.nodes)(cols[n.layer]=cols[n.layer]||[]).push(n);const pos=new Map();
  for(let c=0;c<cols.length;c++){const col=cols[c]=cols[c]||[];
-  if(c>0){const rank=n=>Math.min(1e9,...M.edges.filter(e=>e.from===n.id&&pos.has(e.to)).map(e=>pos.get(e.to).y));col.sort((a,b)=>(rank(a)-rank(b))||a.id.localeCompare(b.id))}
+  if(c>0){const rank=n=>Math.min(1e9,...M.edges.filter(e=>e.from===n.id&&pos.has(e.to)).map(e=>pos.get(e.to).y));const ran=n=>n.ran?(n.ran.status==='differ'?0:(n.ran.status==='agree'?1:2)):3;col.sort((a,b)=>(ran(a)-ran(b))||(rank(a)-rank(b))||a.id.localeCompare(b.id))}
   col.forEach((n,r)=>pos.set(n.id,{x:PX+c*(W+GX),y:PY+r*(H+GY)}))}
  return{cols,pos}}
 function linked(id){const out=new Set([id]);for(const[a,b]of[['from','to'],['to','from']]){const q=[id];while(q.length){const x=q.pop();for(const e of M.edges)if(e[a]===x&&!out.has(e[b])){out.add(e[b]);q.push(e[b])}}}return out}
@@ -181,9 +189,10 @@ function draw(){const v=$('#map');if(!M.nodes.length){v.innerHTML='<div class=em
  v.innerHTML=s+'</svg>';
  v.querySelectorAll('.nd').forEach(g=>{const go=ev=>{ev.stopPropagation();pick(g.dataset.id===sel?null:g.dataset.id)};g.onclick=go;g.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();go(ev)}}});
  v.querySelector('svg').onclick=()=>pick(null)}
-function panel(){const a=$('aside'),n=sel&&N.get(sel);if(!n){a.innerHTML='<p class=meta>Select a function to see why it is on the map and what was checked.</p>';return}
+function panel(){const a=$('aside'),n=sel&&N.get(sel);if(!n){a.innerHTML='<p class=meta>Select a function to see why it is on the map and whether the guard ran it. Green means it was run and old and new agree; orange means its result changed.</p>';return}
  const f=(k,x)=>x?`<dt>${k}</dt><dd>${x}</dd>`:'';let h=`<h3>${esc(n.name)}</h3><div class=meta>${esc(n.file)}</div><dl>`;
- if(n.kind==='changed'){h+=f('Status',esc(n.status)+(n.outcome?' ('+esc(n.outcome)+')':''));
+ if(n.kind==='changed'){if(n.affected)h+=f('Why it is here','This function was not edited: '+esc(n.affected)+'. The guard ran it too.');
+  h+=f('Status',esc(n.status)+(n.outcome?' ('+esc(n.outcome)+')':''));
   for(const x of n.findings){h+=`<dt>${esc(x.id)} · ${esc(x.status)}${x.outcome?' · '+esc(x.outcome):''}</dt><dd><pre>${esc(x.evidence)}</pre></dd>`;
    if(x.status===M.statuses[2]&&x.state==='open')h+=`<dd>If intended: <code>/legacyguard:waive ${esc(x.id)} "&lt;reason&gt;"</code><br>To keep it from recurring: <code>/legacyguard:pin ${esc(x.id)}</code></dd>`}
   h+=f('Tests',n.tests===null?'Unknown: no test map yet.':(n.tests?esc(n.test_count)+' existing tests run it.':'No existing test runs it.'));
@@ -191,7 +200,12 @@ function panel(){const a=$('aside'),n=sel&&N.get(sel);if(!n){a.innerHTML='<p cla
   if(n.sources.length)h+=f('Note',esc(n.sources.join(', ')))}
  else{h+=f('Why it is here',`It calls <code>${esc(n.via)}</code>, ${n.layer===1?'which changed':'which leads to a changed function'}. Sources: ${esc(n.sources.join(', '))}.`);
   h+=f('Tests',n.tests===null?'Unknown: no test map yet.':(n.tests?'Existing tests reach it.':'No existing test reaches it, so nothing here would catch a break.'));
-  h+=f('Checked by the guard?','No. The behavioral diff runs only functions whose own code changed.')}
+  let c;if(n.ran&&n.ran.status==='agree')c='Yes. It was run with the edited code, and old and new agree on '+esc(n.ran.inputs)+' inputs. That is not a proof.';
+  else if(n.ran&&n.ran.status==='differ')c='Yes, and its result changed: '+(n.ran.example?'<pre>'+esc(n.ran.example)+'</pre>':'see the findings.');
+  else if(n.ran)c='It was tried and could not be run'+(n.ran.reason?': '+esc(n.ran.reason):'')+'.';
+  else if(n.layer===1)c='No. The guard runs up to six direct callers, the ones in the same file first. This one was not among them.';
+  else c='No. Only functions that call the edited one directly are run.';
+  h+=f('Checked by the guard?',c)}
  if(n.routes.length)h+=f('Reached from',n.routes.map(esc).join('<br>'));a.innerHTML=h+'</dl>'}
 function pick(id){sel=id;draw();panel()}
 function chips(){const c=M.counts,x=[];for(const s of M.statuses)x.push(`<span class=chip><span class=sw style="background:var(--${SC[s]}-bg);border-color:var(--${SC[s]})"></span><b>${c[s]||0}</b> ${esc(s)}</span>`);
@@ -205,8 +219,9 @@ function storyHtml(){if(!M.story.length)return;const md=t=>esc(t).replace(/`([^`
 storyHtml();
 $('#fade').onchange=e=>{fade=e.target.checked;draw()};
 const notes=[];if(!M.index)notes.push('There is no index, so dependents are unknown. Run /legacyguard:index.');else if(!M.coverage)notes.push('There is no test map yet, so test reach is unknown. Run /legacyguard:index.');
-if(M.truncated)notes.push(M.truncated+' more callers are not drawn.');$('#warn').textContent=notes.join(' ');
-chips();table();const first=M.nodes.find(n=>n.kind==='changed');pick(first?first.id:null);
+if(M.truncated)notes.push(M.truncated+' more callers are not drawn.');
+if(M.not_followed&&M.not_followed.length)notes.push('Callers were not followed through very common names ('+M.not_followed.slice(0,4).join(', ')+'): a name match there says nothing.');$('#warn').textContent=notes.join(' ');
+chips();table();pick(null);
 """
 
 
