@@ -86,12 +86,18 @@ def install_blocks() -> None:
     real_open = builtins.open
     file_block = _blocker("file write")
 
-    def guarded_open(file, mode="r", *args, **kwargs):
-        if (any(c in mode for c in "wax+") and str(file) not in (os.devnull,) and not GUARD_WRITES.get("allowed")
-                and not _is_scratch(file)):
-            file_block()
-        return real_open(file, mode, *args, **kwargs)
+    class GuardedOpen:
+        """open() with writes into the repo refused. A callable object, not a function: Python 3.10's pathlib keeps
+        io.open as a class attribute (_NormalAccessor.open), and a plain function stored there would be bound as a
+        method, receiving the accessor as `file` and the path as `mode`."""
 
+        def __call__(self, file, mode="r", *args, **kwargs):
+            if (isinstance(mode, str) and any(c in mode for c in "wax+") and str(file) not in (os.devnull,)
+                    and not GUARD_WRITES.get("allowed") and not _is_scratch(file)):
+                file_block()
+            return real_open(file, mode, *args, **kwargs)
+
+    guarded_open = GuardedOpen()
     builtins.open = guarded_open
     io.open = guarded_open
     proc = _blocker("subprocess")

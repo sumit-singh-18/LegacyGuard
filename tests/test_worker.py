@@ -208,3 +208,12 @@ def test_library_subclassing_datetime_at_import_still_works(tmp_path, run_worker
     root = write_tree(tmp_path / "dtlib", {"lib.py": src})
     out = run_worker(root, [{"module": "lib", "qualname": "now_year", "inputs": [call()]}])["lib:now_year"]
     assert out["status"] == "ran" and out["results"][0]["value"] == {"t": "v", "v": 2024}  # the frozen clock still applies
+
+
+def test_pathlib_read_after_blocks(tmp_path, run_worker):
+    # Python 3.10's pathlib stores io.open as a class attribute; a plain-function replacement got bound as a method
+    # and every Path.read_text() failed (found when FastAPI read package metadata at import on 3.10 in CI).
+    src = "from pathlib import Path\n\ndef read(p):\n    return Path(p).read_text()\n"
+    root = write_tree(tmp_path / "pl", {"pl.py": src, "data.txt": "hello"})
+    out = run_worker(root, [{"module": "pl", "qualname": "read", "inputs": [call(str(root / "data.txt"))]}])["pl:read"]
+    assert out["results"][0] == {"outcome": "return", "value": {"t": "v", "v": "hello"}}
