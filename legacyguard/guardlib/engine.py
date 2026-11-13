@@ -12,7 +12,7 @@ def is_guarded_source(cfg, rel: str | None) -> bool:
         and not paths.matches_any(rel, cfg.raw.get("frozen") or [])
 
 
-MAX_DEPENDENTS = 6
+MAX_DEPENDENTS = 8
 
 
 def _sym_pair(cfg, rel: str, qualname: str):
@@ -28,46 +28,41 @@ def _sym_pair(cfg, rel: str, qualname: str):
 
 
 def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> list[differ.Target]:
-    """Functions that call an edited one, by name, from the index (FR-41, D-047).
+    """Functions that call an edited one, up to two steps away (FR-41, roadmap B7).
 
-    An edit to a shared helper changes what its callers return, and the helper itself is often the one function
-    that cannot be run. Callers in the same file come first, then callers in files that name the edited module.
-    One step only: this is a lookup in the names table, not a call graph (D-006)."""
+    An edit to a shared helper changes what its callers return, and the helper itself is often the one function that
+    cannot be run. Callers are resolved through imports (guardlib/callgraph.py), not matched by name; nearest first,
+    resolved edges before name-only ones, the edited file before others."""
+    from guardlib import callgraph
     from indexer import db
-    if not changed or not db.exists(cfg.root):
+    if not changed:
         return []
-    names = {t.qualname.rsplit(".", 1)[-1]: t for t in changed}
-    conn = db.connect(cfg.root)
+    conn = db.connect(cfg.root) if db.exists(cfg.root) else None
     try:
-        marks = ",".join("?" for _ in names)
-        rows = conn.execute(f"SELECT DISTINCT s.file, s.qualname, s.kind, c.called_name FROM calls c JOIN symbols s ON s.id = c.caller_symbol_id "
-                            f"WHERE c.called_name IN ({marks}) AND s.kind != 'class'", list(names)).fetchall()
-    except Exception:  # noqa: BLE001 - an old or missing index means no dependents, not a failed check
-        return []
+        edges = []
+        for t in changed:
+            edges += callgraph.callers(cfg.root, rel, t.qualname, conn, hops=2)
+    except Exception:  # noqa: BLE001 - no callers is a smaller check, never a failed one
+        edges = []
     finally:
-        conn.close()
-    module = Path(rel).stem
-    ranked = []
-    for file, qualname, kind, called in rows:
-        if qualname in taken or qualname in names or not is_guarded_source(cfg, file):
-            continue
-        if file != rel:
-            text = virtual.read_current(str(Path(cfg.root) / file)) or ""
-            if module not in text:  # a same-named function somewhere else: not a caller of this one
-                continue
-        ranked.append((file != rel, file, qualname, kind, called))
+        if conn is not None:
+            conn.close()
+    names = {t.qualname for t in changed}
+    combined = symbols.sha("|".join(sorted(t.code_hash for t in changed)))
     out, seen = [], set()
-    for _, file, qualname, kind, called in sorted(ranked):
-        if qualname in seen or len(out) >= MAX_DEPENDENTS:
+    for e in sorted(edges, key=lambda e: (e.hops, e.how != "resolved", e.file != rel, e.file, e.qualname)):
+        if len(out) >= MAX_DEPENDENTS or (e.file, e.qualname) in seen or e.qualname in taken or (e.file == rel and e.qualname in names):
             continue
-        pair = _sym_pair(cfg, file, qualname)
+        if not is_guarded_source(cfg, e.file):
+            continue
+        pair = _sym_pair(cfg, e.file, e.qualname)
         if pair is None:
             continue
         then, now = pair
-        callee = names[called]
-        seen.add(qualname)
-        out.append(differ.Target(file, qualname, now.kind, then.params, symbols.sha(now.node_text + "|calls|" + callee.code_hash),
-                                 source=then.node_text, via=f"calls {called}", via_file=rel))
+        seen.add((e.file, e.qualname))
+        callee = e.callee.rsplit(".", 1)[-1]
+        out.append(differ.Target(e.file, e.qualname, now.kind, then.params, symbols.sha(now.node_text + "|calls|" + combined),
+                                 source=then.node_text, via=f"calls {callee}", via_file=rel))
     return out
 
 
@@ -100,7 +95,9 @@ def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
 def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, differ.Result]]:
     """Add findings to the ledger. Returns new, unwaived differences: the ones that may wake Claude."""
     wake: list[tuple[dict, differ.Result]] = []
-    edited = {r.qualname.rsplit(".", 1)[-1]: r.status for r in results if not r.via}
+    # A caller two steps away is quiet when the caller between it and the edit already shows the difference.
+    edited = {r.qualname.rsplit(".", 1)[-1]: r.status for r in results if r.via}
+    edited.update({r.qualname.rsplit(".", 1)[-1]: r.status for r in results if not r.via})
     for r in results:
         via = {"via": r.via, "via_file": r.via_file} if r.via else {}
         if r.via:
