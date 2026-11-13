@@ -22,6 +22,7 @@ from runner import os_sandbox
 WORKER = Path(__file__).resolve().parent / "lg_worker.py"
 MAX_FUNCTIONS = 12
 MAX_SHOWN = 3
+SELF_VARIANTS = 4  # matches lg_worker.SELF_VARIANTS
 DONE, DIFFERENT, BROKEN, UNTESTED = "verified", "different", "broken", "untested"
 BLOCK_REASON = {"database": "needs a database", "network": "needs the network", "file write": "writes files", "subprocess": "starts a subprocess"}
 
@@ -384,9 +385,42 @@ def _examples(cfg, conn, t: Target) -> dict | None:
     name = t.qualname.rsplit(".", 1)[-1]
     params = [p["name"] for p in t.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
     try:
-        return examples.collect(cfg.root, t.source, name, params, examples.calling_files(conn, name, t.file))
+        files = examples.calling_files(conn, name, t.file) or [f for f in examples.files_naming(cfg.root, name) if f != t.file]
+        return examples.collect(cfg.root, t.source, name, params, files)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _self_calls(cfg, conn, t: Target, work_root: str) -> list[dict]:
+    """Constructor calls for a method's class, from the repo, in the worker's input format (roadmap B3)."""
+    if t.kind != "method" or "." not in t.qualname:
+        return []
+    cls_qual = t.qualname.rsplit(".", 1)[0]
+    cls_name = cls_qual.rsplit(".", 1)[-1]
+    try:
+        text = (Path(work_root) / t.file).read_text(errors="replace")
+        defs = {s.qualname: s for s in symbols.extract(text)[0]}
+    except OSError:
+        return []
+    init = defs.get(f"{cls_qual}.__init__")
+    if init is not None:
+        params = [p["name"] for p in init.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
+    elif cls_qual in defs:
+        from guardlib import checks
+        params = list(checks._class_fields(defs[cls_qual]))  # a dataclass: its fields, in order, are the parameters
+    else:
+        return []
+    try:
+        calls = examples.constructor_calls(cfg.root, t.file, cls_name, params, examples.calling_files(conn, cls_name, t.file))
+    except Exception:  # noqa: BLE001 - a bonus: without it the worker falls back to other recipes
+        return []
+    out = []
+    for call in calls:
+        try:
+            out.append({"args": [{"name": n, "kind": k, "value": lg_codec.encode_input(v)} for n, k, v in call]})
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
@@ -417,7 +451,14 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no inputs could be built for its signature")
             continue
         module, sys_rel = module_for(t.file, work_root)
-        specs.append({"module": module, "qualname": t.qualname, "inputs": items})
+        if t.kind == "method" and 0 < len(items) < SELF_VARIANTS:
+            # Each input runs on a differently built instance, so a method with few inputs is repeated to see each one.
+            items = [dict(item) for item in (items * SELF_VARIANTS)[:SELF_VARIANTS]]
+        spec = {"module": module, "qualname": t.qualname, "inputs": items}
+        self_calls = _self_calls(cfg, conn, t, work_root)
+        if self_calls:
+            spec["self_calls"] = self_calls
+        specs.append(spec)
         runnable[f"{module}:{t.qualname}"] = (t, items)
         roots.add(sys_rel)
     for t in targets[MAX_FUNCTIONS:]:

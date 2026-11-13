@@ -265,7 +265,133 @@ def _finish(value):
     return value
 
 
-def _build_args(item, owner):
+# ---- building self for methods (roadmap B3) ----
+# A method needs an instance. Recipes, first that works: a constructor call written in the repo with literal arguments
+# (tests first), a no-argument constructor, then values made from the __init__ type hints. The recipe is chosen once
+# per function and replayed for every input, so each input gets a fresh instance and old and new code get the same one.
+_SAMPLE_DEPTH = 2
+
+
+SELF_VARIANTS = 4
+
+
+def _samples(variant: int):
+    """Plain values per type, a different set for each variant: one instance alone hides bugs that only show for some
+    state (abs(x) + abs(y) and abs(x + y) agree for Point(1, 1))."""
+    import decimal
+    pick = lambda options: options[variant % len(options)]  # noqa: E731
+    return {int: pick([1, -3, 0, 7]), float: pick([1.5, -2.5, 0.0, 2.675]), str: pick(["x", "", "Hello World", "a-b/c"]),
+            bool: pick([True, False]), bytes: pick([b"x", b""]), complex: 1j,
+            decimal.Decimal: decimal.Decimal(pick(["10.00", "-2.675", "0", "0.005"])),
+            _REAL["date"]: pick([_REAL["date"](2024, 1, 15), _REAL["date"](2000, 2, 29)]),
+            _REAL["dt"]: pick([_REAL["dt"](2024, 1, 15, 12, 0), _REAL["dt"](1999, 12, 31, 23, 59, 59)]),
+            _dt.timedelta: pick([_dt.timedelta(hours=1), _dt.timedelta(0)]),
+            list: [], dict: {}, set: set(), tuple: (), frozenset: frozenset()}
+
+
+def _sample(tp, depth: int = 0, variant: int = 0):
+    """One plain, valid-looking value for a type hint. Raises LookupError when there is no sensible value."""
+    import typing
+    if tp is inspect.Parameter.empty or tp is typing.Any:
+        raise LookupError("no type hint")
+    origin = typing.get_origin(tp)
+    if origin is typing.Union or (origin is not None and getattr(origin, "__name__", "") == "UnionType"):
+        for m in [a for a in typing.get_args(tp) if a is not type(None)]:
+            try:
+                return _sample(m, depth, variant)
+            except LookupError:
+                continue
+        return None
+    base = origin if origin is not None else tp
+    for k, v in _samples(variant).items():
+        if base is k:
+            return v
+    if isinstance(base, type) and issubclass(base, enum.Enum):
+        members = list(base)
+        return members[variant % len(members)]
+    if getattr(base, "__name__", "") in ("Sequence", "Iterable", "MutableSequence", "Collection"):
+        return []
+    if getattr(base, "__name__", "") in ("Mapping", "MutableMapping"):
+        return {}
+    if isinstance(base, type) and depth < _SAMPLE_DEPTH:
+        return _synth(base, depth + 1, variant)
+    raise LookupError(f"no value for {tp!r}")
+
+
+def _init_hints(cls) -> tuple:
+    import typing
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError) as exc:
+        raise LookupError(f"no signature: {exc}") from exc
+    try:
+        hints = typing.get_type_hints(cls.__init__)
+    except Exception:  # noqa: BLE001 - unresolvable forward references: fall back to the raw annotations
+        hints = {}
+    params = [p for p in list(sig.parameters.values())[1:] if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+    return params, hints
+
+
+def _synth(cls, depth: int = 0, variant: int = 0):
+    """An instance of cls from its __init__ type hints. Optional parameters keep their defaults."""
+    params, hints = _init_hints(cls)
+    pos, kw = [], {}
+    for i, p in enumerate(params):
+        if p.default is not inspect.Parameter.empty:
+            continue
+        # Offset by position, so fields of one type differ from each other (Point(1, -3), not Point(1, 1)).
+        value = _sample(hints.get(p.name, p.annotation), depth, variant + i)
+        if p.kind == p.KEYWORD_ONLY:
+            kw[p.name] = value
+        else:
+            pos.append(value)
+    return cls(*pos, **kw)
+
+
+def _instance_maker(owner, spec):
+    """(make, recipe, failure). make(i) returns a fresh instance for input i, rotating through the instances that
+    could be built, so the inputs see several different states. None and the reason when no recipe worked."""
+    tried = []
+    good_calls = []
+    for call in spec.get("self_calls") or []:
+        def from_call(call=call):
+            pos, kw, _ = _build_args(call, None)
+            return owner(*pos, **kw)
+        try:
+            reset_determinism()
+            from_call()
+            good_calls.append(from_call)
+        except GuardBlocked:
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            tried.append(f"example call: {type(exc).__name__}")
+    if good_calls:
+        return (lambda i: good_calls[i % len(good_calls)]()), f"{len(good_calls)} example call(s) in the repo", ""
+    variants = []
+    for v in range(SELF_VARIANTS):
+        try:
+            reset_determinism()
+            _synth(owner, 0, v)
+            variants.append(v)
+        except GuardBlocked:
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            if not variants and v == 0:
+                tried.append(f"from type hints: {type(exc).__name__}: {str(exc)[:80]}")
+    if variants:
+        return (lambda i: _synth(owner, 0, variants[i % len(variants)])), "values made from the __init__ type hints", ""
+    try:
+        reset_determinism()
+        owner()
+        return (lambda i: owner()), "a no-argument constructor", ""
+    except GuardBlocked:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        tried.append(f"{owner.__name__}(): {type(exc).__name__}: {str(exc)[:80]}")
+    return None, "", f"could not build a {owner.__name__} to call the method on ({'; '.join(tried)})"
+
+
+def _build_args(item, make_self, index: int = 0):
     """(positional, keyword, watched): watched pairs each argument's name with the object passed, for state after the call."""
     pos, kw, watched = [], {}, []
     for arg in item["args"]:
@@ -280,8 +406,8 @@ def _build_args(item, owner):
         else:
             kw[arg["name"]] = value
         watched.append((arg.get("name") or "?", value))
-    if owner is not None and not item.get("has_self"):
-        instance = owner()
+    if make_self is not None and not item.get("has_self"):
+        instance = make_self(index)
         pos.insert(0, instance)
         watched.insert(0, ("self", instance))
     return pos, kw, watched
@@ -461,11 +587,20 @@ def run_function(spec, root_real):
     hits: set = set()
     trace = _tracer(span, hits) if span else None
     freeze_references(root_real)
-    for item in spec["inputs"]:
+    make_self, recipe, no_self = None, "", ""
+    if owner is not None and not all(i.get("has_self") for i in spec["inputs"]):
+        try:
+            make_self, recipe, no_self = _instance_maker(owner, spec)
+        except GuardBlocked as exc:
+            no_self = f"building a {owner.__name__} was blocked: {exc}"
+    for index, item in enumerate(spec["inputs"]):
         start = len(BLOCKS)
         reset_determinism()
+        if owner is not None and make_self is None and not item.get("has_self"):
+            results.append({"outcome": "setup_failed", "detail": no_self})
+            continue
         try:
-            pos, kw, watched = _build_args(item, owner)
+            pos, kw, watched = _build_args(item, make_self, index)
         except BaseException as exc:  # noqa: BLE001
             results.append({"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"})
             continue
@@ -494,7 +629,10 @@ def run_function(spec, root_real):
         if len(BLOCKS) > start:
             outcome["blocked_kinds"] = sorted(set(BLOCKS[start:]))
         results.append(outcome)
-    return {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
+    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
+    if recipe:
+        out["self_recipe"] = recipe
+    return out
 
 
 def main(request_path, result_path):

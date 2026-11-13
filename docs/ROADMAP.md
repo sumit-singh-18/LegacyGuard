@@ -205,6 +205,20 @@ Python runner. Do not start until Tier A-C are solid; depth in Python is the sel
 **Suggested order.** Sprint 1: A1, A2, B1, B2. Sprint 2: A3, B3, B4, C4. Sprint 3: B6, B7, C3.
 Sprint 4: C1 and D1. Then E1. Re-run the benchmark after each sprint and publish the numbers in the README.
 
+## 3b. Validation on real repositories (after the sprints)
+
+During the sprints, every feature ships with tests on small fixture projects (`tests/`). After that comes a
+separate validation phase on real open-source Python code, and the guard gets fixed based on what it finds:
+
+1. **Pick the repos.** Pure-Python libraries (boltons, humanize, more-itertools), a Django app, a FastAPI app,
+   and BugsInPy subjects (real bugs with known fixes).
+2. **Replay history.** For each repo, replay recent commits through `guardlib/backtest.py`, and replay reversed
+   bug fixes (the bug should be caught) and pure refactors (nothing should be flagged).
+3. **Live sessions.** Run real Claude Code sessions with the plugin installed on those repos, using the README's
+   kind of requests. Record wakes, false alarms, untested reasons and latency.
+4. **Triage and fix.** Each false alarm or miss becomes a fixture test in `tests/` first, then a fix.
+5. **Publish the numbers** in section 4 in the README.
+
 ## 4. Success metrics to publish
 
 - Detection rate on BugsInPy reversals and on mutants (target: >70% for functions that can be checked).

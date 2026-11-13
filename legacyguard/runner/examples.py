@@ -266,6 +266,48 @@ def collect(root: str, own_text: str, name: str, params: list[str], files: list[
 FIRST_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
 
+MAX_SELF_CALLS = 5
+MAX_SCAN = 400
+_SKIP_DIRS = {".git", ".legacyguard", ".venv", "venv", "env", "node_modules", "__pycache__", "site-packages", "build", "dist"}
+
+
+def files_naming(root: str, name: str) -> list[str]:
+    """Without an index: up to MAX_FILES Python files that mention the name, tests first. Bounded, so it stays fast."""
+    hits: list[str] = []
+    scanned = 0
+    for path in sorted(Path(root).rglob("*.py")):
+        if scanned >= MAX_SCAN or any(part in _SKIP_DIRS for part in path.relative_to(root).parts):
+            continue
+        scanned += 1
+        try:
+            if path.stat().st_size <= MAX_FILE_BYTES and name in path.read_text(errors="replace"):
+                hits.append(path.relative_to(root).as_posix())
+        except OSError:
+            continue
+    hits.sort(key=lambda r: (0 if "test" in r.lower() else 1, r))
+    return hits[:MAX_FILES]
+
+
+def constructor_calls(root: str, own_file: str, class_name: str, params: list[str], files: list[str]) -> list:
+    """Calls like Money(Decimal("1.00"), "USD") written in the repo, tests first, as argument lists (roadmap B3).
+
+    They are how the project itself builds the object, so they are the most likely instance to run a method on."""
+    calls: list = []
+    if not files:
+        files = files_naming(root, class_name)
+    for rel in [*files, own_file]:
+        path = Path(root) / rel
+        try:
+            if path.stat().st_size > MAX_FILE_BYTES:
+                continue
+            tree = _parse(path.read_text(errors="replace"))
+        except OSError:
+            continue
+        if tree is not None:
+            calls += _calls_in(tree, class_name, params)
+    return _unique_calls(calls)[:MAX_SELF_CALLS]
+
+
 def _variants(values: list) -> list:
     """Near neighbours of the example values. Rounding and boundary bugs show only between the round numbers
     people write in examples: '10M' and '2K' never tell int(x) from round(x), but '10.5M' does."""
