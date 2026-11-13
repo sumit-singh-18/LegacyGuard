@@ -43,7 +43,7 @@ reached the changed lines, non-deterministic).
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 90 tests after Sprint 3). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 106 tests after Sprint 4). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -89,6 +89,23 @@ reached the changed lines, non-deterministic).
   introspection added). Django routes are not diffed yet.
 - **Fix:** `datetime.datetime`/`date` are swapped to the frozen versions only during calls
   (`frozen_datetime_module`). The global swap broke pydantic and FastAPI imports.
+
+## Sprint 4 (branch sprint4, 2026-11-13)
+
+- **Stand-ins (C1):** `runner/lg_stubs.py`, used in "stub and compare" mode. sqlite3, psycopg/pymysql/MySQLdb,
+  requests, httpx and urllib are answered in process (no rows, HTTP 200 {}). Outcomes carry `io` (the SQL with
+  params, HTTP method/url/body, COMMIT/ROLLBACK), and `diff._comparable` compares it. Params named
+  conn/connection/db/cursor/cur get fakes via `lg_codec.FakeMarker`; ORM sessions are still untested. Clients
+  with their own transport (Starlette TestClient) pass through. Config `behavioral_diff.io: stub|block`.
+  Nothing is recorded from real services on purpose (side effects).
+- **declare_change (D1):** `guardlib/intent.py` plus the MCP tool. Declarations live in `session.json`
+  "declarations"; their examples run as inputs with `expect`, checked against the new code only.
+  `engine.record` marks differences "intended" while the examples hold (callers too); a failing example wakes.
+- **CI (E1):** `guardlib/ci.py`, `scripts/lg_ci.py`, root `action.yml` (composite). The base worktree goes in
+  the session baseline dir so engine functions work unchanged. This repo dogfoods it in tests.yml (`guard` job,
+  PRs only, fail-on none).
+- **Fixes:** the worker's `open()` replacement is a callable object (Python 3.10 pathlib bound it as a
+  method); socket binds to loopback are allowed (urllib3 probes `::1` at import).
 
 ## Known gaps still open
 

@@ -60,6 +60,7 @@ With `app:` set (FastAPI, Starlette or Flask) and the index built, a change that
 | `/legacyguard:waive <id> "<reason>"` | Developer | Accept a finding until the code changes |
 | `/legacyguard:pin <id>` | Developer | Write a regression test from a counterexample |
 | `/legacyguard:mode <mode>` | Developer | advisory, guarded or strict |
+| `declare_change` (MCP tool) | Claude | State an intended change with examples; the guard checks them and records the change as intended |
 
 ## Session report
 
@@ -84,7 +85,7 @@ Everything under `.legacyguard/` is ignored by git, so the guard adds nothing to
 - Python only. One service per repo.
 - The diff compares return values, exceptions, and what a call leaves in its mutable arguments and in `self`. It does not compare writes to a database, files or the network: those are blocked.
 - Code under test runs with a fixed random seed and a frozen clock, in an OS sandbox where available (sandbox-exec on macOS, bubblewrap on Linux) plus in-process blocks. Without an OS sandbox, the in-process blocks are best effort only.
-- Functions that need a database, the network, or objects it can't build are reported `Untested`.
+- Database and HTTP calls (sqlite3, psycopg, pymysql, requests, httpx, urllib) are answered by stand-ins that return no rows and HTTP 200 with an empty body, the same for old and new code; what is compared is the calls each version makes. ORM sessions and objects it can't build are reported `Untested`. `behavioral_diff.io: block` restores blocking.
 - A `Verified pass` means no difference on the inputs tried, and that at least one input ran the changed lines. It is not a proof. In a session where Claude may run code, Claude's own comparison of a small function can cover more cases than the guard's.
 - Edits made through shell commands are seen only at Stop.
 - The map labels API routes as entry points. Scheduled jobs are not indexed, so they appear as ordinary callers.
