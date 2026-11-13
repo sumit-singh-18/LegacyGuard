@@ -1,2 +1,6 @@
 -r legacyguard/requirements.txt
 pytest>=8
+# Only for testing the route diff (runner/routes_diff.py) against real frameworks
+fastapi>=0.110
+httpx>=0.27
+flask>=3.0

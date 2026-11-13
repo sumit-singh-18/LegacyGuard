@@ -512,7 +512,6 @@ _SCANNED: set = set()
 
 def install_determinism() -> None:
     DET["on"] = True
-    _dt.datetime, _dt.date = FrozenDatetime, FrozenDate
     time.time, time.time_ns = _fake_time, _fake_time_ns
     uuid.uuid4, uuid.uuid1 = _fake_uuid4, _fake_uuid1
 
@@ -549,6 +548,14 @@ def freeze_references(root_real: str) -> None:
                     pass
 
 
+def frozen_datetime_module(on: bool) -> None:
+    """datetime.datetime and datetime.date are swapped only while target code runs. Swapped for good, a library
+    that subclasses datetime at import (pydantic, ORMs) would get FrozenDatetime and its metaclass as a base."""
+    if not DET["on"]:
+        return
+    _dt.datetime, _dt.date = (FrozenDatetime, FrozenDate) if on else (_REAL["dt"], _REAL["date"])
+
+
 def reset_determinism() -> None:
     if not DET["on"]:
         return
@@ -563,7 +570,48 @@ def reset_determinism() -> None:
             pass
 
 
+def _http_caller(app_ref: str):
+    """A callable(method, path, json=None, params=None) that sends one request to the app in process and returns
+    {status, content_type, body}: Flask's test client, or Starlette/FastAPI's TestClient (roadmap C3)."""
+    mod, _, attr = app_ref.partition(":")
+    app = getattr(importlib.import_module(mod), attr or "app")
+    if hasattr(app, "test_client"):  # Flask
+        client = app.test_client()
+
+        def call(method, path, json=None, params=None):
+            resp = client.open(path, method=method, json=json, query_string=params)
+            body = resp.get_json(silent=True)
+            return {"status": resp.status_code, "content_type": (resp.content_type or "").split(";")[0],
+                    "body": body if body is not None else resp.get_data(as_text=True)[:4000]}
+        return call
+    from starlette.testclient import TestClient  # FastAPI and Starlette; no lifespan, so start-up hooks do not run
+    client = TestClient(app, raise_server_exceptions=False)
+
+    def call(method, path, json=None, params=None):
+        resp = client.request(method, path, json=json, params=params)
+        try:
+            body = resp.json()
+        except ValueError:
+            body = resp.text[:4000]
+        return {"status": resp.status_code, "content_type": resp.headers.get("content-type", "").split(";")[0], "body": body}
+    return call
+
+
+def run_route(spec) -> dict:
+    """Requests to one route of the app, compared like a function's return values."""
+    try:
+        call = _http_caller(spec["app"])
+    except GuardBlocked as exc:
+        return {"status": "import_blocked", "reason": str(exc)}
+    except BaseException as exc:  # noqa: BLE001
+        return {"status": "import_error", "reason": f"{type(exc).__name__}: {exc}"}
+    results = [_call_once(call, item, None, i) for i, item in enumerate(spec["inputs"])]
+    return {"status": "ran", "results": results, "lines": None}
+
+
 def run_function(spec, root_real):
+    if spec.get("kind") == "http":
+        return run_route(spec)
     module, qualname = spec["module"], spec["qualname"]
     try:
         fn, owner, reason = _resolve(module, qualname)
@@ -627,9 +675,11 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
     try:
         sys.settrace(trace)
         _IN_CALL["active"] = True
+        frozen_datetime_module(True)
         try:
             value = _with_timeout(lambda: _finish(fn(*pos, **kw)), seconds)
         finally:
+            frozen_datetime_module(False)
             _IN_CALL["active"] = False
             sys.settrace(None)
         outcome = {"outcome": "return", "value": lg_codec.canon(value)}

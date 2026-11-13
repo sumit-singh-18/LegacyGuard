@@ -195,3 +195,16 @@ def test_slow_function_stops_early(tmp_path, run_worker):
     outcomes = [r["outcome"] for r in out["results"]]
     assert outcomes.count("timeout") <= 10 and outcomes.count("skipped_slow") >= 20
     assert time.monotonic() - start < 20
+
+
+def test_library_subclassing_datetime_at_import_still_works(tmp_path, run_worker):
+    # pydantic and others subclass datetime with their own metaclass at import time. The frozen clock must not be
+    # in place then, or the import fails with a metaclass conflict (found with FastAPI in Sprint 3).
+    src = (
+        "import abc, datetime\n\n"
+        "class Stamp(datetime.datetime, metaclass=abc.ABCMeta):\n    pass\n\n"
+        "def now_year():\n    return datetime.datetime.now().year\n"
+    )
+    root = write_tree(tmp_path / "dtlib", {"lib.py": src})
+    out = run_worker(root, [{"module": "lib", "qualname": "now_year", "inputs": [call()]}])["lib:now_year"]
+    assert out["status"] == "ran" and out["results"][0]["value"] == {"t": "v", "v": 2024}  # the frozen clock still applies

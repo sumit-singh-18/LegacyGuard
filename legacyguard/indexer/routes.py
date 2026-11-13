@@ -41,7 +41,16 @@ if APP:
                 walk(r.routes)
             else:
                 add(getattr(r, "path", ""), getattr(r, "methods", None), getattr(r, "endpoint", None), getattr(r, "include_in_schema", True))
-    walk(app.routes)
+    if hasattr(app, "url_map") and hasattr(app, "view_functions"):  # Flask
+        for rule in app.url_map.iter_rules():
+            view = app.view_functions.get(rule.endpoint)
+            if view is None or rule.endpoint == "static":
+                continue
+            for m in sorted(rule.methods or []):
+                if m not in ("HEAD", "OPTIONS"):
+                    out.append([m, rule.rule, view.__qualname__, where(view)])
+    else:
+        walk(app.routes)
 elif DJANGO:
     import django
     os.environ["DJANGO_SETTINGS_MODULE"] = DJANGO

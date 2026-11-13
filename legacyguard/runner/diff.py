@@ -42,6 +42,7 @@ class Target:
     via: str = ""                                  # not edited itself: "calls states_in_range" (FR-41)
     via_file: str = ""                             # the file whose edit made this function worth running
     source_start: int = 0                          # first line of `source` in the baseline file
+    requests: list = field(default_factory=list)   # kind "route": the HTTP requests to send (roadmap C3)
 
 
 @dataclass
@@ -228,6 +229,10 @@ def _show_outcome(o: dict, other: dict | None = None) -> str:
 
 
 def show_call(target: Target, item: dict) -> str:
+    if target.kind == "route":
+        a = {x["name"]: lg_codec.decode(x["value"]) for x in item["args"]}
+        extra = "".join(f" {k}={json.dumps(a[k], default=str)}" for k in ("params", "json") if a.get(k) is not None)
+        return f"{a.get('method')} {a.get('path')}{extra}"
     name = target.qualname.rsplit(".", 1)[-1]
     parts = []
     for a in item["args"]:
@@ -457,6 +462,9 @@ def _with_mutants(specs: list[dict], runnable: dict, limit: int) -> list[dict]:
     out = []
     for spec in specs:
         t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
+        if t.kind == "route":
+            out.append(spec)
+            continue
         plan = mutants.generate(t.source, t.source_start, t.old_gate, limit) if t.source and t.source_start and not t.via else None
         out.append({**spec, "mutants": plan} if plan else spec)
     return out
@@ -475,6 +483,15 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
     conn = _index(cfg)
     alias_cache: dict[str, dict] = {}
     for t in targets[:MAX_FUNCTIONS]:
+        if t.kind == "route":
+            app = cfg.raw.get("app") or ""
+            if not t.requests or not app:
+                results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no requests could be built for this route")
+                continue
+            app_module = app.split(":", 1)[0]
+            specs.append({"module": app_module, "qualname": t.qualname, "kind": "http", "app": app, "inputs": t.requests})
+            runnable[f"{app_module}:{t.qualname}"] = (t, t.requests)
+            continue
         if t.file not in alias_cache:
             try:
                 alias_cache[t.file] = _aliases((Path(work_root) / t.file).read_text(errors="replace"))

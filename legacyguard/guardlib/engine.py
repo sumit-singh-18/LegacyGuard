@@ -66,6 +66,29 @@ def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> 
     return out
 
 
+def route_targets(cfg, targets: list[differ.Target]) -> list[differ.Target]:
+    """API routes whose handler is among the targets, with the requests to send (roadmap C3). Needs `app:` in the
+    config and the routes table from the index."""
+    from indexer import db
+    from runner import routes_diff
+    if not cfg.raw.get("app") or not targets or not db.exists(cfg.root):
+        return []
+    conn = db.connect(cfg.root)
+    try:
+        handlers = {(t.file, t.qualname) for t in targets if t.kind != "route"}
+        hashes = {(t.file, t.qualname): t.code_hash for t in targets}
+        out = []
+        for method, path, file, qualname in routes_diff.routes_for(conn, handlers):
+            requests = routes_diff.requests_for(cfg.root, method, path, routes_diff.handler_params(conn, file, qualname))
+            out.append(differ.Target(file, f"{method} {path}", "route", [], symbols.sha(f"{method} {path}|{hashes[(file, qualname)]}"),
+                                     requests=requests))
+        return out
+    except Exception:  # noqa: BLE001 - a route that cannot be planned is skipped, never a failed check
+        return []
+    finally:
+        conn.close()
+
+
 def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
     """Changed functions, the functions that call them, and functions with an open difference.
 
@@ -74,6 +97,8 @@ def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
     targets = {t.qualname: t for t in differ.changed_targets(rel, before, after)}
     for dep in dependents(cfg, rel, list(targets.values()), set(targets)):
         targets[dep.qualname] = dep
+    for route in route_targets(cfg, list(targets.values())):
+        targets[route.qualname] = route
     if after is not None and before is not None:
         now = {s.qualname: s for s in symbols.extract(after)[0]}
         then = {s.qualname: s for s in symbols.extract(before)[0]}
