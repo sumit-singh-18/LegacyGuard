@@ -1,6 +1,6 @@
 # LegacyGuard roadmap: from hackathon to a guard you can trust
 
-Status: draft plan, 2026-11-13. **Sprint 1 is done on branch `sprint1-foundations`:** A1 (test suite and CI; the benchmark is still open), A2 (layers 1 and 2; the throwaway cwd is still open), B1 and B2. It is based on a full read of v0.5.1 (about 5.6k lines of Python) and on the
+Status: draft plan, 2026-11-13. **Sprint 1 is done on branch `sprint1-foundations`:** A1 (test suite and CI; the benchmark is still open), A2 (layers 1 and 2; the throwaway cwd is still open), B1 and B2. **Sprint 2 is done too:** B3, B4, C4, and A3 as per-tree warm fork-servers (the daemon is still open). It is based on a full read of v0.5.1 (about 5.6k lines of Python) and on the
 research listed at the end.
 
 ## 0. Where it stands

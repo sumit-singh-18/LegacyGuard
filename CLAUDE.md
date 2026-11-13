@@ -43,7 +43,7 @@ reached the changed lines, non-deterministic).
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest, 55 tests). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 72 tests after Sprint 2). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -55,13 +55,29 @@ reached the changed lines, non-deterministic).
   reset before every input (config `behavioral_diff.deterministic`). Global module attributes are patched, plus
   `from x import y` names in the project's own modules and `django.utils.timezone`.
 
+## Sprint 2 (same branch, 2026-11-13)
+
+- **Methods (B3):** `lg_worker._instance_maker` builds `self` from constructor calls found in the repo
+  (`examples.constructor_calls`, tests first), then from `__init__` type hints (4 rotating variants, offset per
+  field), then a no-argument constructor. Methods get at least 4 inputs, so each variant runs.
+- **Runtime types (B4):** the harvest plugin records `types` per parameter. `inputs.with_runtime_types` fills
+  missing hints, but only with hints the builder can build (`BUILDABLE_HINT`).
+- **Affected tests (C4):** `runner/affected_tests.py` plus `engine.affected_tests`, called from `post_edit.py`
+  after the diff. It runs the tests the coverage map links to the changed functions, on the baseline (cached in
+  `session.json` as `old_test_results`) and on the working tree, sandboxed. A test that passed before and fails
+  now becomes a `test_regression` finding and a wake. Config `affected_tests: {enabled, max_tests, timeout_s}`.
+- **Warm workers (A3, partial):** `runner/lg_server.py` (target interpreter) and `runner/warm.py` (client).
+  There is one fork-server per tree on a Unix socket in the temp folder. The baseline server keeps project modules
+  warm; the work server keeps only third-party ones. Any failure falls back to the cold worker. Config
+  `behavioral_diff.warm`. Tests default to cold; `tests/test_warm.py` opts in. The hooks themselves are still
+  separate processes: the full daemon in docs/ARCHITECTURE.md is not built.
+
 ## Known gaps still open
 
 - `ARCHITECTURE.md` and `TESTING.md` from the hackathon are still missing. `docs/ARCHITECTURE.md` is the new
   design. IDs like FR-xx, D-0xx and NFR-xx point into the old docs.
-- Methods are run on `owner()` with no arguments (roadmap B3).
 - Callers are matched by name (MAX_FUNCTIONS=12, 1 hop).
-- Each check spawns 3 cold interpreters (roadmap A3: warm daemon).
+- Hooks are still short-lived processes (no daemon yet). With Django, the working-tree server still runs `django.setup()` cold in every check.
 - Not yet verified on Linux bubblewrap or on a Django project. The worker has no throwaway cwd yet.
 
 ## Conventions

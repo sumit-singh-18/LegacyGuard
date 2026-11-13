@@ -41,7 +41,9 @@ frozen:
 
 The first session start builds the guard's own virtual environment. Optional keys: `python:` (target interpreter, otherwise `.venv`, `venv`, `env`, then PATH) and `source_roots:` (folders to add to the import path, such as `src`).
 
-Under `behavioral_diff:`, `deterministic: false` turns off the fixed random seed, frozen clock and repeatable uuids, and `os_sandbox: off` turns off the operating-system sandbox around the code being run. Both are on by default.
+Under `behavioral_diff:`, `deterministic: false` turns off the fixed random seed, frozen clock and repeatable uuids, and `os_sandbox: off` turns off the operating-system sandbox around the code being run. Both are on by default. `warm: false` turns off the warm worker that keeps the project's libraries loaded between checks.
+
+`affected_tests:` (`enabled`, `max_tests`, `timeout_s`) controls running the project's own tests that reach the changed functions after each edit. It needs the test map from `/legacyguard:index`. A test that passed before the session and fails after an edit is reported to Claude like a behavior difference.
 
 ## Commands
 
