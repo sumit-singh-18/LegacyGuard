@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from guardlib import baseline, checks, ledger, paths, symbols, virtual, waivers
+from guardlib import baseline, checks, intent, ledger, paths, symbols, virtual, waivers
 from runner import diff as differ
 
 
@@ -99,6 +99,10 @@ def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
         targets[dep.qualname] = dep
     for route in route_targets(cfg, list(targets.values())):
         targets[route.qualname] = route
+    for t in targets.values():
+        decl = intent.declaration_for(data, t.file, t.qualname)
+        if decl and t.kind != "route":
+            t.declared = decl["examples"]
     if after is not None and before is not None:
         now = {s.qualname: s for s in symbols.extract(after)[0]}
         then = {s.qualname: s for s in symbols.extract(before)[0]}
@@ -154,16 +158,32 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             shown = [{k: d[k] for k in ("call", "before", "after", "source")} for d in r.differences[:differ.MAX_SHOWN]]
             evidence = "; ".join(f"{d['call']} before {d['before']} after {d['after']}" for d in shown) or r.reason
             waived = waivers.is_waived(cfg, "behavior_difference", r.file, r.qualname, r.code_hash)
+            # A declared change (declare_change) whose examples all hold is recorded as intended, and so are callers
+            # whose difference comes from a declared function. A declared example that fails always wakes Claude.
+            decl = intent.declaration_for(data, r.file, r.qualname)
+            callee_decl = None
+            if r.via:
+                callee = r.via.split()[-1]
+                callee_decl = next((d for k, d in (data.get("declarations") or {}).items()
+                                    if k.startswith(f"{r.via_file}::") and k.rsplit("::", 1)[1].rsplit(".", 1)[-1] == callee), None)
+            intended = not r.declared_failures and (decl is not None or callee_decl is not None)
+            if r.declared_failures:
+                evidence = "; ".join(f"{d['call']} declared {d['expected']} got {d['got']}" for d in r.declared_failures[:differ.MAX_SHOWN])
+            state = "waived" if waived else "intended" if intended else "open"
+            extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared, **via}
+            if intended:
+                extra["intent"] = (decl or callee_decl)["description"]
+            if r.declared_failures:
+                extra["declared_failures"] = r.declared_failures[:differ.MAX_SHOWN]
             f, new = ledger.add_finding(data, kind="behavior_difference", status=status, source="diff", subject=r.subject, file=r.file, item=r.qualname, evidence=evidence,
-                                        code_hash=r.code_hash, state="waived" if waived else "open",
-                                        extra={"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared, **via})
+                                        code_hash=r.code_hash, state=state, extra=extra)
             for old in data["findings"]:
                 if old is not f and old["kind"] == "behavior_difference" and old["file"] == r.file and old["item"] == r.qualname and old["state"] == "open":
                     old["state"] = "superseded"
             for old in data["findings"]:
                 if old["kind"] in ("verified", "untested") and old["file"] == r.file and old["item"] == r.qualname:
                     old["state"] = "superseded"
-            if new and not waived:
+            if new and state == "open":
                 wake.append((f, r))
         elif r.status == differ.DONE:
             for old in data["findings"]:

@@ -43,6 +43,7 @@ class Target:
     via_file: str = ""                             # the file whose edit made this function worth running
     source_start: int = 0                          # first line of `source` in the baseline file
     requests: list = field(default_factory=list)   # kind "route": the HTTP requests to send (roadmap C3)
+    declared: list = field(default_factory=list)   # inputs with an "expect" from declare_change (roadmap D1)
 
 
 @dataclass
@@ -61,6 +62,8 @@ class Result:
     only_special: bool = False  # every differing input contains NaN or infinity; ordinary values agree
     only_float_noise: bool = False  # every difference is in the last digits of a float
     inputs_with_io: int = 0         # inputs whose run made database or HTTP calls (answered by stand-ins, roadmap C1)
+    declared_failures: list = field(default_factory=list)  # declared examples that do not hold on the new code (roadmap D1)
+    declared_checked: int = 0
     mutants_total: int = 0          # planted bugs run after a pass (roadmap B6)
     mutants_killed: int = 0
     mutants_survived: list = field(default_factory=list)
@@ -320,6 +323,14 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     setup_failures = 0
     setup_detail = ""
     for item, oa, on, ob in zip(items, a["results"], n["results"], (b or {"results": a["results"]})["results"]):
+        if item.get("expect") is not None:
+            # A declared example: the new code is checked against what was declared, not against the old code.
+            from guardlib import intent
+            r.declared_checked += 1
+            if not intent.matches(item["expect"], on):
+                r.declared_failures.append({"call": item.get("call", show_call(target, item)), "expected": intent.describe(item["expect"]),
+                                            "got": intent.got_text(on)})
+            continue
         blocked.update(oa.get("blocked_kinds", []))
         blocked.update(on.get("blocked_kinds", []))
         if oa["outcome"] == "setup_failed" or on["outcome"] == "setup_failed":
@@ -350,6 +361,9 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                                   "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
                                   "special": _has_special(item), "state": not same_state,
                                   "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
+    if r.declared_failures and not r.differences:
+        r.status = DIFFERENT
+        return r
     if r.differences:
         r.status = DIFFERENT
         # The example a person reads first: from real tests, then the repo's own examples, ordinary values before
@@ -524,6 +538,8 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         if reason:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason=reason)
             continue
+        if t.declared:
+            items = [dict(i) for i in t.declared] + items
         if not items:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no inputs could be built for its signature")
             continue
@@ -595,6 +611,12 @@ def format_note(results: list[Result]) -> str:
 def format_wake(result: Result, finding_id: str) -> str:
     """The counterexample text Claude receives (FR-15). Factual, replayable, within the context limit."""
     total = result.inputs_compared
+    if result.declared_failures:
+        lines = [f"LegacyGuard declared change not holding [{finding_id}] in {result.subject}: "
+                 f"{len(result.declared_failures)} of {result.declared_checked} declared examples fail on the current code."]
+        lines += [f"{d['call']}  declared {d['expected']}  got {d['got']}" for d in result.declared_failures[:MAX_SHOWN]]
+        lines.append("Revise the code, or call declare_change again if the intended change itself is different.")
+        return "\n".join(lines)
     lines = [f"LegacyGuard behavior difference [{finding_id}] in {result.subject}: {len(result.differences)} of {total} inputs differ between the session baseline and the current code."]
     if result.via:
         lines.append(f"This function was not edited. It {result.via}, which was edited in {result.via_file}.")
@@ -608,5 +630,6 @@ def format_wake(result: Result, finding_id: str) -> str:
     if result.reason:
         lines.append(f"Also: {result.reason}.")
     lines.append(f"Whether the request intended this is unknown. If it did not, revising the code clears this and the check re-runs by itself. "
-                 f"If it did, say so in your reply; the developer can accept it with /legacyguard:waive {finding_id} \"<reason>\".")
+                 f"If it did, call the declare_change tool with the function, what changes, and a few examples of the new results: "
+                 f"the guard checks them and records the change as intended. The developer can also accept it with /legacyguard:waive {finding_id} \"<reason>\".")
     return "\n".join(lines)

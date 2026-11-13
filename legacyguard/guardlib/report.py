@@ -80,6 +80,9 @@ def story(data: dict) -> list[dict]:
                 steps.append({"kind": "fixed", "id": f["id"], "text": f"Claude changed {name} again, and the guard re-checked the new version."})
             elif f["state"] == "waived":
                 steps.append({"kind": "accepted", "id": f["id"], "text": f"You accepted the change to {name} with /legacyguard:waive."})
+            elif f["state"] == "intended":
+                steps.append({"kind": "accepted", "id": f["id"], "text": f"Claude declared this change ({_clean(f.get('intent', ''))[:200]}); "
+                              f"its declared examples hold. Check that it is what you asked for, or turn it back."})
             elif f["state"] == "open":
                 steps.append({"kind": "open", "id": f["id"], "text": f"{name} still behaves differently from the original. If you asked for that, accept it with /legacyguard:waive {f['id']} \"<reason>\"."})
         elif f["kind"] == "verified" and f["state"] != "superseded" and key not in had_difference:

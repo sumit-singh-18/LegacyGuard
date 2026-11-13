@@ -72,5 +72,25 @@ def diff_report(function: str) -> str:
     return "\n".join(f"[{f['id']}] {f['status']} ({f['state']}): {f['subject']}. {f['evidence'][:500]}" for f in rows[-5:])
 
 
+@server.tool()
+def declare_change(function: str, description: str, examples: list[dict]) -> str:
+    """Declare an intended behavior change, with examples the guard checks on the current code.
+
+    function: "path/to/file.py::qualname" (or a name that is unique in the project).
+    examples: [{"call": "parse_int_list('5-8')", "returns": "[5, 6, 7]"}, {"call": "f(-1)", "raises": "ValueError"}],
+    with literal arguments only. While every example holds, differences in this function are recorded as intended
+    instead of waking you; if one stops holding you are told. The developer sees the declaration in the report.
+    """
+    try:
+        cfg = _load()
+    except (cfgmod.ConfigMissing, cfgmod.ConfigError) as exc:
+        return f"LegacyGuard is inactive here: {exc}"
+    from guardlib import intent
+    try:
+        return intent.declare(cfg, function, description, examples)
+    except intent.IntentError as exc:
+        return f"Not declared: {exc}"
+
+
 def main() -> None:
     server.run("stdio")
