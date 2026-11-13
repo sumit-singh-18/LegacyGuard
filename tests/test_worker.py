@@ -48,6 +48,11 @@ def dice(n):
 def stamp(n):
     return [datetime.datetime.now().isoformat(), DT.now().isoformat(), time.time() > 0, str(uuid4()), str(uuid.uuid4())][:n]
 
+def busy(n):
+    total = 0
+    while True:
+        total += n
+
 def same_instant():
     a = DT.now()
     b = DT.now()
@@ -180,3 +185,13 @@ def test_determinism_can_be_switched_off(tmp_path, run_worker):
     a = run1(run_worker, root, "dice", *[call(20)] * 3, deterministic=False)
     values = [str(x["value"]) for x in a["results"]]
     assert len(set(values)) > 1
+
+
+def test_slow_function_stops_early(tmp_path, run_worker):
+    import time
+    root = project(tmp_path)
+    start = time.monotonic()
+    out = run1(run_worker, root, "busy", *[call(i) for i in range(30)])
+    outcomes = [r["outcome"] for r in out["results"]]
+    assert outcomes.count("timeout") <= 10 and outcomes.count("skipped_slow") >= 20
+    assert time.monotonic() - start < 20

@@ -149,8 +149,10 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                     old["state"] = "resolved" if old["kind"] == "behavior_difference" else "superseded"
             f, new = ledger.add_finding(data, kind="verified", status=ledger.VERIFIED, source="diff", subject=r.subject, file=r.file, item=r.qualname,
                                         evidence=f"{r.inputs_compared} inputs compared, {r.inputs_completed} returned a value" +
-                                                 (f", {r.dropped_nondeterministic} dropped as non-deterministic" if r.dropped_nondeterministic else ""),
-                                        code_hash=r.code_hash, state="recorded", extra={"inputs_compared": r.inputs_compared, **via})
+                                                 (f", {r.dropped_nondeterministic} dropped as non-deterministic" if r.dropped_nondeterministic else "") +
+                                                 (f"; {differ.confidence_text(r)}" if r.mutants_total else ""),
+                                        code_hash=r.code_hash, state="recorded",
+                                        extra={"inputs_compared": r.inputs_compared, "mutants": [r.mutants_killed, r.mutants_total], **via})
             if not new:
                 f["state"] = "recorded"
         else:

@@ -17,6 +17,7 @@ from indexer.coverage_map import clean_env, load_harvest
 from runner import examples
 from runner import inputs as input_lib
 from runner import lg_codec
+from runner import mutants
 from runner import os_sandbox
 from runner import warm
 
@@ -40,6 +41,7 @@ class Target:
     source: str = ""                               # the function's text before the edit, for example values
     via: str = ""                                  # not edited itself: "calls states_in_range" (FR-41)
     via_file: str = ""                             # the file whose edit made this function worth running
+    source_start: int = 0                          # first line of `source` in the baseline file
 
 
 @dataclass
@@ -57,6 +59,9 @@ class Result:
     differences: list[dict] = field(default_factory=list)
     only_special: bool = False  # every differing input contains NaN or infinity; ordinary values agree
     only_float_noise: bool = False  # every difference is in the last digits of a float
+    mutants_total: int = 0          # planted bugs run after a pass (roadmap B6)
+    mutants_killed: int = 0
+    mutants_survived: list = field(default_factory=list)
     via: str = ""
     via_file: str = ""
 
@@ -116,7 +121,7 @@ def changed_targets(rel: str, before: str | None, after: str | None) -> list[Tar
             old = c.before
             old_gate, new_gate = examples.gates(before, after, c.before, c.after)
             out[c.qualname] = Target(rel, c.qualname, c.after.kind, old.params, symbols.sha(c.after.node_text),
-                                     old_gate=old_gate, new_gate=new_gate, source=old.node_text)
+                                     old_gate=old_gate, new_gate=new_gate, source=old.node_text, source_start=old.line_start)
         elif c.kind in ("renamed", "visibility_changed") and c.before.kind != "class":
             pass  # the old name is gone; static checks report it, and callers show up at Stop
     changed_names = _changed_constants(before, after)
@@ -336,8 +341,10 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         # One input like dice(0) agreeing with itself must not turn a random function into a Verified pass.
         r.reason = f"non-deterministic: old code disagreed with itself on {r.dropped_nondeterministic} of {r.dropped_nondeterministic + r.inputs_compared} inputs"
         return r
+    slow = sum(1 for o in a["results"] if o.get("outcome") in ("timeout", "skipped_slow"))
     if r.inputs_completed == 0:
-        r.reason = "no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:120]})"
+        r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:120]})") + \
+                   (f"; {slow} inputs ran past the time limit" if slow else "")
         return r
     # A pass must rest on inputs that ran the changed code (D-043). Guessed values for an untyped parameter often
     # leave by an early return or an error, and old and new code then agree without the edit ever being exercised.
@@ -346,7 +353,19 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         r.reason = f"none of the {r.inputs_compared} inputs tried reached the changed lines, so the edit itself was not exercised"
         return r
     r.status = DONE
+    m = a.get("mutation") or {}
+    if m.get("applicable"):
+        r.mutants_total, r.mutants_killed, r.mutants_survived = m["total"], m["killed"], m.get("survived", [])
     return r
+
+
+def confidence_text(r: Result) -> str:
+    """'7 of 8 planted bugs caught' with a plain verdict, or '' when no bugs were planted."""
+    if not r.mutants_total:
+        return ""
+    share = r.mutants_killed / r.mutants_total
+    verdict = "strong inputs" if share >= 0.75 else "fair inputs" if share >= 0.4 else "weak inputs: this pass says little"
+    return f"{r.mutants_killed} of {r.mutants_total} planted bugs in the changed lines were caught by the same inputs ({verdict})"
 
 
 ALIAS = re.compile(r"^[ \t]*(?:type[ \t]+)?([A-Z]\w*)[ \t]*(?::[ \t]*(?:typing\.)?TypeAlias)?[ \t]*=[ \t]*([^\n#]+?)[ \t]*(?:#.*)?$", re.M)
@@ -430,6 +449,19 @@ def _self_calls(cfg, conn, t: Target, work_root: str) -> list[dict]:
     return out
 
 
+def _with_mutants(specs: list[dict], runnable: dict, limit: int) -> list[dict]:
+    """The specs for the first baseline run, with planted bugs for each edited function (roadmap B6). Only that run
+    gets them: the mutants are compared with the old function's own results, so the other runs stay as fast as before."""
+    if limit <= 0:
+        return specs
+    out = []
+    for spec in specs:
+        t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
+        plan = mutants.generate(t.source, t.source_start, t.old_gate, limit) if t.source and t.source_start and not t.via else None
+        out.append({**spec, "mutants": plan} if plan else spec)
+    return out
+
+
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
     """Run old twice and new once, in parallel subprocesses, on the same inputs."""
     if harvest is None:
@@ -477,8 +509,9 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         deadline = float(bd["timeout_s"])
         use_self = bool(bd.get("self_diff", True))
         warm_names = warm.third_party_imports(work_root, sorted({t.file for t, _ in runnable.values()}), extra)
+        specs_a = _with_mutants(specs, runnable, int(bd.get("mutants", 8)))
         with cf.ThreadPoolExecutor(3) as pool:
-            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names)
+            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs_a, deadline, warm_names)
             fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs, deadline, warm_names)
             fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names) if use_self else None
             a, n = fa.result(), fn.result()
@@ -504,9 +537,10 @@ def format_note(results: list[Result]) -> str:
     callers = [r for r in results if r.via and r.status == DONE]
     for r in own[:4]:
         if r.status == DONE:
+            conf = confidence_text(r)
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
-                         f"({r.inputs_completed} returned a value). The inputs are the repo's own examples plus guesses, so this is not a proof; "
-                         "values it did not try can still differ.")
+                         f"({r.inputs_completed} returned a value). " + (f"{conf}. " if conf else "") +
+                         "The inputs are the repo's own examples plus guesses, so this is not a proof; values it did not try can still differ.")
         elif r.status == UNTESTED:
             lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. Nothing is known about this edit from execution.")
     if len(own) > 4:

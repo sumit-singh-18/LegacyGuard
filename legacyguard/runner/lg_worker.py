@@ -36,6 +36,9 @@ import lg_codec  # noqa: E402
 
 BLOCKS: list[str] = []
 CALL_TIMEOUT_S = 5
+SHORT_TIMEOUT_S = 0.5
+MAX_TIMEOUTS = 10
+FUNCTION_BUDGET_S = 10.0  # all inputs of one function together; the rest are skipped and reported as slow
 
 
 class GuardBlocked(BaseException):
@@ -173,10 +176,10 @@ def _alarm(signum, frame):
     raise CallTimeout()
 
 
-def _with_timeout(fn):
+def _with_timeout(fn, seconds: float = CALL_TIMEOUT_S):
     if hasattr(signal, "setitimer"):
         signal.signal(signal.SIGALRM, _alarm)
-        signal.setitimer(signal.ITIMER_REAL, CALL_TIMEOUT_S)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
         return fn()
     finally:
@@ -593,46 +596,120 @@ def run_function(spec, root_real):
             make_self, recipe, no_self = _instance_maker(owner, spec)
         except GuardBlocked as exc:
             no_self = f"building a {owner.__name__} was blocked: {exc}"
+    fn_deadline = time.monotonic() + FUNCTION_BUDGET_S
     for index, item in enumerate(spec["inputs"]):
-        start = len(BLOCKS)
-        reset_determinism()
         if owner is not None and make_self is None and not item.get("has_self"):
             results.append({"outcome": "setup_failed", "detail": no_self})
             continue
-        try:
-            pos, kw, watched = _build_args(item, make_self, index)
-        except BaseException as exc:  # noqa: BLE001
-            results.append({"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"})
+        # After two inputs time out, the rest get a short limit: one slow function must not use up the whole check.
+        # After MAX_TIMEOUTS the rest are skipped, not run: they are almost surely as slow, and are reported as such.
+        timeouts = sum(1 for r in results if r.get("outcome") in ("timeout", "skipped_slow"))
+        if timeouts >= MAX_TIMEOUTS or time.monotonic() > fn_deadline:
+            results.append({"outcome": "skipped_slow"})
             continue
-        try:
-            sys.settrace(trace)
-            _IN_CALL["active"] = True
-            try:
-                value = _with_timeout(lambda: _finish(fn(*pos, **kw)))  # noqa: B023
-            finally:
-                _IN_CALL["active"] = False
-                sys.settrace(None)
-            outcome = {"outcome": "return", "value": lg_codec.canon(value)}
-        except GuardBlocked as exc:
-            outcome = {"outcome": "blocked", "detail": str(exc)}
-        except CallTimeout:
-            outcome = {"outcome": "timeout"}
-        except BaseException as exc:  # noqa: BLE001
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                outcome = {"outcome": "exit", "detail": type(exc).__name__}
-            else:
-                outcome = {"outcome": "raise", "type": type(exc).__name__, "message": lg_codec._scrub(str(exc))[:500]}
-        if outcome["outcome"] in ("return", "raise"):
-            state = _state_after(watched)
-            if state:
-                outcome["state"] = state
-        if len(BLOCKS) > start:
-            outcome["blocked_kinds"] = sorted(set(BLOCKS[start:]))
-        results.append(outcome)
+        results.append(_call_once(fn, item, make_self, index, trace, CALL_TIMEOUT_S if timeouts < 2 else SHORT_TIMEOUT_S))
     out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
     if recipe:
         out["self_recipe"] = recipe
+    if spec.get("mutants"):
+        out["mutation"] = _run_mutants(fn, spec, make_self, owner, results)
     return out
+
+
+def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CALL_TIMEOUT_S) -> dict:
+    """One input through fn, with a fresh seed, clock and instance. The outcome as the comparison reads it."""
+    start = len(BLOCKS)
+    reset_determinism()
+    try:
+        pos, kw, watched = _build_args(item, make_self, index)
+    except BaseException as exc:  # noqa: BLE001
+        return {"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"}
+    try:
+        sys.settrace(trace)
+        _IN_CALL["active"] = True
+        try:
+            value = _with_timeout(lambda: _finish(fn(*pos, **kw)), seconds)
+        finally:
+            _IN_CALL["active"] = False
+            sys.settrace(None)
+        outcome = {"outcome": "return", "value": lg_codec.canon(value)}
+    except GuardBlocked as exc:
+        outcome = {"outcome": "blocked", "detail": str(exc)}
+    except CallTimeout:
+        outcome = {"outcome": "timeout"}
+    except BaseException as exc:  # noqa: BLE001
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            outcome = {"outcome": "exit", "detail": type(exc).__name__}
+        else:
+            outcome = {"outcome": "raise", "type": type(exc).__name__, "message": lg_codec._scrub(str(exc))[:500]}
+    if outcome["outcome"] in ("return", "raise"):
+        state = _state_after(watched)
+        if state:
+            outcome["state"] = state
+    if len(BLOCKS) > start:
+        outcome["blocked_kinds"] = sorted(set(BLOCKS[start:]))
+    return outcome
+
+
+MUTANT_CALL_S = 0.5      # a planted bug often loops forever; such a mutant counts as caught once it times out
+MUTANT_BUDGET_S = 10.0   # all mutants of one function together
+
+
+def _same(a: dict, b: dict) -> bool:
+    keys = ("outcome", "value", "type", "message", "state")
+    return all(a.get(k) == b.get(k) for k in keys)
+
+
+def _compile_variant(fn, source: str, name: str):
+    """The function compiled again from source in the namespace of the module that defines fn."""
+    target = getattr(fn, "__func__", fn)
+    namespace = dict(getattr(target, "__globals__", {}))
+    exec(compile(source, getattr(target, "__code__", None) and target.__code__.co_filename or "<mutant>", "exec"), namespace)  # noqa: S102
+    return namespace[name]
+
+
+def _run_mutants(fn, spec, make_self, owner, results) -> dict:
+    """{"applicable", "total", "killed", "survived": [change, ...]} for the planted bugs in spec["mutants"].
+
+    Only inputs whose real outcome compares (a return or a raise) are used. A mutant is caught as soon as one input
+    gives a different outcome, or the mutant runs out of time."""
+    plan = spec["mutants"]
+    usable = [(i, item, r) for i, (item, r) in enumerate(zip(spec["inputs"], results)) if r.get("outcome") in ("return", "raise")]
+    if not usable:
+        return {"applicable": False, "reason": "no input ran to completion"}
+    if owner is not None and make_self is None:
+        return {"applicable": False, "reason": "no instance"}
+    try:
+        identity = _compile_variant(fn, plan["identity"], plan["name"])
+    except BaseException as exc:  # noqa: BLE001
+        return {"applicable": False, "reason": f"the function cannot be recompiled on its own ({type(exc).__name__})"}
+    for i, item, real in usable:
+        if not _same(_call_once(identity, item, make_self, i), real):
+            return {"applicable": False, "reason": "the function behaves differently when recompiled on its own"}
+    deadline = time.monotonic() + MUTANT_BUDGET_S
+    killed, survived, total = 0, [], 0
+    for m in plan["mutants"]:
+        if time.monotonic() > deadline:
+            break
+        total += 1
+        try:
+            mutant = _compile_variant(fn, m["source"], plan["name"])
+        except BaseException:  # noqa: BLE001 - a mutant that does not compile is not a bug the inputs had to catch
+            total -= 1
+            continue
+        caught = False
+        for i, item, real in usable:
+            got = _call_once(mutant, item, make_self, i, None, MUTANT_CALL_S)
+            if got["outcome"] == "timeout" or not _same(got, real):
+                caught = True
+                break
+            if time.monotonic() > deadline:
+                break
+        if caught:
+            killed += 1
+        else:
+            survived.append(m["change"])
+    return {"applicable": total > 0, "total": total, "killed": killed, "survived": survived[:5]}
 
 
 def setup_django(request) -> str | None:
