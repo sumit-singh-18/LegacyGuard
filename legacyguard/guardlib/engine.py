@@ -163,3 +163,46 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             if not new:
                 f["state"] = "recorded"
     return wake
+
+
+def affected_tests(cfg, rel: str, targets: list[differ.Target], code_hash: str | None) -> list[str]:
+    """Run the project's tests that reach the changed functions on the baseline and on the edited code, record
+    regressions, and return the wake texts for new ones (roadmap C4). Returns [] when there is no coverage map."""
+    from indexer import db
+    from runner import affected_tests as at
+    s = at.settings(cfg)
+    if not s["enabled"] or not targets or not db.exists(cfg.root):
+        return []
+    conn = db.connect(cfg.root)
+    try:
+        nodeids = at.select(conn, cfg.root, [(t.file, t.qualname) for t in targets], int(s["max_tests"]))
+    finally:
+        conn.close()
+    if not nodeids:
+        return []
+    with ledger.locked(cfg.state_dir) as data:
+        cache = dict(data.get("old_test_results") or {})
+    regressions, cache, new = at.compare(cfg, str(baseline.baseline_dir(cfg)), cfg.root, nodeids, cache)
+    reaches = sorted({t.qualname for t in targets})
+    wakes: list[str] = []
+    with ledger.locked(cfg.state_dir) as data:
+        data["old_test_results"] = cache
+        failing = {r["nodeid"] for r in regressions}
+        for f in data["findings"]:
+            if f["kind"] == "test_regression" and f["state"] == "open" and f["item"] in nodeids and f["item"] not in failing \
+                    and (new.get(f["item"]) or {}).get("outcome") == "passed":
+                f["state"] = "resolved"
+        for r in regressions:
+            test_file = r["nodeid"].split("::", 1)[0]
+            waived = waivers.is_waived(cfg, "test_regression", test_file, r["nodeid"], code_hash)
+            f, is_new = ledger.add_finding(data, kind="test_regression", status=ledger.FAILURE, source="tests", subject=r["nodeid"], file=test_file,
+                                           item=r["nodeid"], evidence=(r["message"].splitlines() or ["the test fails"])[0][:300], code_hash=code_hash,
+                                           state="waived" if waived else "open", extra={"reaches": reaches, "edited_file": rel})
+            for old in data["findings"]:
+                if old is not f and old["kind"] == "test_regression" and old["item"] == r["nodeid"] and old["state"] == "open":
+                    old["state"] = "superseded"
+            if is_new and not waived:
+                wakes.append(at.format_wake(r, f["id"], reaches))
+        if wakes:
+            data["wakeups"] += 1
+    return wakes

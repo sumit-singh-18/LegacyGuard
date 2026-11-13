@@ -97,6 +97,12 @@ def story(data: dict) -> list[dict]:
                 how = "You were not asked, because this session's prompt budget was used up."
             steps.append({"kind": "asked_you" if f["state"] in ("not_applied", "applied") else "open" if f["state"] == "open" else "accepted", "id": f["id"],
                           "text": f"An edit to {f['file']} would break something others rely on: {_clean(f['subject'])}. {how}".strip()})
+        elif f["kind"] == "test_regression" and f["state"] != "superseded":
+            label = {"open": "open", "resolved": "fixed", "waived": "accepted"}.get(f["state"], "broke")
+            text = {"open": f"The project's test {f['subject']} passed before this session and fails now: {_clean(f['evidence'])[:200]}.",
+                    "resolved": f"The project's test {f['subject']} failed after an edit; Claude revised the code and it passes again.",
+                    "waived": f"You accepted that {f['subject']} now fails, with /legacyguard:waive."}.get(f["state"], f"{f['subject']} failed.")
+            steps.append({"kind": label, "id": f["id"], "text": text})
         elif f["kind"] == "frozen":
             steps.append({"kind": "blocked" if f["state"] == "blocked" else "open" if f["state"] == "open" else "fixed", "id": f["id"],
                           "text": f"{_clean(f['subject'])}. {outcome(f).capitalize()}."})

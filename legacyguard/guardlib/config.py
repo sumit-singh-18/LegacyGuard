@@ -15,6 +15,7 @@ DEFAULTS = {
     "source_roots": [], "contracts": {}, "frozen": [],
     "behavioral_diff": {"network": "blocked", "max_inputs": 500, "timeout_s": 60, "self_diff": True, "env": {},
                         "deterministic": True, "os_sandbox": "auto"},
+    "affected_tests": {"enabled": True, "max_tests": 25, "timeout_s": 60},
     "alarm_budget": {"max_prompts_per_session": 3, "may_interrupt": ["frozen", "contract_break", "behavior_difference"],
                      "context_only": ["many_callers", "history_coupling", "untested"]},
 }
