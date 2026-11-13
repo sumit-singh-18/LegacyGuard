@@ -29,18 +29,23 @@ def _sb_quote(path: str) -> str:
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _macos(cmd: list[str], writable: list[str], readonly: list[str]) -> list[str]:
+def _macos(cmd: list[str], writable: list[str], readonly: list[str], long_lived: bool = False) -> list[str]:
     allow = " ".join(f"(subpath {_sb_quote(_real(p))})" for p in writable)
     deny = " ".join(f"(subpath {_sb_quote(_real(p))})" for p in readonly)
     profile = ["(version 1)", "(allow default)", '(deny network-outbound (remote ip "*:*"))', "(deny network-inbound)",
                "(deny file-write*)", f'(allow file-write* (literal "/dev/null") (subpath "/dev/fd") {allow})']
+    unix = " ".join(f"(local unix-socket (subpath {_sb_quote(_real(p))}))" for p in writable)
+    if unix:
+        # Unix sockets in the temp folder only: the warm worker listens on one. Not the network.
+        profile.append(f"(allow network-bind network-inbound {unix})")
     if deny:
         profile.append(f"(deny file-write* {deny})")  # later rules win: the project stays read-only inside the temp folder
     return ["sandbox-exec", "-p", "\n".join(profile), *cmd]
 
 
-def _linux(cmd: list[str], writable: list[str], readonly: list[str]) -> list[str]:
-    out = ["bwrap", "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+def _linux(cmd: list[str], writable: list[str], readonly: list[str], long_lived: bool = False) -> list[str]:
+    # A long-lived warm server must outlive the hook process that started it.
+    out = ["bwrap", *([] if long_lived else ["--die-with-parent"]), "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
     for p in writable:
         out += ["--bind", _real(p), _real(p)]
     for p in readonly:
@@ -71,7 +76,7 @@ def available(python: str) -> bool:
     return _PROBED[python]
 
 
-def wrap(cmd: list[str], python: str, writable: list[str], readonly: list[str], mode: str = "auto") -> list[str]:
+def wrap(cmd: list[str], python: str, writable: list[str], readonly: list[str], mode: str = "auto", long_lived: bool = False) -> list[str]:
     """cmd inside the OS sandbox when one is available and mode is not "off"; otherwise cmd unchanged."""
     name, build = _builder()
     if mode == "off":
@@ -83,7 +88,7 @@ def wrap(cmd: list[str], python: str, writable: list[str], readonly: list[str], 
     _LAST["label"] = name
     writable = [p for p in dict.fromkeys(writable) if p and os.path.exists(p)]
     readonly = [p for p in dict.fromkeys(readonly) if p and os.path.exists(p)]
-    return build(cmd, writable, readonly)
+    return build(cmd, writable, readonly, long_lived)
 
 
 def describe() -> str:

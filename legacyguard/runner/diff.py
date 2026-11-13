@@ -18,6 +18,7 @@ from runner import examples
 from runner import inputs as input_lib
 from runner import lg_codec
 from runner import os_sandbox
+from runner import warm
 
 WORKER = Path(__file__).resolve().parent / "lg_worker.py"
 MAX_FUNCTIONS = 12
@@ -162,14 +163,20 @@ def _reads_any(source: str, names: set[str]) -> bool:
 FAILED = "__failed__"
 
 
-def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[dict], timeout: float) -> dict:
+def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[dict], timeout: float, warm_names: list[str] | None = None) -> dict:
     bd = cfg.behavioral_diff
     with tempfile.TemporaryDirectory(prefix="lgrun") as tmp:
         req, res = Path(tmp) / "req.json", Path(tmp) / "res.json"
-        req.write_text(json.dumps({"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
-                                   "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True))}))
+        request = {"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
+                   "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True)),
+                   "warm": warm_names or []}
+        req.write_text(json.dumps(request))
         env = clean_env(cfg)
         env.pop("PYTHONPATH", None)
+        mode = "baseline" if os.path.realpath(root) == os.path.realpath(str(Path(cfg.state_dir) / "baseline")) else "work"
+        fast = warm.run(cfg, py, root, mode, request, str(res), timeout, env)
+        if fast is not None:
+            return fast
         cmd = os_sandbox.wrap([py, "-B", str(WORKER), str(req), str(res)], py, writable=[tempfile.gettempdir(), tmp],
                               readonly=[str(cfg.root), root], mode=str(bd.get("os_sandbox", "auto")))
         try:
@@ -469,10 +476,11 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             return [str(Path(base) / p) if p else base for p in ordered]
         deadline = float(bd["timeout_s"])
         use_self = bool(bd.get("self_diff", True))
+        warm_names = warm.third_party_imports(work_root, sorted({t.file for t, _ in runnable.values()}), extra)
         with cf.ThreadPoolExecutor(3) as pool:
-            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline)
-            fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs, deadline)
-            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline) if use_self else None
+            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names)
+            fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs, deadline, warm_names)
+            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names) if use_self else None
             a, n = fa.result(), fn.result()
             b = fb.result() if fb else None
         failed = next((x[FAILED] for x in (a, n, b) if x and FAILED in x), None)

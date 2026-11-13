@@ -635,10 +635,22 @@ def run_function(spec, root_real):
     return out
 
 
-def main(request_path, result_path):
+def setup_django(request) -> str | None:
+    django_settings = request.get("django_settings")
+    if not django_settings:
+        return None
+    try:
+        os.environ["DJANGO_SETTINGS_MODULE"] = django_settings
+        import django
+        django.setup()
+        return None
+    except BaseException as exc:  # noqa: BLE001
+        return f"{django_settings}: {type(exc).__name__}: {exc}"[:400]
+
+
+def prepare(request, with_django: bool = True) -> tuple[str, str | None]:
+    """Blocks, determinism, import path and working folder for one tree. Returns (root_real, Django setup error)."""
     GUARD_WRITES["allowed"] = True
-    with open(request_path) as fh:
-        request = json.load(fh)
     # Before the blocks go in: on Python 3.9 finding the temp folder writes a probe file through open().
     SCRATCH["temp"] = os.path.realpath(tempfile.gettempdir()) + os.sep
     GUARD_WRITES["allowed"] = False
@@ -651,35 +663,46 @@ def main(request_path, result_path):
         sys.path.pop(0)
     root = request["root"]
     os.chdir(root)
-    for extra in reversed(request.get("sys_path") or []):
-        sys.path.insert(0, extra)
+    add_paths(request)
     root_real = os.path.realpath(root) + os.sep
     SCRATCH["protect"] = [root_real] + [os.path.realpath(p) + os.sep for p in request.get("protect") or []]
-    setup_error = None
-    django_settings = request.get("django_settings")
-    if django_settings:
-        try:
-            os.environ["DJANGO_SETTINGS_MODULE"] = django_settings
-            import django
-            django.setup()
-        except BaseException as exc:  # noqa: BLE001
-            setup_error = f"{type(exc).__name__}: {exc}"
+    return root_real, (setup_django(request) if with_django else None)
+
+
+def add_paths(request) -> None:
+    for extra in reversed(request.get("sys_path") or []):
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+
+
+def execute(request, root_real: str, setup_error: str | None) -> dict:
+    """Run every requested function. Output of the target code goes nowhere."""
     out = {}
-    real_stdout = sys.stdout
     sys.stdout = open(os.devnull, "w")  # noqa: SIM115 - devnull is allowed by the guard
     if setup_error:
         # Code that does not need the framework can still be run. Code that does will fail to import below,
         # and the runner adds this as the cause.
-        out["__setup_error__"] = f"{django_settings}: {setup_error}"[:400]
+        out["__setup_error__"] = setup_error
     for spec in request["functions"]:
         key = f"{spec['module']}:{spec['qualname']}"
         try:
             out[key] = run_function(spec, root_real)
         except BaseException as exc:  # noqa: BLE001
             out[key] = {"status": "worker_error", "reason": "".join(traceback.format_exception_only(type(exc), exc)).strip()}
+    return out
+
+
+def write_result(out: dict, result_path: str) -> None:
     GUARD_WRITES["allowed"] = True
     with open(result_path, "w") as fh:
         json.dump(out, fh, sort_keys=True)
+
+
+def main(request_path, result_path):
+    with open(request_path) as fh:
+        request = json.load(fh)
+    root_real, setup_error = prepare(request)
+    write_result(execute(request, root_real, setup_error), result_path)
 
 
 if __name__ == "__main__":

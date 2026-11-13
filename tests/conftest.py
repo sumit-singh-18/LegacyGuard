@@ -38,6 +38,7 @@ def make_cfg(tmp_path):
     def make(root: Path, **overrides) -> cfgmod.Config:
         raw = copy.deepcopy(cfgmod.DEFAULTS)
         raw["python"] = TARGET_PY
+        raw["behavioral_diff"]["warm"] = False  # tests use the cold worker unless they opt in (tests/test_warm.py)
         for key, value in overrides.items():
             if isinstance(raw.get(key), dict) and isinstance(value, dict):
                 raw[key].update(value)
