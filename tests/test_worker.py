@@ -217,3 +217,11 @@ def test_pathlib_read_after_blocks(tmp_path, run_worker):
     root = write_tree(tmp_path / "pl", {"pl.py": src, "data.txt": "hello"})
     out = run_worker(root, [{"module": "pl", "qualname": "read", "inputs": [call(str(root / "data.txt"))]}])["pl:read"]
     assert out["results"][0] == {"outcome": "return", "value": {"t": "v", "v": "hello"}}
+
+
+def test_bind_only_on_loopback(tmp_path, run_worker):
+    src = ("import socket\n\ndef serve(host):\n    s = socket.socket()\n    s.bind((host, 0))\n    s.close()\n    return 'bound'\n")
+    root = write_tree(tmp_path / "b", {"b.py": src})
+    out = run_worker(root, [{"module": "b", "qualname": "serve", "inputs": [call("127.0.0.1"), call("0.0.0.0")]}])["b:serve"]
+    assert out["results"][0]["value"] == {"t": "v", "v": "bound"}
+    assert out["results"][1]["outcome"] == "blocked"

@@ -73,10 +73,26 @@ def _key(encoded) -> str:
     return json.dumps(encoded, sort_keys=True, ensure_ascii=False)
 
 
+# Stand-ins the worker builds when decoding {"t": "fake", "v": kind}: "db" a connection, "cursor" a cursor (lg_stubs).
+FAKES: dict = {}
+
+
+class FakeMarker:
+    """Placeholder in an input for a stand-in object the worker creates (a database connection or cursor)."""
+
+    def __init__(self, kind: str):
+        self.__lg_fake__ = kind
+
+    def __repr__(self):
+        return f"<fake {self.__lg_fake__}>"
+
+
 def encode_input(value, depth: int = 0):
     """Reversible encoding. Falls back to pickle for rich objects; raises Unencodable otherwise."""
     if depth > MAX_DEPTH:
         raise Unencodable("too deep")
+    if isinstance(value, FakeMarker):
+        return {"t": "fake", "v": value.__lg_fake__}
     simple = _simple(value)
     if simple is not None:
         return simple
@@ -135,6 +151,8 @@ def decode(enc):
         return {decode(k): decode(x) for k, x in v}
     if t == "enum":
         return _load_class(enc["cls"])[v]
+    if t == "fake":
+        return FAKES[v]()
     if t == "pickle":
         return pickle.loads(base64.b64decode(v))  # noqa: S301 - written by this guard during the developer's own test run
     raise ValueError(f"unknown tag {t}")
@@ -200,6 +218,8 @@ def display(enc, plain_decimal: bool = False) -> str:
         return f"{enc['cls'].split(':')[-1]}.{v}"
     if t == "pickle":
         return f"<{enc['cls'].split(':')[-1]} from a test>"
+    if t == "fake":
+        return f"<fake {v}>"
     if t == "obj":
         return f"<{enc['cls'].split(':')[-1]}>"
     if t == "repr":

@@ -34,7 +34,7 @@ def _lock(path: str) -> threading.Lock:
 
 def _code_version() -> str:
     h = hashlib.sha256()
-    for name in ("lg_server.py", "lg_worker.py", "lg_codec.py"):
+    for name in ("lg_server.py", "lg_worker.py", "lg_codec.py", "lg_stubs.py"):
         h.update((HERE / name).read_bytes())
     return h.hexdigest()[:12]
 

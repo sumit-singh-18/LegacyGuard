@@ -102,6 +102,8 @@ def _as_set(values: list):
 
 
 def _strategy_for(annotation: str | None, default: str | None, st, pool: list | None = None):
+    if _fake_kind(annotation):
+        return st.just(lg_codec.FakeMarker(_fake_kind(annotation)))
     pool = pool or []
     strs = [v for v in pool if isinstance(v, str)]
     ints = [v for v in pool if isinstance(v, int) and not isinstance(v, bool)]
@@ -193,8 +195,15 @@ def is_special(value) -> bool:
     return False
 
 
+def _fake_kind(annotation: str | None) -> str | None:
+    m = re.fullmatch(r"__fake_(\w+)__", annotation or "")
+    return m.group(1) if m else None
+
+
 def _grid_values(p: dict, pool: list) -> list | None:
     """A short list of likely values for one parameter, or None to leave it at its default."""
+    if _fake_kind(p.get("annotation")):
+        return [lg_codec.FakeMarker(_fake_kind(p["annotation"]))]
     ann = (p.get("annotation") or "").replace("typing.", "").replace("decimal.", "").replace(" ", "").strip("\"'")
     ann = re.sub(r"^Optional\[(.+)\]$", r"\1", ann).replace("|None", "").replace("None|", "")
     ann = ann or _type_from_default(p.get("default"))
@@ -421,12 +430,22 @@ def with_runtime_types(sym: dict, harvested: dict | None) -> dict:
     return {**sym, "params": params}
 
 
-def build(sym: dict, harvested: dict | None, max_inputs: int, state_dir: Path, examples: dict | None = None) -> tuple[list[dict], str | None]:
-    """(inputs, reason it cannot be run). sym: {qualname, kind, params}."""
+FAKE_PARAMS = {"conn": "db", "connection": "db", "db": "db", "cursor": "cursor", "cur": "cursor"}
+ORM_PARAMS = DB_PARAM_NAMES - set(FAKE_PARAMS)  # session, engine, transaction: an ORM a DB-API stand-in cannot imitate
+
+
+def build(sym: dict, harvested: dict | None, max_inputs: int, state_dir: Path, examples: dict | None = None,
+          stub_db: bool = False) -> tuple[list[dict], str | None]:
+    """(inputs, reason it cannot be run). sym: {qualname, kind, params}. With stub_db, a connection or cursor
+    parameter gets a stand-in that records the SQL it is sent (roadmap C1)."""
     sym = with_runtime_types(sym, harvested)
     names = [p["name"].lstrip("*") for p in sym["params"]]
     blocked = (harvested or {}).get("blocked", {})
     db_params = sorted(set(blocked) & DB_PARAM_NAMES) or sorted(set(names) & DB_PARAM_NAMES)
+    if db_params and stub_db and not set(db_params) & ORM_PARAMS:
+        sym = {**sym, "params": [{**p, "annotation": f"__fake_{FAKE_PARAMS[p['name']]}__"} if p["name"] in FAKE_PARAMS else p
+                                 for p in sym["params"]]}
+        db_params = []
     if db_params:
         return [], f"needs a database connection (parameter {db_params[0]})"
     items = []

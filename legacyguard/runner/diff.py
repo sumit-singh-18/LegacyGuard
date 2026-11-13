@@ -60,6 +60,7 @@ class Result:
     differences: list[dict] = field(default_factory=list)
     only_special: bool = False  # every differing input contains NaN or infinity; ordinary values agree
     only_float_noise: bool = False  # every difference is in the last digits of a float
+    inputs_with_io: int = 0         # inputs whose run made database or HTTP calls (answered by stand-ins, roadmap C1)
     mutants_total: int = 0          # planted bugs run after a pass (roadmap B6)
     mutants_killed: int = 0
     mutants_survived: list = field(default_factory=list)
@@ -175,6 +176,7 @@ def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[di
         req, res = Path(tmp) / "req.json", Path(tmp) / "res.json"
         request = {"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
                    "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True)),
+                   "io": str(bd.get("io", "stub")),
                    "warm": warm_names or []}
         req.write_text(json.dumps(request))
         env = clean_env(cfg)
@@ -214,7 +216,17 @@ def _comparable(o: dict) -> dict | None:
         return None
     if o.get("state"):
         out["s"] = o["state"]
+    if o.get("io"):
+        out["io"] = o["io"]
     return out
+
+
+def _show_io(event: dict) -> str:
+    if event.get("io") == "sql":
+        params = f" {json.dumps(event['params'], default=str)}" if event.get("params") not in (None, [], {}) else ""
+        return f"SQL {event['sql'][:160]}{params}"
+    extra = "".join(f" {k}={json.dumps(event[k], default=str)}" for k in ("params", "body") if event.get(k) not in (None, "", {}))
+    return f"HTTP {event.get('method')} {event.get('url')}{extra}"[:240]
 
 
 def _show_outcome(o: dict, other: dict | None = None) -> str:
@@ -225,6 +237,13 @@ def _show_outcome(o: dict, other: dict | None = None) -> str:
     if changed:
         parts = [f"{n}={lg_codec.display(mine[n], plain_decimal=True)}" if n in mine else f"{n} not readable" for n in changed]
         text += ", then " + ", ".join(parts)
+    mine_io, theirs_io = o.get("io") or [], (other or {}).get("io") or []
+    if _key({"x": mine_io}) != _key({"x": theirs_io}):
+        # The first call where the two versions part ways: that is the line a person needs to see.
+        i = next((i for i, (x, y) in enumerate(zip(mine_io, theirs_io)) if _key(x) != _key(y)), min(len(mine_io), len(theirs_io)))
+        text += f"; call {i + 1}: " + (_show_io(mine_io[i]) if i < len(mine_io) else "(none)")
+        if len(mine_io) != len(theirs_io):
+            text += f" ({len(mine_io)} calls in all)"
     return text
 
 
@@ -321,10 +340,12 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                 r.dropped_nondeterministic += 1
                 continue
         r.inputs_compared += 1
+        if ca.get("io"):
+            r.inputs_with_io += 1
         if ca["k"] == "return":
             r.inputs_completed += 1
         if _key(ca) != _key(cn):
-            same_state = _key(ca.get("s") or {}) == _key(cn.get("s") or {})
+            same_state = _key(ca.get("s") or {}) == _key(cn.get("s") or {}) and _key({"x": ca.get("io")}) == _key({"x": cn.get("io")})
             r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca, cn), "after": _show_outcome(cn, ca), "source": item["source"],
                                   "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
                                   "special": _has_special(item), "state": not same_state,
@@ -499,7 +520,7 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
                 alias_cache[t.file] = {}
         params = _resolve_aliases(t.params, alias_cache[t.file])
         items, reason = input_lib.build({"qualname": t.qualname, "kind": t.kind, "params": params}, harvest.get(f"{t.file}::{t.qualname}"), int(bd["max_inputs"]), cfg.state_dir,
-                                        examples=_examples(cfg, conn, t))
+                                        examples=_examples(cfg, conn, t), stub_db=str(bd.get("io", "stub")) == "stub")
         if reason:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason=reason)
             continue
@@ -555,8 +576,10 @@ def format_note(results: list[Result]) -> str:
     for r in own[:4]:
         if r.status == DONE:
             conf = confidence_text(r)
+            io = (f"Database and HTTP calls were answered by stand-ins (no rows, HTTP 200 with an empty body), so for "
+                  f"{r.inputs_with_io} inputs what agreed is the calls made, not their real results. ") if r.inputs_with_io else ""
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
-                         f"({r.inputs_completed} returned a value). " + (f"{conf}. " if conf else "") +
+                         f"({r.inputs_completed} returned a value). " + (f"{conf}. " if conf else "") + io +
                          "The inputs are the repo's own examples plus guesses, so this is not a proof; values it did not try can still differ.")
         elif r.status == UNTESTED:
             lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. Nothing is known about this edit from execution.")

@@ -33,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import lg_codec  # noqa: E402
+import lg_stubs  # noqa: E402
 
 BLOCKS: list[str] = []
 CALL_TIMEOUT_S = 5
@@ -144,11 +145,27 @@ def _audit(event, args):
             kind = None
         if kind == "network" and event == "socket.connect" and len(args) > 1 and _is_local_socket(args[1]):
             kind = None
+        if kind == "network" and event == "socket.bind" and len(args) > 1 and _is_loopback_bind(args[1]):
+            kind = None  # urllib3 probes IPv6 support at import by binding to ::1; nothing leaves the machine
     elif event == "socket.getaddrinfo" and args and not (args[0] is None or _is_ip_literal(args[0])):
         kind = "network"
     if kind:
         BLOCKS.append(kind)
         raise GuardBlocked(f"{kind} is blocked during the behavioral diff ({event})")
+
+
+def _is_loopback_bind(address) -> bool:
+    if isinstance(address, (str, bytes)):
+        return True  # a Unix socket path
+    host = address[0] if isinstance(address, tuple) and address else None
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    if host in ("localhost",):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except (ValueError, TypeError):
+        return False
 
 
 def _is_local_socket(address) -> bool:
@@ -157,6 +174,7 @@ def _is_local_socket(address) -> bool:
 
 
 GUARD_WRITES = {"allowed": False}
+STUBS = {"on": False}  # databases and HTTP clients answered by lg_stubs instead of blocked (roadmap C1)
 SCRATCH = {"temp": "", "protect": []}
 
 
@@ -433,7 +451,7 @@ def _state_after(watched) -> dict | None:
     given. Immutable values cannot change, so they are left out and the result stays small."""
     state = {}
     for name, value in watched:
-        if isinstance(value, _IMMUTABLE) or isinstance(value, enum.Enum):
+        if isinstance(value, _IMMUTABLE) or isinstance(value, enum.Enum) or isinstance(value, (lg_stubs.FakeConnection, lg_stubs.FakeCursor)):
             continue
         if not isinstance(value, (list, dict, set, bytearray)) and not isinstance(getattr(value, "__dict__", None), dict):
             continue
@@ -607,6 +625,8 @@ def run_route(spec) -> dict:
     """Requests to one route of the app, compared like a function's return values."""
     try:
         call = _http_caller(spec["app"])
+        if STUBS["on"]:
+            lg_stubs.patch_loaded()  # the handlers' own outgoing calls are stubbed; the test client stays in process
     except GuardBlocked as exc:
         return {"status": "import_blocked", "reason": str(exc)}
     except BaseException as exc:  # noqa: BLE001
@@ -644,6 +664,8 @@ def run_function(spec, root_real):
     hits: set = set()
     trace = _tracer(span, hits) if span else None
     freeze_references(root_real)
+    if STUBS["on"]:
+        lg_stubs.patch_loaded()
     make_self, recipe, no_self = None, "", ""
     if owner is not None and not all(i.get("has_self") for i in spec["inputs"]):
         try:
@@ -674,6 +696,7 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
     """One input through fn, with a fresh seed, clock and instance. The outcome as the comparison reads it."""
     start = len(BLOCKS)
     reset_determinism()
+    lg_stubs.reset()
     try:
         pos, kw, watched = _build_args(item, make_self, index)
     except BaseException as exc:  # noqa: BLE001
@@ -702,6 +725,8 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
         state = _state_after(watched)
         if state:
             outcome["state"] = state
+        if lg_stubs.EVENTS:
+            outcome["io"] = list(lg_stubs.EVENTS)
     if len(BLOCKS) > start:
         outcome["blocked_kinds"] = sorted(set(BLOCKS[start:]))
     return outcome
@@ -712,7 +737,7 @@ MUTANT_BUDGET_S = 10.0   # all mutants of one function together
 
 
 def _same(a: dict, b: dict) -> bool:
-    keys = ("outcome", "value", "type", "message", "state")
+    keys = ("outcome", "value", "type", "message", "state", "io")
     return all(a.get(k) == b.get(k) for k in keys)
 
 
@@ -788,6 +813,10 @@ def prepare(request, with_django: bool = True) -> tuple[str, str | None]:
     SCRATCH["temp"] = os.path.realpath(tempfile.gettempdir()) + os.sep
     GUARD_WRITES["allowed"] = False
     install_blocks()
+    if request.get("io", "stub") == "stub":
+        STUBS["on"] = True
+        lg_stubs.install()
+        lg_codec.FAKES.update({"db": lg_stubs.FakeConnection, "cursor": lg_stubs.FakeCursor})
     if request.get("deterministic", True):
         install_determinism()
     if HERE in sys.path:
