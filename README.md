@@ -142,7 +142,7 @@ claude plugin marketplace remove turnback-lab
 - **Python only.** It cannot check front-end or other languages.
 - **"Checked" is not a proof.** It means old and new code gave the same results on the inputs tried, and at least one input ran the changed lines.
 - **Some code cannot be run.** Functions that need a database, the network or a logged-in user are reported as "not checked", with the reason.
-- **It compares results, not side effects.** Writes to a database or a file are not compared.
+- **It compares results and in-memory changes, not outside effects.** A change to a list or object the function was given is compared. Writes to a database or a file are blocked and not compared.
 - **Claude can out-test it on small functions.** In a session where Claude is allowed to run code, Claude's own comparison can cover more cases. The guard's value is that it always runs, does not depend on Claude deciding to check, and works where Claude cannot run code.
 
 ## If something goes wrong

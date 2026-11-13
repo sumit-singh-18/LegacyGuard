@@ -1,0 +1,2 @@
+-r legacyguard/requirements.txt
+pytest>=8

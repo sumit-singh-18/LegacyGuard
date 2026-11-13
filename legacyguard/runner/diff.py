@@ -17,6 +17,7 @@ from indexer.coverage_map import clean_env, load_harvest
 from runner import examples
 from runner import inputs as input_lib
 from runner import lg_codec
+from runner import os_sandbox
 
 WORKER = Path(__file__).resolve().parent / "lg_worker.py"
 MAX_FUNCTIONS = 12
@@ -161,13 +162,17 @@ FAILED = "__failed__"
 
 
 def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[dict], timeout: float) -> dict:
+    bd = cfg.behavioral_diff
     with tempfile.TemporaryDirectory(prefix="lgrun") as tmp:
         req, res = Path(tmp) / "req.json", Path(tmp) / "res.json"
-        req.write_text(json.dumps({"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions, "django_settings": cfg.raw.get("django_settings")}))
+        req.write_text(json.dumps({"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
+                                   "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True))}))
         env = clean_env(cfg)
         env.pop("PYTHONPATH", None)
+        cmd = os_sandbox.wrap([py, "-B", str(WORKER), str(req), str(res)], py, writable=[tempfile.gettempdir(), tmp],
+                              readonly=[str(cfg.root), root], mode=str(bd.get("os_sandbox", "auto")))
         try:
-            done = subprocess.run([py, "-B", str(WORKER), str(req), str(res)], cwd=root, env=env, capture_output=True, text=True, timeout=timeout)
+            done = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return {FAILED: "timed out"}
         except OSError as exc:
@@ -185,16 +190,28 @@ def _key(o: dict) -> str:
 
 
 def _comparable(o: dict) -> dict | None:
-    """What gets compared for one input: return value, or exception type and message. None if not comparable."""
+    """What gets compared for one input: return value or exception type and message, and what the call left in its
+    mutable arguments and in self. None if not comparable."""
     if o["outcome"] == "return":
-        return {"k": "return", "v": o["value"]}
-    if o["outcome"] == "raise":
-        return {"k": "raise", "type": o["type"], "message": o["message"]}
-    return None
+        out = {"k": "return", "v": o["value"]}
+    elif o["outcome"] == "raise":
+        out = {"k": "raise", "type": o["type"], "message": o["message"]}
+    else:
+        return None
+    if o.get("state"):
+        out["s"] = o["state"]
+    return out
 
 
-def _show_outcome(o: dict) -> str:
-    return lg_codec.display(o["v"], plain_decimal=True) if o["k"] == "return" else f"raises {o['type']}: {o['message']}"
+def _show_outcome(o: dict, other: dict | None = None) -> str:
+    """The outcome as people read it. State is shown only for names whose state differs from the other version."""
+    text = lg_codec.display(o["v"], plain_decimal=True) if o["k"] == "return" else f"raises {o['type']}: {o['message']}"
+    mine, theirs = o.get("s") or {}, (other or {}).get("s") or {}
+    changed = [n for n in sorted(set(mine) | set(theirs)) if _key(mine.get(n) or {}) != _key(theirs.get(n) or {})]
+    if changed:
+        parts = [f"{n}={lg_codec.display(mine[n], plain_decimal=True)}" if n in mine else f"{n} not readable" for n in changed]
+        text += ", then " + ", ".join(parts)
+    return text
 
 
 def show_call(target: Target, item: dict) -> str:
@@ -289,10 +306,11 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         if ca["k"] == "return":
             r.inputs_completed += 1
         if _key(ca) != _key(cn):
-            r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca), "after": _show_outcome(cn), "source": item["source"],
+            same_state = _key(ca.get("s") or {}) == _key(cn.get("s") or {})
+            r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca, cn), "after": _show_outcome(cn, ca), "source": item["source"],
                                   "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
-                                  "special": _has_special(item),
-                                  "noise": ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
+                                  "special": _has_special(item), "state": not same_state,
+                                  "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
     if r.differences:
         r.status = DIFFERENT
         # The example a person reads first: from real tests, then the repo's own examples, ordinary values before

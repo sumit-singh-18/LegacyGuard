@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import datetime as _dt
 import dis
+import enum
 import importlib
 import inspect
 import io
@@ -15,14 +17,17 @@ import ipaddress
 import itertools
 import json
 import os
+import random
 import signal
 import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import types
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -90,6 +95,56 @@ def install_blocks() -> None:
     subprocess.Popen.__init__ = proc  # patch the method: libraries subclass Popen at import time
     subprocess.run = proc
     os.system = proc
+    if hasattr(sys, "addaudithook"):  # Python 3.8+; older interpreters keep the patches above only
+        sys.addaudithook(_audit)
+
+
+# Second layer (PEP 578). The patches above give clear reasons for the common calls; the audit hook sees the same
+# operations however they are reached (os.open, os.remove, shutil.rmtree, _socket, posix_spawn, ...). It is a
+# deny-list inside the same process, so it is not a security boundary by itself: the runner adds an OS sandbox
+# where one is available.
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+_PATH_EVENTS = {"os.remove": 0, "os.rmdir": 0, "os.rename": 0, "os.truncate": 0, "os.chmod": 0, "os.chown": 0,
+                "os.link": 1, "os.symlink": 1, "os.mkdir": 0, "os.utime": 0, "shutil.rmtree": 0, "shutil.move": 0,
+                "shutil.copyfile": 1, "shutil.copytree": 1, "os.removexattr": 0, "os.setxattr": 0}
+_ALWAYS = {"subprocess.Popen": "subprocess", "os.system": "subprocess", "os.posix_spawn": "subprocess",
+           "os.spawn": "subprocess", "os.exec": "subprocess", "os.fork": "subprocess", "os.forkpty": "subprocess",
+           "os.kill": "subprocess", "os.killpg": "subprocess", "pty.spawn": "subprocess",
+           "socket.connect": "network", "socket.sendto": "network", "socket.sendmsg": "network", "socket.bind": "network",
+           "sqlite3.connect": "database", "ctypes.dlopen": "native code"}
+_IN_CALL = {"active": False}  # ctypes is refused only while target code runs: some libraries load it at import
+
+
+def _audit(event, args):
+    if GUARD_WRITES["allowed"] or event[0] not in "ospc":  # cheap exit for the many events we never block
+        return
+    kind = None
+    if event == "open":
+        path, mode, flags = (list(args) + [None, None, None])[:3]
+        writing = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (isinstance(flags, int) and flags & _WRITE_FLAGS)
+        if writing and path not in (os.devnull, None) and not isinstance(path, int) and not _is_scratch(path):
+            kind = "file write"
+    elif event in _PATH_EVENTS:
+        # Every path the operation touches must be scratch: renaming a temp file over a repo file is a repo write.
+        paths = [a for a in args[:2] if isinstance(a, (str, bytes, int, os.PathLike))]
+        if not paths or any(isinstance(p, int) or not _is_scratch(p) for p in paths):
+            kind = "file write"
+    elif event in _ALWAYS:
+        kind = _ALWAYS[event]
+        if kind == "native code" and not _IN_CALL["active"]:
+            kind = None
+        if kind == "network" and event == "socket.connect" and len(args) > 1 and _is_local_socket(args[1]):
+            kind = None
+    elif event == "socket.getaddrinfo" and args and not (args[0] is None or _is_ip_literal(args[0])):
+        kind = "network"
+    if kind:
+        BLOCKS.append(kind)
+        raise GuardBlocked(f"{kind} is blocked during the behavioral diff ({event})")
+
+
+def _is_local_socket(address) -> bool:
+    """A Unix socket path inside the temp folder (multiprocessing helpers, test servers) is not the network."""
+    return isinstance(address, (str, bytes)) and _is_scratch(address)
 
 
 GUARD_WRITES = {"allowed": False}
@@ -211,7 +266,8 @@ def _finish(value):
 
 
 def _build_args(item, owner):
-    pos, kw = [], {}
+    """(positional, keyword, watched): watched pairs each argument's name with the object passed, for state after the call."""
+    pos, kw, watched = [], {}, []
     for arg in item["args"]:
         value = lg_codec.decode(arg["value"])
         kind = arg.get("kind", "pos")
@@ -223,9 +279,159 @@ def _build_args(item, owner):
             kw.update(value)
         else:
             kw[arg["name"]] = value
+        watched.append((arg.get("name") or "?", value))
     if owner is not None and not item.get("has_self"):
-        pos.insert(0, owner())
-    return pos, kw
+        instance = owner()
+        pos.insert(0, instance)
+        watched.insert(0, ("self", instance))
+    return pos, kw, watched
+
+
+_IMMUTABLE = (str, bytes, int, float, complex, bool, type(None), tuple, frozenset, range, type, types.ModuleType,
+              types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+
+
+def _state_after(watched) -> dict | None:
+    """What the call left behind in its mutable arguments and in self (FR-14, roadmap B1).
+
+    Old and new code that return the same value can still differ in what they do to a list or an object they were
+    given. Immutable values cannot change, so they are left out and the result stays small."""
+    state = {}
+    for name, value in watched:
+        if isinstance(value, _IMMUTABLE) or isinstance(value, enum.Enum):
+            continue
+        if not isinstance(value, (list, dict, set, bytearray)) and not isinstance(getattr(value, "__dict__", None), dict):
+            continue
+        try:
+            state[name] = lg_codec.canon(value)
+        except Exception:  # noqa: BLE001 - an object we cannot read is simply not compared
+            continue
+    return state or None
+
+
+# ---- determinism (roadmap B2) ----
+# Old and new code are run with the same random seed, the same clock and the same uuid sequence, reset before every
+# input. Values that came from randomness or the time then agree whenever the code agrees, so such functions can be
+# checked instead of being dropped as non-deterministic. The clock moves forward 1 ms per reading, so code that waits
+# for time to pass still finishes.
+FROZEN_START = 1705320000.0  # 2024-01-15 12:00:00 UTC
+_CLOCK = {"t": FROZEN_START}
+_IDS = random.Random(0)
+DET = {"on": False}
+_REAL = {"dt": _dt.datetime, "date": _dt.date, "time": time.time, "time_ns": time.time_ns,
+         "uuid1": uuid.uuid1, "uuid4": uuid.uuid4}
+
+
+def _tick() -> float:
+    _CLOCK["t"] += 0.001
+    return _CLOCK["t"]
+
+
+def _fake_time():
+    return _tick()
+
+
+def _fake_time_ns():
+    return int(_tick() * 1_000_000_000)
+
+
+def _fake_uuid4():
+    return uuid.UUID(int=_IDS.getrandbits(128), version=4)
+
+
+def _fake_uuid1(node=None, clock_seq=None):
+    return uuid.UUID(int=_IDS.getrandbits(128), version=1)
+
+
+class _SameAsReal(type):
+    """isinstance(real_datetime, FrozenDatetime) stays True, so code that checks types behaves as before."""
+    def __instancecheck__(cls, obj):
+        return isinstance(obj, cls._real)
+
+    def __subclasscheck__(cls, sub):
+        return issubclass(sub, cls._real)
+
+
+class FrozenDatetime(_dt.datetime, metaclass=_SameAsReal):
+    _real = _dt.datetime
+
+    @classmethod
+    def now(cls, tz=None):
+        return _REAL["dt"].fromtimestamp(_tick(), tz)
+
+    @classmethod
+    def utcnow(cls):
+        return _REAL["dt"].fromtimestamp(_tick(), _dt.timezone.utc).replace(tzinfo=None)
+
+    @classmethod
+    def today(cls):
+        return cls.now()
+
+
+class FrozenDate(_dt.date, metaclass=_SameAsReal):
+    _real = _dt.date
+
+    @classmethod
+    def today(cls):
+        return _REAL["date"].fromtimestamp(_tick())
+
+
+_SWAPS = {id(_REAL["dt"]): FrozenDatetime, id(_REAL["date"]): FrozenDate, id(_REAL["time"]): _fake_time,
+          id(_REAL["time_ns"]): _fake_time_ns, id(_REAL["uuid4"]): _fake_uuid4, id(_REAL["uuid1"]): _fake_uuid1}
+_SCANNED: set = set()
+
+
+def install_determinism() -> None:
+    DET["on"] = True
+    _dt.datetime, _dt.date = FrozenDatetime, FrozenDate
+    time.time, time.time_ns = _fake_time, _fake_time_ns
+    uuid.uuid4, uuid.uuid1 = _fake_uuid4, _fake_uuid1
+
+
+# Library modules whose own "now" should follow the frozen clock. Other libraries keep their references: swapping a
+# class some library compares by identity (pydantic, ORMs) could change its behavior instead of fixing the clock.
+TIME_HELPERS = {"django.utils.timezone"}
+
+
+def freeze_references(root_real: str) -> None:
+    """Replace names bound at import time (`from datetime import datetime`, `from uuid import uuid4`) in the
+    project's own modules and in a few framework time helpers."""
+    if not DET["on"]:
+        return
+    for name, mod in list(sys.modules.items()):
+        if name in _SCANNED or mod is None or name in ("lg_codec", "__main__"):
+            continue
+        path = getattr(mod, "__file__", None)
+        if not path:
+            continue
+        if name not in TIME_HELPERS and not os.path.realpath(path).startswith(root_real):
+            continue
+        _SCANNED.add(name)
+        try:
+            items = list(vars(mod).items())
+        except TypeError:
+            continue
+        for attr, value in items:
+            swap = _SWAPS.get(id(value))
+            if swap is not None:
+                try:
+                    setattr(mod, attr, swap)
+                except (AttributeError, TypeError):
+                    pass
+
+
+def reset_determinism() -> None:
+    if not DET["on"]:
+        return
+    _CLOCK["t"] = FROZEN_START
+    _IDS.seed(0)
+    random.seed(0)
+    np = sys.modules.get("numpy")
+    if np is not None:
+        try:
+            np.random.seed(0)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def run_function(spec, root_real):
@@ -254,18 +460,22 @@ def run_function(spec, root_real):
     span = _span(fn)
     hits: set = set()
     trace = _tracer(span, hits) if span else None
+    freeze_references(root_real)
     for item in spec["inputs"]:
         start = len(BLOCKS)
+        reset_determinism()
         try:
-            pos, kw = _build_args(item, owner)
+            pos, kw, watched = _build_args(item, owner)
         except BaseException as exc:  # noqa: BLE001
             results.append({"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"})
             continue
         try:
             sys.settrace(trace)
+            _IN_CALL["active"] = True
             try:
                 value = _with_timeout(lambda: _finish(fn(*pos, **kw)))  # noqa: B023
             finally:
+                _IN_CALL["active"] = False
                 sys.settrace(None)
             outcome = {"outcome": "return", "value": lg_codec.canon(value)}
         except GuardBlocked as exc:
@@ -277,6 +487,10 @@ def run_function(spec, root_real):
                 outcome = {"outcome": "exit", "detail": type(exc).__name__}
             else:
                 outcome = {"outcome": "raise", "type": type(exc).__name__, "message": lg_codec._scrub(str(exc))[:500]}
+        if outcome["outcome"] in ("return", "raise"):
+            state = _state_after(watched)
+            if state:
+                outcome["state"] = state
         if len(BLOCKS) > start:
             outcome["blocked_kinds"] = sorted(set(BLOCKS[start:]))
         results.append(outcome)
@@ -291,6 +505,8 @@ def main(request_path, result_path):
     SCRATCH["temp"] = os.path.realpath(tempfile.gettempdir()) + os.sep
     GUARD_WRITES["allowed"] = False
     install_blocks()
+    if request.get("deterministic", True):
+        install_determinism()
     if HERE in sys.path:
         sys.path.remove(HERE)
     if sys.path and sys.path[0] in ("", HERE):

@@ -13,7 +13,8 @@ MODES = ("advisory", "guarded", "strict")
 DEFAULTS = {
     "enabled": True, "scope": ".", "language": "python", "mode": "guarded", "python": None, "app": None, "django_settings": None,
     "source_roots": [], "contracts": {}, "frozen": [],
-    "behavioral_diff": {"network": "blocked", "max_inputs": 500, "timeout_s": 60, "self_diff": True, "env": {}},
+    "behavioral_diff": {"network": "blocked", "max_inputs": 500, "timeout_s": 60, "self_diff": True, "env": {},
+                        "deterministic": True, "os_sandbox": "auto"},
     "alarm_budget": {"max_prompts_per_session": 3, "may_interrupt": ["frozen", "contract_break", "behavior_difference"],
                      "context_only": ["many_callers", "history_coupling", "untested"]},
 }

@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LegacyGuard Architecture Map</title>
+<style>
+:root{
+  --bg:#f7f6f2; --panel:#ffffff; --ink:#1d1f24; --muted:#5d6370; --line:#d9d6cc; --soft:#eeebe3;
+  --old:#b45309; --old-bg:#fdf1e2; --new:#1d5fbf; --new-bg:#e6effc; --both:#6d3fc0; --both-bg:#efe8fb;
+  --none:#6b7280; --none-bg:#eef0f3; --bad:#b42318; --bad-bg:#fdeceb; --good:#16794a; --good-bg:#e5f5ec;
+  --accent:#1d1f24; --focus:#1d5fbf;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15161a; --panel:#1d1f25; --ink:#e9e7e1; --muted:#a3a7b1; --line:#34363f; --soft:#25272e;
+    --old:#f0a54a; --old-bg:#3a2a14; --new:#7fb0ff; --new-bg:#172a47; --both:#b79cff; --both-bg:#2b2142;
+    --none:#9aa1ad; --none-bg:#262930; --bad:#ff8a7f; --bad-bg:#3d1c1a; --good:#5fd39a; --good-bg:#16352a;
+    --accent:#e9e7e1; --focus:#7fb0ff;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15161a; --panel:#1d1f25; --ink:#e9e7e1; --muted:#a3a7b1; --line:#34363f; --soft:#25272e;
+  --old:#f0a54a; --old-bg:#3a2a14; --new:#7fb0ff; --new-bg:#172a47; --both:#b79cff; --both-bg:#2b2142;
+  --none:#9aa1ad; --none-bg:#262930; --bad:#ff8a7f; --bad-bg:#3d1c1a; --good:#5fd39a; --good-bg:#16352a;
+  --accent:#e9e7e1; --focus:#7fb0ff;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:28px 16px 64px}
+h1{font-size:28px;line-height:1.2;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:20px;margin:44px 0 6px}
+h3{font-size:15px;margin:0 0 6px}
+p{margin:0 0 10px}
+.sub{color:var(--muted);max-width:760px}
+code{font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--soft);padding:1px 5px;border-radius:4px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{border:0;background:transparent;color:var(--ink);padding:7px 14px;font:inherit;font-size:14px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 12px;font:inherit;font-size:14px;cursor:pointer}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.chip{display:inline-flex;align-items:center;gap:6px}
+.dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+.idea{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:stretch;margin-top:16px}
+.idea .box{border-radius:12px;padding:14px;border:1.5px solid}
+.idea .arrow{align-self:center;color:var(--muted);font-size:22px}
+.b-old{background:var(--old-bg);border-color:var(--old)}
+.b-new{background:var(--new-bg);border-color:var(--new)}
+.b-both{background:var(--both-bg);border-color:var(--both)}
+.box .tag{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.b-old .tag{color:var(--old)} .b-new .tag{color:var(--new)} .b-both .tag{color:var(--both)}
+.box .big{font-weight:650;font-size:16px;margin:2px 0 4px}
+.box small{color:var(--muted);display:block}
+.when{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+.when .card h3 span{font-weight:500;color:var(--muted);font-size:13px}
+.pill{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;margin-right:4px}
+.p-old{background:var(--old-bg);color:var(--old)} .p-new{background:var(--new-bg);color:var(--new)}
+.p-both{background:var(--both-bg);color:var(--both)} .p-none{background:var(--none-bg);color:var(--none)}
+.p-bad{background:var(--bad-bg);color:var(--bad)} .p-good{background:var(--good-bg);color:var(--good)}
+.p-v1{background:var(--accent);color:var(--bg)}
+/* sequence */
+.seqwrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;margin-top:14px}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+svg text{fill:var(--ink)}
+.lane-h{font-size:13px;font-weight:650}
+.lane-s{font-size:11px;fill:var(--muted)}
+.lane-line{stroke:var(--line);stroke-dasharray:4 5}
+.msg{cursor:pointer}
+.msg .hit{fill:transparent}
+.msg:hover .hit{fill:var(--soft)}
+.msg.sel .hit{fill:var(--soft)}
+.msg.sel .lbl{font-weight:650}
+.lbl{font-size:12px}
+.num{font-size:11px;font-weight:700;fill:var(--bg)}
+.phase{font-size:11px;font-weight:700;fill:var(--muted);letter-spacing:.08em}
+.detail{position:sticky;top:12px;align-self:start}
+.detail h3{font-size:16px}
+.detail .meta{margin:8px 0 10px}
+.detail .file{font-size:12px;color:var(--muted);margin-top:10px}
+.detail .who{font-size:13px;color:var(--muted)}
+.ctl{display:flex;gap:8px;margin-top:12px}
+/* components */
+.comp{display:grid;grid-template-columns:repeat(12,1fr);gap:10px;margin-top:14px}
+.c{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;font:inherit;color:inherit}
+.c:hover,.c.sel{border-color:var(--ink)}
+.c b{display:block;font-size:14px}
+.c span{font-size:12px;color:var(--muted)}
+.c.old{background:var(--old-bg);border-color:var(--old)} .c.new{background:var(--new-bg);border-color:var(--new)}
+.zone{grid-column:1/-1;font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin-top:6px;display:flex;align-items:center;gap:8px}
+.zone::after{content:"";flex:1;border-top:1px dashed var(--line)}
+.flowdown{grid-column:1/-1;text-align:center;color:var(--muted);font-size:13px}
+#compDetail{margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:650}
+.tree{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;overflow-x:auto;margin:0}
+.tree .o{color:var(--old);font-weight:650} .tree .n{color:var(--new);font-weight:650} .tree .c2{color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.v1only{display:none}
+body.v1 .v1only{display:revert}
+body.v1 .nowonly{display:none}
+footer{margin-top:48px;color:var(--muted);font-size:13px}
+@media (max-width:900px){
+  .seqwrap{grid-template-columns:1fr}
+  .detail{position:static}
+  .when,.two{grid-template-columns:1fr}
+  .idea{grid-template-columns:1fr}
+  .idea .arrow{transform:rotate(90deg);justify-self:center}
+  .comp{grid-template-columns:repeat(2,1fr)}
+  .comp .c{grid-column:span 1 !important}
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="row" style="justify-content:space-between;align-items:flex-start">
+    <div>
+      <h1>LegacyGuard: how the guard works</h1>
+      <p class="sub">What happens inside a Claude Code session while the developer and Claude change code: which code runs (the old copy, the new copy, or both), when it runs, and who is told what.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Version">
+      <button id="vNow" aria-pressed="true">Today (v0.5.1)</button>
+      <button id="vV1" aria-pressed="false">Target (v1)</button>
+    </div>
+  </div>
+
+  <h2>1. The one idea</h2>
+  <p class="sub">The guard keeps two copies of the project and runs the changed functions in both on the same inputs.</p>
+  <div class="idea">
+    <div class="box b-old"><div class="tag">OLD copy</div><div class="big">The project as it was when the session started</div><small>A git worktree at HEAD, plus any uncommitted files, in <code>.legacyguard/baseline/</code>. It does not change during the session.</small></div>
+    <div class="arrow">→</div>
+    <div class="box b-both"><div class="tag">Same inputs, both copies</div><div class="big">Run the changed function in OLD and NEW</div><small>Inputs: arguments seen in your tests, values written in the repo, edge values, generated values. OLD runs twice to filter out randomness.</small></div>
+    <div class="arrow">←</div>
+    <div class="box b-new"><div class="tag">NEW copy</div><div class="big">Your working tree, with Claude's edits</div><small>The real project folder. Every Edit or Write from Claude lands here.</small></div>
+  </div>
+  <div class="when">
+    <div class="card"><h3>Before an edit <span>· PreToolUse</span></h3><p><span class="pill p-none">no code runs</span></p><p>Static checks on the would-be file: frozen files, API, DB and event contracts, tests deleted or weakened. Can <b>ask</b> or <b>deny</b>. Under 1 s.</p></div>
+    <div class="card"><h3>After an edit <span>· PostToolUse, background</span></h3><p><span class="pill p-both">OLD + NEW run</span></p><p>The behavioral diff. Claude keeps working. If results differ, Claude is <b>woken</b> with the exact input and both results.</p></div>
+    <div class="card"><h3>When Claude stops <span>· Stop</span></h3><p><span class="pill p-both">OLD + NEW run</span></p><p>Whole-session audit, which also catches edits made with shell commands. Writes the report and the map.</p></div>
+  </div>
+
+  <h2>2. One session, step by step</h2>
+  <p class="sub">Click any step, or use Play. Each step shows which code runs. The example is the README's own: Claude changes <code>parse_int_list</code> and silently drops the last number of a range.</p>
+  <div class="row" style="margin-top:12px">
+    <div class="seg" role="group" aria-label="Scenario">
+      <button id="sBreak" aria-pressed="true">Edit breaks behavior</button>
+      <button id="sKeep" aria-pressed="false">Edit keeps behavior</button>
+    </div>
+    <div class="legend">
+      <span class="chip"><i class="dot" style="background:var(--old)"></i>runs OLD</span>
+      <span class="chip"><i class="dot" style="background:var(--new)"></i>runs NEW</span>
+      <span class="chip"><i class="dot" style="background:var(--both)"></i>runs both</span>
+      <span class="chip"><i class="dot" style="background:var(--none)"></i>no project code runs</span>
+    </div>
+  </div>
+  <div class="seqwrap">
+    <div class="scroll"><svg id="seq" role="img" aria-label="Sequence of a session"></svg></div>
+    <aside class="card detail" aria-live="polite">
+      <div id="dNum" class="who"></div>
+      <h3 id="dTitle"></h3>
+      <div id="dMeta" class="meta"></div>
+      <p id="dBody"></p>
+      <p id="dV1" class="v1only" style="border-left:3px solid var(--accent);padding-left:10px"></p>
+      <div id="dFile" class="file"></div>
+      <div class="ctl">
+        <button class="btn" id="prev">← Prev</button>
+        <button class="btn" id="play">▶ Play</button>
+        <button class="btn" id="next">Next →</button>
+      </div>
+    </aside>
+  </div>
+
+  <h2>3. The pieces and how they connect</h2>
+  <p class="sub nowonly">Today every hook starts a fresh Python process that loads everything, runs, and exits. Click a piece to see what it does.</p>
+  <p class="sub v1only">In v1 the hooks become thin clients for one long-running <b>guard daemon</b> per project, which keeps warm copies of OLD and NEW ready to fork. Click a piece to see what it does.</p>
+  <div class="comp" id="comp"></div>
+  <div class="card" id="compDetail"><h3 id="cTitle">Click a piece above</h3><p id="cBody" class="sub" style="margin:0"></p></div>
+
+  <h2>4. Where it lives, and which settings control it</h2>
+  <div class="two">
+    <div class="card">
+      <h3>On the machine (installed once)</h3>
+<pre class="tree">~/.claude/plugins/…/legacyguard/
+  hooks/hooks.json   <span class="c2"># events → scripts</span>
+  .mcp.json          <span class="c2"># MCP server for Claude</span>
+  skills/            <span class="c2"># /legacyguard:* commands</span>
+  guardlib/ runner/ indexer/<span class="v1only"> daemon/</span>
+~/.legacyguard/venv/ <span class="c2"># the guard's OWN Python</span></pre>
+      <p style="margin-top:10px" class="sub">The guard's own logic runs in its own Python. It never installs anything into your project.</p>
+    </div>
+    <div class="card">
+      <h3>In each project</h3>
+<pre class="tree">your-project/
+  .venv/             <span class="c2"># YOUR Python: code under test runs here</span>
+  .legacyguard/      <span class="c2"># git-ignored</span>
+    config.yaml      <span class="c2"># settings (commit with git add -f)</span>
+    waivers.json     <span class="c2"># accepted changes + reasons</span>
+    <span class="o">baseline/</span>        <span class="c2"># the OLD copy (git worktree)</span>
+    index.db         <span class="c2"># functions, calls, routes, tests</span>
+    session.json     <span class="c2"># findings LG-1, LG-2 …</span><span class="v1only">
+    cassettes/       <span class="c2"># recorded DB/HTTP replies (v1)</span>
+    guard.sock       <span class="c2"># daemon socket (v1)</span></span>
+    reports/         <span class="c2"># &lt;session&gt;.md and .html</span>
+  <span class="n">src/ …</span>             <span class="c2"># the NEW copy = your working tree</span></pre>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h3>Modes (set in <code>config.yaml</code> or with <code>/legacyguard:mode</code>)</h3>
+    <table>
+      <thead><tr><th>Mode</th><th>A contract break before an edit</th><th>A behavior difference after an edit</th></tr></thead>
+      <tbody>
+        <tr><td><b>advisory</b></td><td>Note to Claude only</td><td>Note to Claude only</td></tr>
+        <tr><td><b>guarded</b> (default)</td><td>Permission prompt to you (at most 3 per session)</td><td>Wake Claude with the counterexample</td></tr>
+        <tr><td><b>strict</b></td><td>Edit denied until waived</td><td>Wake Claude<span class="v1only">; Stop is blocked while differences are open</span></td></tr>
+        <tr class="v1only"><td><b>ci</b> <span class="pill p-v1">v1</span></td><td>PR comment</td><td>PR comment and failing check</td></tr>
+      </tbody>
+    </table>
+    <h3 style="margin-top:16px">How it interacts with Claude Code settings</h3>
+    <table>
+      <tbody>
+        <tr><td style="width:34%"><b>Plugin installed</b></td><td>Hooks run in every session automatically. No permission entries needed.</td></tr>
+        <tr><td><b><code>enabled: false</code></b> in config.yaml</td><td>The guard is off for that project only.</td></tr>
+        <tr><td><b>Permission mode</b> (default, acceptEdits, auto)</td><td>Doesn't change what the guard checks. Its "ask" shows up as a normal permission prompt.</td></tr>
+        <tr><td><b>Plan mode</b></td><td>No edits happen, so nothing runs.</td></tr>
+        <tr><td><b>bypassPermissions</b></td><td>"Ask" becomes allow. <span class="v1only">v1 treats such a session as advisory and says so.</span><span class="nowonly">Today the prompt is silently skipped.</span></td></tr>
+        <tr><td><b>Project <code>.claude/settings.json</code></b></td><td>Can switch the plugin off for a repo (<code>enabledPlugins</code>).</td></tr>
+        <tr><td><b>ANTHROPIC_API_KEY set</b></td><td>The guard warns that Claude Code bills the key instead of the plan. The guard itself never calls a model.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>LegacyGuard architecture map · the written design is in <code>docs/ARCHITECTURE.md</code>, the roadmap in <code>docs/ROADMAP.md</code>.</footer>
+</main>
+
+<script>
+const LANES = [
+  {id:"dev", name:"Developer", sub:"you"},
+  {id:"claude", name:"Claude", sub:"the agent"},
+  {id:"hooks", name:"Claude Code hooks", sub:"events → scripts"},
+  {id:"guard", name:"Guard", subNow:"fresh process per hook", subV1:"daemon, always warm"},
+  {id:"old", name:"OLD copy", sub:".legacyguard/baseline"},
+  {id:"new", name:"NEW copy", sub:"your working tree"}
+];
+// runs: none | old | new | both. only: "v1" | "break" | "keep"
+const STEPS = [
+  {ph:"SESSION START", f:"dev", t:"claude", l:"types: claude", runs:"none", title:"Developer starts Claude in the project",
+   body:"Nothing special for the developer to do. The plugin is installed once per machine."},
+  {f:"hooks", t:"guard", l:"SessionStart", runs:"none", title:"SessionStart hook fires",
+   body:"The guard finds the project (or up to 5 git repos in the folder), writes .legacyguard/config.yaml the first time, and makes sure its own Python environment exists. The first run takes about a minute.",
+   v1:"Also starts the per-project guard daemon, which warms one process for OLD and one for NEW in the background.", file:"scripts/session_start.py, guardlib/autosetup.py, guardlib/bootstrap.py"},
+  {f:"guard", t:"old", l:"create baseline (git worktree)", runs:"none", title:"The OLD copy is frozen",
+   body:"A git worktree at HEAD, plus the developer's uncommitted files, is created in .legacyguard/baseline/. Every comparison this session is against this snapshot, not against the previous edit.",
+   file:"guardlib/baseline.py"},
+  {f:"guard", t:"claude", l:"context: “watching ./”", runs:"none", title:"Claude is told the guard is on",
+   body:"One line of context: “LegacyGuard set itself up for this project and is watching ./”. The index of functions, calls, routes and contracts is built or refreshed.", file:"indexer/"},
+
+  {ph:"PROMPT", f:"dev", t:"claude", l:"“fix parse_int_list ranges”", runs:"none", title:"Developer asks for a change", body:"Typed as usual."},
+  {f:"hooks", t:"guard", l:"UserPromptSubmit", runs:"none", title:"Guard looks up what the prompt names",
+   body:"Words in the prompt are matched to indexed functions and files (“late fee” finds compute_late_fee). Never blocks, never changes the prompt.", file:"scripts/prompt_context.py"},
+  {f:"guard", t:"claude", l:"context: callers, routes, tests", runs:"none", title:"Claude gets the blast radius",
+   body:"Who calls the function, which API routes lead to it, which tests reach it, which files usually change with it."},
+
+  {ph:"BEFORE THE EDIT", f:"claude", t:"hooks", l:"Edit tool call", runs:"none", title:"Claude wants to edit a file",
+   body:"Claude calls Edit (or Write). Before it lands, Claude Code runs the PreToolUse hook."},
+  {f:"hooks", t:"guard", l:"PreToolUse", runs:"none", title:"Static checks on the would-be file",
+   body:"The edit is applied in memory only. Checks: is the file frozen? Does it drop an API route, field or parameter, a DB column, an event field? Does it delete, skip or weaken a test? No project code is executed here, and the answer must come back in under a second.",
+   file:"scripts/pre_edit.py, guardlib/virtual.py, guardlib/checks.py, guardlib/policy.py"},
+  {f:"guard", t:"claude", l:"allow (or ask / deny)", runs:"none", title:"Decision: allow, ask or deny",
+   body:"Here: allow. If it broke a contract, guarded mode would show the developer a LegacyGuard permission prompt (at most 3 per session); strict mode would deny; a frozen file is always denied."},
+  {f:"claude", t:"new", l:"edit lands", runs:"none", title:"The edit is written to the NEW copy",
+   body:"max(range_limits)+1 became max(range_limits). The working tree now differs from OLD.",
+   bodyKeep:"Say Claude only renamed a local variable and tidied a loop. The working tree differs from OLD in text, but should behave the same."},
+
+  {ph:"AFTER THE EDIT (background)", f:"hooks", t:"guard", l:"PostToolUse (async)", runs:"none", title:"Behavioral diff starts in the background",
+   body:"Claude does not wait. The hook runs asynchronously; if it exits with code 2, Claude Code wakes Claude with its message (asyncRewake).",
+   file:"scripts/post_edit.py, hooks/hooks.json"},
+  {f:"guard", t:"guard", l:"find changed functions + build inputs", runs:"none", title:"Pick targets and build inputs",
+   body:"Tree-sitter compares OLD and NEW: parse_int_list changed, and these lines changed. Callers of it are added. Inputs come from: arguments your tests really passed → literal calls written in the repo → edge values (0, 2.675, NaN, inf) → Hypothesis from type hints.",
+   v1:"Callers come from a resolved call graph (2 hops), types are learned at runtime for untyped code, and inputs are steered toward the changed lines.",
+   file:"runner/diff.py, guardlib/engine.py, runner/inputs.py, runner/examples.py"},
+  {f:"guard", t:"old", l:"run inputs: OLD-A", runs:"old", title:"Run the inputs in the OLD copy",
+   body:"A worker process runs in the project's own Python, inside the baseline folder. Network, databases, file writes and subprocesses are blocked; each call gets 5 seconds. parse_int_list('5-8') → [5, 6, 7, 8].",
+   v1:"Forked from a warm process in milliseconds, inside an OS sandbox, with a fixed random seed and a frozen clock. DB and HTTP calls are allowed but recorded, so they can be replayed to NEW.",
+   file:"runner/lg_worker.py"},
+  {f:"guard", t:"old", l:"run again: OLD-B (noise check)", runs:"old", title:"Run OLD a second time",
+   body:"If OLD disagrees with itself on an input (time, randomness), that input proves nothing and is dropped. This is the same noise filter Twitter's Diffy uses."},
+  {f:"guard", t:"new", l:"run inputs: NEW", runs:"new", title:"Run the same inputs in the NEW copy",
+   body:"Same worker, now in the working tree. parse_int_list('5-8') → [5, 6, 7]. All three runs happen in parallel.",
+   bodyKeep:"Same worker, now in the working tree. parse_int_list('5-8') → [5, 6, 7, 8], the same as OLD. All three runs happen in parallel.",
+   v1:"NEW gets OLD-A's recorded DB and HTTP replies, so both versions see the same world. If NEW sends a different query, that itself is reported."},
+  {f:"guard", t:"guard", l:"compare results", runs:"both", title:"Compare OLD and NEW",
+   body:"Per input: return value, or exception type and message. A pass only counts if at least one input actually ran the changed lines.",
+   v1:"Also compares arguments and object state after the call and the DB/HTTP requests issued. A pass gets a confidence score: how many planted bugs in the changed lines the same inputs would have caught.",
+   file:"runner/diff.py::compare_one"},
+
+  {only:"break", f:"guard", t:"claude", l:"WAKE: LG-1 counterexample", runs:"none", bad:true, title:"Difference found: Claude is woken",
+   body:"Exit code 2. Claude reads: parse_int_list(range_string='5-8')  before [5, 6, 7, 8]  after [5, 6, 7]. It says whether the request intended this is unknown, and how to accept it if it was.",
+   file:"runner/diff.py::format_wake, guardlib/ledger.py"},
+  {only:"break", f:"claude", t:"new", l:"fixes the code", runs:"none", title:"Claude fixes it",
+   body:"Claude restores the +1 (or explains the change was intended; the developer can then run /legacyguard:waive LG-1 \"reason\").",
+   v1:"Or Claude calls declare_change(function, description, examples). The guard runs those examples; if they hold, the difference is marked intended."},
+  {only:"break", f:"guard", t:"guard", l:"re-run OLD vs NEW", runs:"both", good:true, title:"Check runs again by itself",
+   body:"The new edit triggers the same diff. No difference now, and the changed lines were reached, so LG-1 is resolved."},
+  {only:"keep", f:"guard", t:"claude", l:"note: no difference on 140 inputs", runs:"none", good:true, title:"No difference: a quiet note",
+   body:"Claude gets one factual line of context (no wake): which function was run, on how many inputs, and that this is not a proof.",
+   v1:"The note includes the confidence score, e.g. “9/10 planted bugs would have been caught”."},
+
+  {only:"v1", f:"claude", t:"hooks", l:"Bash: sed -i …", runs:"none", title:"Shell edits are caught right away (v1)",
+   body:"Today, files changed by shell commands are only noticed at Stop. In v1 a PostToolUse hook on Bash asks git which .py files changed and queues them for the same diff."},
+
+  {ph:"WHEN CLAUDE STOPS", f:"hooks", t:"guard", l:"Stop", runs:"none", title:"Stop hook: whole-session audit",
+   body:"The whole working tree is compared with the baseline, so nothing is missed. Anything changed but not yet checked is checked now.",
+   v1:"In strict mode, if differences are still open, the stop is blocked with a reason so Claude must fix or declare them.",
+   file:"scripts/stop_audit.py, guardlib/audit.py"},
+  {f:"guard", t:"guard", l:"re-run callers, OLD vs NEW", runs:"both", title:"Final checks",
+   body:"Callers of edited functions are run again in both copies."},
+  {f:"guard", t:"dev", l:"report .md + map .html", runs:"none", title:"Report and map are written",
+   body:"reports/<session>.md: what you asked, what broke, what fixed it, what was not checked. reports/<session>.html: the changed functions, what depends on them, and what was checked.",
+   file:"guardlib/report.py, guardlib/sessionmap.py"},
+  {f:"dev", t:"claude", l:"/legacyguard:status, :map", runs:"none", title:"Developer reads the result",
+   body:"Also available: /legacyguard:impact <function>, :waive, :pin (turn a counterexample into a permanent test), :mode."}
+];
+
+const NS="http://www.w3.org/2000/svg";
+let version="now", scenario="break", sel=0, timer=null, visible=[];
+const RUNCOL={none:"--none", old:"--old", new:"--new", both:"--both"};
+const RUNTXT={none:"no project code runs", old:"runs OLD copy", new:"runs NEW copy", both:"runs OLD + NEW"};
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function el(tag, attrs={}, parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+
+function filtered(){
+  return STEPS.filter(s=>!s.only || (s.only==="v1" ? version==="v1" : s.only===scenario));
+}
+
+function draw(){
+  visible=filtered();
+  const svg=document.getElementById("seq"); svg.innerHTML="";
+  const colW=158, left=30, top=70, rowH=44;
+  let phases=visible.filter(s=>s.ph).length;
+  const W=left*2+colW*LANES.length, H=top+visible.length*rowH+phases*26+20;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("width","100%"); svg.removeAttribute("height"); svg.style.minWidth="760px"; svg.style.display="block";
+  const x=id=>left+colW*LANES.findIndex(l=>l.id===id)+colW/2;
+  const defs=el("defs",{},svg);
+  ["none","old","new","both"].forEach(r=>{
+    const m=el("marker",{id:"ah-"+r,viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"7",markerHeight:"7",orient:"auto-start-reverse"},defs);
+    el("path",{d:"M0,0 L10,5 L0,10 z",fill:css(RUNCOL[r])},m);
+  });
+  LANES.forEach(l=>{
+    const cx=x(l.id);
+    const isOld=l.id==="old", isNew=l.id==="new";
+    if(isOld||isNew) el("rect",{x:cx-colW/2+6,y:8,width:colW-12,height:H-14,rx:10,fill:css(isOld?"--old-bg":"--new-bg"),opacity:.55},svg);
+    const t=el("text",{x:cx,y:28,"text-anchor":"middle",class:"lane-h"},svg); t.textContent=l.name;
+    if(isOld) t.setAttribute("style","fill:"+css("--old")); if(isNew) t.setAttribute("style","fill:"+css("--new"));
+    const s=el("text",{x:cx,y:44,"text-anchor":"middle",class:"lane-s"},svg);
+    s.textContent=l.sub || (version==="v1"?l.subV1:l.subNow);
+    el("line",{x1:cx,y1:54,x2:cx,y2:H-8,class:"lane-line"},svg);
+  });
+  let y=top;
+  visible.forEach((s,i)=>{
+    if(s.ph){
+      const pt=el("text",{x:left,y:y+12,class:"phase"},svg); pt.textContent=s.ph; y+=26;
+    }
+    const g=el("g",{class:"msg"+(i===sel?" sel":""),tabindex:"0",role:"button","aria-label":`Step ${i+1}: ${s.title}`},svg);
+    el("rect",{x:4,y:y-4,width:W-8,height:rowH-4,rx:8,class:"hit"},g);
+    const col=css(s.bad?"--bad":s.good?"--good":RUNCOL[s.runs]);
+    const x1=x(s.f), x2=x(s.t);
+    const cy=y+rowH/2-2;
+    if(s.f===s.t){
+      const w=colW-10;
+      el("rect",{x:x1-w/2,y:cy-13,width:w,height:24,rx:6,fill:css(s.runs==="both"?"--both-bg":"--soft"),stroke:col,"stroke-width":1.5},g);
+      const t=el("text",{x:x1,y:cy+3,"text-anchor":"middle",class:"lbl"},g); t.textContent=fit(s.l,24);
+    } else {
+      const dir=x2>x1?1:-1;
+      el("line",{x1:x1+dir*6,y1:cy+6,x2:x2-dir*8,y2:cy+6,stroke:col,"stroke-width":s.runs==="none"&&!s.bad&&!s.good?1.6:2.6,"marker-end":`url(#ah-${s.bad||s.good?"none":s.runs})`},g);
+      const t=el("text",{x:(x1+x2)/2,y:cy-1,"text-anchor":"middle",class:"lbl"},g); t.textContent=fit(s.l, Math.max(18, Math.floor(Math.abs(x2-x1)/6.2)));
+      if(s.bad) t.setAttribute("style","fill:"+css("--bad")+";font-weight:650");
+    }
+    el("circle",{cx:14,cy:cy+1,r:9,fill:col},g);
+    const n=el("text",{x:14,y:cy+5,"text-anchor":"middle",class:"num"},g); n.textContent=i+1;
+    g.addEventListener("click",()=>{stop();select(i)});
+    g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();stop();select(i)}});
+    y+=rowH;
+  });
+  show();
+}
+function fit(s,n){return s.length>n? s.slice(0,n-1)+"…" : s}
+
+function show(){
+  const s=visible[sel]; if(!s) return;
+  document.getElementById("dNum").textContent=`Step ${sel+1} of ${visible.length} · ${LANES.find(l=>l.id===s.f).name} → ${LANES.find(l=>l.id===s.t).name}`;
+  document.getElementById("dTitle").textContent=s.title;
+  const meta=document.getElementById("dMeta"); meta.innerHTML="";
+  const p=document.createElement("span"); p.className="pill p-"+s.runs; p.textContent=RUNTXT[s.runs]; meta.appendChild(p);
+  if(s.bad){const b=document.createElement("span");b.className="pill p-bad";b.textContent="difference";meta.appendChild(b)}
+  if(s.good){const b=document.createElement("span");b.className="pill p-good";b.textContent="ok";meta.appendChild(b)}
+  if(s.only==="v1"){const b=document.createElement("span");b.className="pill p-v1";b.textContent="v1";meta.appendChild(b)}
+  document.getElementById("dBody").textContent=(scenario==="keep" && s.bodyKeep)? s.bodyKeep : s.body;
+  const v=document.getElementById("dV1");
+  v.textContent=s.v1? "In v1: "+s.v1 : ""; v.style.display = (version==="v1" && s.v1)? "block":"none";
+  document.getElementById("dFile").textContent=s.file? "Code: "+s.file : "";
+}
+function select(i){sel=Math.max(0,Math.min(visible.length-1,i)); document.querySelectorAll("#seq .msg").forEach((g,j)=>g.classList.toggle("sel",j===sel)); show();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById("play").textContent="▶ Play"}}
+document.getElementById("prev").onclick=()=>{stop();select(sel-1)};
+document.getElementById("next").onclick=()=>{stop();select(sel+1)};
+document.getElementById("play").onclick=()=>{
+  if(timer){stop();return}
+  if(sel>=visible.length-1) select(0);
+  document.getElementById("play").textContent="❚❚ Pause";
+  timer=setInterval(()=>{ if(sel>=visible.length-1){stop();return} select(sel+1)},2200);
+};
+function seg(a,b,cb){a.onclick=()=>{a.setAttribute("aria-pressed","true");b.setAttribute("aria-pressed","false");cb()}}
+seg(document.getElementById("sBreak"),document.getElementById("sKeep"),()=>{scenario="break";stop();sel=Math.min(sel,filtered().length-1);draw()});
+seg(document.getElementById("sKeep"),document.getElementById("sBreak"),()=>{scenario="keep";stop();sel=Math.min(sel,filtered().length-1);draw()});
+seg(document.getElementById("vNow"),document.getElementById("vV1"),()=>{version="now";document.body.classList.remove("v1");stop();sel=0;draw();drawComp()});
+seg(document.getElementById("vV1"),document.getElementById("vNow"),()=>{version="v1";document.body.classList.add("v1");stop();sel=0;draw();drawComp()});
+
+/* component map */
+const COMP_NOW=[
+  {z:"Inside the Claude Code session"},
+  {n:"Developer", d:"you", s:3, t:"Types requests, answers LegacyGuard permission prompts, runs /legacyguard:* commands, reads the report."},
+  {n:"Claude", d:"the agent", s:3, t:"Makes Edit/Write/Bash tool calls. Receives context notes and wake-ups with counterexamples. Can query the MCP server."},
+  {n:"Skills", d:"/legacyguard:status, map, impact…", s:3, t:"Slash commands. Each runs scripts/lg.py with its own allowed-tools, so no permission prompt."},
+  {n:"MCP server", d:"impact · contract · diff_report", s:3, t:"Claude can ask: who depends on this function? What does this contract define? What are the findings? Reads the same SQLite index."},
+  {flow:"↓ Claude Code fires events (hooks/hooks.json)"},
+  {z:"Hooks: each one is a fresh python3 process"},
+  {n:"SessionStart", d:"setup + baseline", s:2, t:"Bootstraps the guard venv, writes config, creates the OLD worktree, builds the index. Up to 300 s."},
+  {n:"UserPromptSubmit", d:"blast radius", s:2, t:"Matches names in the prompt to functions; adds callers/routes/tests as context."},
+  {n:"PreToolUse", d:"Edit|Write · static", s:2, t:"Virtual apply + contract/test/frozen checks. Allow, ask or deny. No code runs."},
+  {n:"PostToolUse", d:"Edit|Write · diff", s:2, t:"Async with asyncRewake. Runs the behavioral diff; exit 2 wakes Claude."},
+  {n:"Stop", d:"session audit", s:2, t:"Diffs the whole tree vs the baseline, re-checks, writes report and map."},
+  {n:"(Bash edits)", d:"seen at Stop only", s:2, t:"Today no hook watches shell commands, so sed -i or codemods are only caught by the Stop audit."},
+  {flow:"↓ each hook loads config + index, then calls the engine"},
+  {z:"Guard engine (guardlib, runner, indexer)"},
+  {n:"Static checks", d:"checks.py · policy.py", s:3, t:"OpenAPI, migrations, event schemas, routes, response fields, test integrity. Policy decides by mode and prompt budget."},
+  {n:"Change detector", d:"symbol_diff · gates", s:3, t:"Tree-sitter finds changed functions and the exact changed statements (the lines an input must reach)."},
+  {n:"Input builder", d:"harvest · examples · grid · Hypothesis", s:3, t:"Arguments from real tests, literal calls in the repo, edge values, and generated values from type hints."},
+  {n:"Ledger + reports", d:"session.json · reports/", s:3, t:"Findings LG-1… with states open/resolved/waived/superseded; waivers tied to the code hash."},
+  {flow:"↓ 3 cold worker processes per check, in the project's Python"},
+  {z:"Running the code"},
+  {n:"OLD-A", d:"baseline worktree", s:4, c:"old", t:"Runs every input in the OLD copy. Monkeypatched blocks on network, sqlite, file writes, subprocess. 5 s per call."},
+  {n:"OLD-B", d:"noise check", s:4, c:"old", t:"Runs OLD again; inputs where OLD disagrees with itself are dropped."},
+  {n:"NEW", d:"working tree", s:4, c:"new", t:"Runs the same inputs in the edited code. Results are compared with OLD-A."}
+];
+const COMP_V1=[
+  {z:"Inside the Claude Code session"},
+  {n:"Developer", d:"you", s:3, t:"Same as today, plus a calibrated confidence on every pass."},
+  {n:"Claude", d:"the agent", s:3, t:"Receives wake-ups and notes. New: can declare an intended change with examples."},
+  {n:"Skills", d:"/legacyguard:*", s:3, t:"Same commands, plus /legacyguard:characterize to write snapshot tests for a module."},
+  {n:"MCP server", d:"+ declare_change", s:3, t:"impact, contract, diff_report, and declare_change(function, description, examples). Talks to the daemon."},
+  {flow:"↓ Claude Code fires events"},
+  {z:"Thin hook clients (< 100 ms): forward the event over guard.sock"},
+  {n:"SessionStart", d:"start daemon", s:2, t:"Creates the baseline and starts the per-project daemon, which warms OLD and NEW."},
+  {n:"UserPromptSubmit", d:"blast radius", s:2, t:"Same as today, answered from memory."},
+  {n:"PreToolUse", d:"Edit|Write|MultiEdit", s:2, t:"Same static checks, answered from the warm daemon. Falls back to in-process if the daemon is down."},
+  {n:"PostToolUse", d:"Edit|Write", s:2, t:"Queues a diff job; newer edits cancel older jobs for the same function."},
+  {n:"PostToolUse", d:"Bash (new)", s:2, t:"Asks git which .py files changed after a shell command and queues them right away."},
+  {n:"Stop / SessionEnd", d:"audit · shut down", s:2, t:"Audit and report. Strict mode can block the stop. SessionEnd stops the daemon."},
+  {flow:"↓ JSON-RPC over .legacyguard/guard.sock"},
+  {z:"Guard daemon: one per project, keeps everything warm"},
+  {n:"Planner", d:"call graph · risk rank", s:3, t:"Resolved call graph (2 hops) instead of name matching; ranks targets by callers, routes and test reach."},
+  {n:"Input factory", d:"+ runtime types · targeted search", s:3, t:"Adds types seen at runtime for untyped code, real object construction for methods, coverage-guided search toward the changed lines, and CrossHair for small pure functions."},
+  {n:"Comparator", d:"return · state · I/O trace", s:3, t:"Compares return values, arguments and self after the call, and the DB/HTTP requests each version issued."},
+  {n:"Confidence", d:"planted-bug score", s:3, t:"On a pass, plants up to 10 small bugs in the OLD changed lines and checks the same inputs catch them. Reported as 9/10."},
+  {flow:"↓ fork() a warm process per check: milliseconds, not seconds"},
+  {z:"Sandboxed runs (OS sandbox + audit hook + throwaway folder + seeded random + frozen clock)"},
+  {n:"OLD-A", d:"records DB/HTTP", s:4, c:"old", t:"Runs in the baseline; real DB/HTTP replies are recorded into cassettes/."},
+  {n:"OLD-B", d:"noise check", s:4, c:"old", t:"Same as today, but much less noise to filter because randomness and time are controlled."},
+  {n:"NEW", d:"replays OLD's I/O", s:4, c:"new", t:"Gets OLD-A's recorded replies, so both versions see the same world. A different query is itself a finding."}
+];
+function drawComp(){
+  const box=document.getElementById("comp"); box.innerHTML="";
+  (version==="v1"?COMP_V1:COMP_NOW).forEach(c=>{
+    if(c.z){const z=document.createElement("div");z.className="zone";z.textContent=c.z;box.appendChild(z);return}
+    if(c.flow){const f=document.createElement("div");f.className="flowdown";f.textContent=c.flow;box.appendChild(f);return}
+    const b=document.createElement("button"); b.className="c"+(c.c?" "+c.c:""); b.style.gridColumn=`span ${c.s}`;
+    b.innerHTML=`<b></b><span></span>`; b.querySelector("b").textContent=c.n; b.querySelector("span").textContent=c.d;
+    b.onclick=()=>{box.querySelectorAll(".c").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");
+      document.getElementById("cTitle").textContent=c.n+" · "+c.d; document.getElementById("cBody").textContent=c.t;};
+    box.appendChild(b);
+  });
+  document.getElementById("cTitle").textContent="Click a piece above"; document.getElementById("cBody").textContent="";
+}
+draw(); drawComp();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);
+</script>
+</body>
+</html>
