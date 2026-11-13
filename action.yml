@@ -1,0 +1,33 @@
+name: LegacyGuard
+description: Run old and new code on the same inputs for every function a pull request changes, and report what behaves differently.
+branding:
+  icon: shield
+  color: green
+inputs:
+  base:
+    description: Base commit or ref to compare against. Default is the merge base with the default branch.
+    required: false
+    default: ""
+  python:
+    description: The project's Python, with the project's dependencies installed. Default is the python on PATH.
+    required: false
+    default: ""
+  fail-on:
+    description: "difference (default): fail when code behaves differently. any: also on contract or test changes. none: report only."
+    required: false
+    default: difference
+runs:
+  using: composite
+  steps:
+    - name: Install LegacyGuard's own dependencies
+      shell: bash
+      run: |
+        python3 -m venv "$RUNNER_TEMP/legacyguard-venv"
+        "$RUNNER_TEMP/legacyguard-venv/bin/pip" install -q -r "${{ github.action_path }}/legacyguard/requirements.txt"
+    - name: Run LegacyGuard
+      shell: bash
+      run: |
+        PROJECT_PY="${{ inputs.python }}"
+        if [ -z "$PROJECT_PY" ]; then PROJECT_PY="$(command -v python || command -v python3)"; fi
+        "$RUNNER_TEMP/legacyguard-venv/bin/python" "${{ github.action_path }}/legacyguard/scripts/lg_ci.py" \
+          --root "$GITHUB_WORKSPACE" --base "${{ inputs.base }}" --python "$PROJECT_PY" --fail-on "${{ inputs.fail-on }}"

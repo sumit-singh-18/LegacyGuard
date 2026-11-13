@@ -115,6 +115,35 @@ Both are also saved in your project under `.legacyguard/reports/`.
 
 **Switch the guard off in one project.** Add `enabled: false` to `.legacyguard/config.yaml`.
 
+## Use it on pull requests (GitHub Actions)
+
+The same checks can run on every pull request, whoever or whatever wrote the change. Add a workflow like this to
+your project:
+
+```yaml
+name: legacyguard
+on: pull_request
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # the guard needs the base commit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt   # your project's own dependencies
+      - uses: sumit-singh-18/LegacyGuard@main
+        with:
+          base: origin/${{ github.base_ref }}
+          fail-on: difference         # or: any (also contract and test changes), none (report only)
+```
+
+The job summary lists what behaves differently, with the input and both results, and each one is marked on the
+changed line. To accept an intended difference, run `/legacyguard:waive` locally and commit
+`.legacyguard/waivers.json` (`git add -f`). Locally: `python legacyguard/scripts/lg_ci.py --base main`.
+
 ## Update
 
 ```bash

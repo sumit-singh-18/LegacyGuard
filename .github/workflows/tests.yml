@@ -24,3 +24,20 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run tests
         run: python -m pytest -q
+
+  guard:
+    # LegacyGuard on its own pull requests, report only: the action in this repository, used as any project would.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - uses: ./
+        with:
+          base: origin/${{ github.base_ref }}
+          fail-on: none
