@@ -43,7 +43,7 @@ reached the changed lines, non-deterministic).
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 72 tests after Sprint 2). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 90 tests after Sprint 3). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -72,11 +72,29 @@ reached the changed lines, non-deterministic).
   `behavioral_diff.warm`. Tests default to cold; `tests/test_warm.py` opts in. The hooks themselves are still
   separate processes: the full daemon in docs/ARCHITECTURE.md is not built.
 
+## Sprint 3 (branch sprint3, 2026-11-13)
+
+- **Confidence (B6):** `runner/mutants.py` plants up to 8 bugs in the old function's changed lines. They run
+  in OLD-A only (`diff._with_mutants`); `lg_worker._run_mutants` runs an identity check first. The result is
+  `Result.mutants_killed/total` and `diff.confidence_text`, shown in the pass note and the ledger. Config
+  `behavioral_diff.mutants` (0 turns it off).
+- **Time limits:** after 2 timeouts a function's calls get 0.5 s; after 10 timeouts or 10 s in total, the
+  rest are `skipped_slow`.
+- **Call graph (B7):** `guardlib/callgraph.py` resolves callers through imports (aliases, relative imports,
+  module attributes, self/cls, Class.method), 2 hops. `engine.dependents` uses it; no index is needed. Name-only
+  edges are kept only for unique function names.
+- **Routes (C3):** `runner/routes_diff.py` plus `engine.route_targets`. Targets of kind "route" carry HTTP
+  requests (literal test-client calls first, then generated). The worker's `run_route` uses Flask
+  `test_client` or Starlette `TestClient`. It needs `app:` in the config and the routes table (Flask
+  introspection added). Django routes are not diffed yet.
+- **Fix:** `datetime.datetime`/`date` are swapped to the frozen versions only during calls
+  (`frozen_datetime_module`). The global swap broke pydantic and FastAPI imports.
+
 ## Known gaps still open
 
 - `ARCHITECTURE.md` and `TESTING.md` from the hackathon are still missing. `docs/ARCHITECTURE.md` is the new
   design. IDs like FR-xx, D-0xx and NFR-xx point into the old docs.
-- Callers are matched by name (MAX_FUNCTIONS=12, 1 hop).
+- MAX_FUNCTIONS=12 targets per edit (routes and callers included). `/legacyguard:impact` and the MCP `impact` tool still use name edges.
 - Hooks are still short-lived processes (no daemon yet). With Django, the working-tree server still runs `django.setup()` cold in every check.
 - Not yet verified on Linux bubblewrap or on a Django project. The worker has no throwaway cwd yet.
 

@@ -43,6 +43,10 @@ The first session start builds the guard's own virtual environment. Optional key
 
 Under `behavioral_diff:`, `deterministic: false` turns off the fixed random seed, frozen clock and repeatable uuids, and `os_sandbox: off` turns off the operating-system sandbox around the code being run. Both are on by default. `warm: false` turns off the warm worker that keeps the project's libraries loaded between checks.
 
+`mutants: 8` under `behavioral_diff:` sets how many small bugs are planted in the changed lines after a pass, to show how strong the inputs were (0 turns it off).
+
+With `app:` set (FastAPI, Starlette or Flask) and the index built, a change that reaches a route handler also sends the same HTTP requests to the old and the new app in process, and compares status, content type and body.
+
 `affected_tests:` (`enabled`, `max_tests`, `timeout_s`) controls running the project's own tests that reach the changed functions after each edit. It needs the test map from `/legacyguard:index`. A test that passed before the session and fails after an edit is reported to Claude like a behavior difference.
 
 ## Commands
