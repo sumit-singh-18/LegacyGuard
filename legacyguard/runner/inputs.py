@@ -392,8 +392,38 @@ def _example_calls(sym: dict, calls: list) -> list[dict]:
     return out
 
 
+# Hints the strategies above can build. A hint they cannot build would leave the parameter worse off than no hint.
+BUILDABLE_HINT = re.compile(r"int|float|str|bool|Decimal|date|datetime|(?:list|set|frozenset)\[(?:int|float|str|bool|Decimal)\]"
+                            r"|tuple\[(?:int|float|str|bool|Decimal)(?:,(?:int|float|str|bool|Decimal))*\]|dict\[str,(?:int|float|str|bool|Decimal)\]")
+
+
+def with_runtime_types(sym: dict, harvested: dict | None) -> dict:
+    """Fill in missing type hints from the types real test runs passed (roadmap B4).
+
+    The most common type wins; if the tests also passed None, the hint becomes Optional. Classes are left alone:
+    the builder cannot make them here."""
+    seen = (harvested or {}).get("types") or {}
+    if not seen:
+        return sym
+    params = []
+    for p in sym["params"]:
+        counts = seen.get(p["name"].lstrip("*"))
+        if p.get("annotation") or not counts or p["name"].startswith("*"):
+            params.append(p)
+            continue
+        usable = {t: n for t, n in counts.items() if BUILDABLE_HINT.fullmatch(t)}
+        if not usable:
+            params.append(p)
+            continue
+        best = max(sorted(usable), key=lambda t: usable[t])
+        hint = f"Optional[{best}]" if "None" in counts else best
+        params.append({**p, "annotation": hint, "inferred": True})
+    return {**sym, "params": params}
+
+
 def build(sym: dict, harvested: dict | None, max_inputs: int, state_dir: Path, examples: dict | None = None) -> tuple[list[dict], str | None]:
     """(inputs, reason it cannot be run). sym: {qualname, kind, params}."""
+    sym = with_runtime_types(sym, harvested)
     names = [p["name"].lstrip("*") for p in sym["params"]]
     blocked = (harvested or {}).get("blocked", {})
     db_params = sorted(set(blocked) & DB_PARAM_NAMES) or sorted(set(names) & DB_PARAM_NAMES)
