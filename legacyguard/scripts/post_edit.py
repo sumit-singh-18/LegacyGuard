@@ -38,8 +38,15 @@ def handle(event: dict):
         wake = engine.record(cfg, data, results)
         if wake:
             data["wakeups"] += 1
-    if wake:
-        raise Wake("\n\n".join(differ.format_wake(r, f["id"]) for f, r in wake[:2]))
+    texts = [differ.format_wake(r, f["id"]) for f, r in wake[:2]]
+    # The project's own tests that reach the changed code, baseline against now (roadmap C4).
+    try:
+        texts += engine.affected_tests(cfg, rel, targets, file_hash)[:2]
+    except Exception as exc:  # noqa: BLE001 - a test run that cannot start must not hide the diff's result
+        from _common import log_error
+        log_error(root, f"affected tests: {type(exc).__name__}: {exc}")
+    if texts:
+        raise Wake("\n\n".join(texts))
     # No difference: Claude is told what was run and what that does and does not show, as context only (D-045).
     # Without it Claude cannot know the edit was checked, and repeats the work or assumes nothing looked.
     note = differ.format_note(results)

@@ -41,6 +41,10 @@ frozen:
 
 The first session start builds the guard's own virtual environment. Optional keys: `python:` (target interpreter, otherwise `.venv`, `venv`, `env`, then PATH) and `source_roots:` (folders to add to the import path, such as `src`).
 
+Under `behavioral_diff:`, `deterministic: false` turns off the fixed random seed, frozen clock and repeatable uuids, and `os_sandbox: off` turns off the operating-system sandbox around the code being run. Both are on by default. `warm: false` turns off the warm worker that keeps the project's libraries loaded between checks.
+
+`affected_tests:` (`enabled`, `max_tests`, `timeout_s`) controls running the project's own tests that reach the changed functions after each edit. It needs the test map from `/legacyguard:index`. A test that passed before the session and fails after an edit is reported to Claude like a behavior difference.
+
 ## Commands
 
 | Command | Who | What |
@@ -74,7 +78,8 @@ Everything under `.legacyguard/` is ignored by git, so the guard adds nothing to
 ## Limits
 
 - Python only. One service per repo.
-- The diff compares return values and exceptions, not side effects.
+- The diff compares return values, exceptions, and what a call leaves in its mutable arguments and in `self`. It does not compare writes to a database, files or the network: those are blocked.
+- Code under test runs with a fixed random seed and a frozen clock, in an OS sandbox where available (sandbox-exec on macOS, bubblewrap on Linux) plus in-process blocks. Without an OS sandbox, the in-process blocks are best effort only.
 - Functions that need a database, the network, or objects it can't build are reported `Untested`.
 - A `Verified pass` means no difference on the inputs tried, and that at least one input ran the changed lines. It is not a proof. In a session where Claude may run code, Claude's own comparison of a small function can cover more cases than the guard's.
 - Edits made through shell commands are seen only at Stop.

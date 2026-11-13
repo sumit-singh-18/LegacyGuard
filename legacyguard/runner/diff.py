@@ -17,10 +17,13 @@ from indexer.coverage_map import clean_env, load_harvest
 from runner import examples
 from runner import inputs as input_lib
 from runner import lg_codec
+from runner import os_sandbox
+from runner import warm
 
 WORKER = Path(__file__).resolve().parent / "lg_worker.py"
 MAX_FUNCTIONS = 12
 MAX_SHOWN = 3
+SELF_VARIANTS = 4  # matches lg_worker.SELF_VARIANTS
 DONE, DIFFERENT, BROKEN, UNTESTED = "verified", "different", "broken", "untested"
 BLOCK_REASON = {"database": "needs a database", "network": "needs the network", "file write": "writes files", "subprocess": "starts a subprocess"}
 
@@ -160,14 +163,24 @@ def _reads_any(source: str, names: set[str]) -> bool:
 FAILED = "__failed__"
 
 
-def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[dict], timeout: float) -> dict:
+def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[dict], timeout: float, warm_names: list[str] | None = None) -> dict:
+    bd = cfg.behavioral_diff
     with tempfile.TemporaryDirectory(prefix="lgrun") as tmp:
         req, res = Path(tmp) / "req.json", Path(tmp) / "res.json"
-        req.write_text(json.dumps({"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions, "django_settings": cfg.raw.get("django_settings")}))
+        request = {"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
+                   "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True)),
+                   "warm": warm_names or []}
+        req.write_text(json.dumps(request))
         env = clean_env(cfg)
         env.pop("PYTHONPATH", None)
+        mode = "baseline" if os.path.realpath(root) == os.path.realpath(str(Path(cfg.state_dir) / "baseline")) else "work"
+        fast = warm.run(cfg, py, root, mode, request, str(res), timeout, env)
+        if fast is not None:
+            return fast
+        cmd = os_sandbox.wrap([py, "-B", str(WORKER), str(req), str(res)], py, writable=[tempfile.gettempdir(), tmp],
+                              readonly=[str(cfg.root), root], mode=str(bd.get("os_sandbox", "auto")))
         try:
-            done = subprocess.run([py, "-B", str(WORKER), str(req), str(res)], cwd=root, env=env, capture_output=True, text=True, timeout=timeout)
+            done = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return {FAILED: "timed out"}
         except OSError as exc:
@@ -185,16 +198,28 @@ def _key(o: dict) -> str:
 
 
 def _comparable(o: dict) -> dict | None:
-    """What gets compared for one input: return value, or exception type and message. None if not comparable."""
+    """What gets compared for one input: return value or exception type and message, and what the call left in its
+    mutable arguments and in self. None if not comparable."""
     if o["outcome"] == "return":
-        return {"k": "return", "v": o["value"]}
-    if o["outcome"] == "raise":
-        return {"k": "raise", "type": o["type"], "message": o["message"]}
-    return None
+        out = {"k": "return", "v": o["value"]}
+    elif o["outcome"] == "raise":
+        out = {"k": "raise", "type": o["type"], "message": o["message"]}
+    else:
+        return None
+    if o.get("state"):
+        out["s"] = o["state"]
+    return out
 
 
-def _show_outcome(o: dict) -> str:
-    return lg_codec.display(o["v"], plain_decimal=True) if o["k"] == "return" else f"raises {o['type']}: {o['message']}"
+def _show_outcome(o: dict, other: dict | None = None) -> str:
+    """The outcome as people read it. State is shown only for names whose state differs from the other version."""
+    text = lg_codec.display(o["v"], plain_decimal=True) if o["k"] == "return" else f"raises {o['type']}: {o['message']}"
+    mine, theirs = o.get("s") or {}, (other or {}).get("s") or {}
+    changed = [n for n in sorted(set(mine) | set(theirs)) if _key(mine.get(n) or {}) != _key(theirs.get(n) or {})]
+    if changed:
+        parts = [f"{n}={lg_codec.display(mine[n], plain_decimal=True)}" if n in mine else f"{n} not readable" for n in changed]
+        text += ", then " + ", ".join(parts)
+    return text
 
 
 def show_call(target: Target, item: dict) -> str:
@@ -289,10 +314,11 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         if ca["k"] == "return":
             r.inputs_completed += 1
         if _key(ca) != _key(cn):
-            r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca), "after": _show_outcome(cn), "source": item["source"],
+            same_state = _key(ca.get("s") or {}) == _key(cn.get("s") or {})
+            r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca, cn), "after": _show_outcome(cn, ca), "source": item["source"],
                                   "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
-                                  "special": _has_special(item),
-                                  "noise": ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
+                                  "special": _has_special(item), "state": not same_state,
+                                  "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
     if r.differences:
         r.status = DIFFERENT
         # The example a person reads first: from real tests, then the repo's own examples, ordinary values before
@@ -366,9 +392,42 @@ def _examples(cfg, conn, t: Target) -> dict | None:
     name = t.qualname.rsplit(".", 1)[-1]
     params = [p["name"] for p in t.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
     try:
-        return examples.collect(cfg.root, t.source, name, params, examples.calling_files(conn, name, t.file))
+        files = examples.calling_files(conn, name, t.file) or [f for f in examples.files_naming(cfg.root, name) if f != t.file]
+        return examples.collect(cfg.root, t.source, name, params, files)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _self_calls(cfg, conn, t: Target, work_root: str) -> list[dict]:
+    """Constructor calls for a method's class, from the repo, in the worker's input format (roadmap B3)."""
+    if t.kind != "method" or "." not in t.qualname:
+        return []
+    cls_qual = t.qualname.rsplit(".", 1)[0]
+    cls_name = cls_qual.rsplit(".", 1)[-1]
+    try:
+        text = (Path(work_root) / t.file).read_text(errors="replace")
+        defs = {s.qualname: s for s in symbols.extract(text)[0]}
+    except OSError:
+        return []
+    init = defs.get(f"{cls_qual}.__init__")
+    if init is not None:
+        params = [p["name"] for p in init.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
+    elif cls_qual in defs:
+        from guardlib import checks
+        params = list(checks._class_fields(defs[cls_qual]))  # a dataclass: its fields, in order, are the parameters
+    else:
+        return []
+    try:
+        calls = examples.constructor_calls(cfg.root, t.file, cls_name, params, examples.calling_files(conn, cls_name, t.file))
+    except Exception:  # noqa: BLE001 - a bonus: without it the worker falls back to other recipes
+        return []
+    out = []
+    for call in calls:
+        try:
+            out.append({"args": [{"name": n, "kind": k, "value": lg_codec.encode_input(v)} for n, k, v in call]})
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
@@ -399,7 +458,14 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no inputs could be built for its signature")
             continue
         module, sys_rel = module_for(t.file, work_root)
-        specs.append({"module": module, "qualname": t.qualname, "inputs": items})
+        if t.kind == "method" and 0 < len(items) < SELF_VARIANTS:
+            # Each input runs on a differently built instance, so a method with few inputs is repeated to see each one.
+            items = [dict(item) for item in (items * SELF_VARIANTS)[:SELF_VARIANTS]]
+        spec = {"module": module, "qualname": t.qualname, "inputs": items}
+        self_calls = _self_calls(cfg, conn, t, work_root)
+        if self_calls:
+            spec["self_calls"] = self_calls
+        specs.append(spec)
         runnable[f"{module}:{t.qualname}"] = (t, items)
         roots.add(sys_rel)
     for t in targets[MAX_FUNCTIONS:]:
@@ -410,10 +476,11 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             return [str(Path(base) / p) if p else base for p in ordered]
         deadline = float(bd["timeout_s"])
         use_self = bool(bd.get("self_diff", True))
+        warm_names = warm.third_party_imports(work_root, sorted({t.file for t, _ in runnable.values()}), extra)
         with cf.ThreadPoolExecutor(3) as pool:
-            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline)
-            fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs, deadline)
-            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline) if use_self else None
+            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names)
+            fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs, deadline, warm_names)
+            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names) if use_self else None
             a, n = fa.result(), fn.result()
             b = fb.result() if fb else None
         failed = next((x[FAILED] for x in (a, n, b) if x and FAILED in x), None)

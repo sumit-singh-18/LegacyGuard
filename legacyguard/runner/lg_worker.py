@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import datetime as _dt
 import dis
+import enum
 import importlib
 import inspect
 import io
@@ -15,14 +17,17 @@ import ipaddress
 import itertools
 import json
 import os
+import random
 import signal
 import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import types
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -90,6 +95,56 @@ def install_blocks() -> None:
     subprocess.Popen.__init__ = proc  # patch the method: libraries subclass Popen at import time
     subprocess.run = proc
     os.system = proc
+    if hasattr(sys, "addaudithook"):  # Python 3.8+; older interpreters keep the patches above only
+        sys.addaudithook(_audit)
+
+
+# Second layer (PEP 578). The patches above give clear reasons for the common calls; the audit hook sees the same
+# operations however they are reached (os.open, os.remove, shutil.rmtree, _socket, posix_spawn, ...). It is a
+# deny-list inside the same process, so it is not a security boundary by itself: the runner adds an OS sandbox
+# where one is available.
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+_PATH_EVENTS = {"os.remove": 0, "os.rmdir": 0, "os.rename": 0, "os.truncate": 0, "os.chmod": 0, "os.chown": 0,
+                "os.link": 1, "os.symlink": 1, "os.mkdir": 0, "os.utime": 0, "shutil.rmtree": 0, "shutil.move": 0,
+                "shutil.copyfile": 1, "shutil.copytree": 1, "os.removexattr": 0, "os.setxattr": 0}
+_ALWAYS = {"subprocess.Popen": "subprocess", "os.system": "subprocess", "os.posix_spawn": "subprocess",
+           "os.spawn": "subprocess", "os.exec": "subprocess", "os.fork": "subprocess", "os.forkpty": "subprocess",
+           "os.kill": "subprocess", "os.killpg": "subprocess", "pty.spawn": "subprocess",
+           "socket.connect": "network", "socket.sendto": "network", "socket.sendmsg": "network", "socket.bind": "network",
+           "sqlite3.connect": "database", "ctypes.dlopen": "native code"}
+_IN_CALL = {"active": False}  # ctypes is refused only while target code runs: some libraries load it at import
+
+
+def _audit(event, args):
+    if GUARD_WRITES["allowed"] or event[0] not in "ospc":  # cheap exit for the many events we never block
+        return
+    kind = None
+    if event == "open":
+        path, mode, flags = (list(args) + [None, None, None])[:3]
+        writing = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (isinstance(flags, int) and flags & _WRITE_FLAGS)
+        if writing and path not in (os.devnull, None) and not isinstance(path, int) and not _is_scratch(path):
+            kind = "file write"
+    elif event in _PATH_EVENTS:
+        # Every path the operation touches must be scratch: renaming a temp file over a repo file is a repo write.
+        paths = [a for a in args[:2] if isinstance(a, (str, bytes, int, os.PathLike))]
+        if not paths or any(isinstance(p, int) or not _is_scratch(p) for p in paths):
+            kind = "file write"
+    elif event in _ALWAYS:
+        kind = _ALWAYS[event]
+        if kind == "native code" and not _IN_CALL["active"]:
+            kind = None
+        if kind == "network" and event == "socket.connect" and len(args) > 1 and _is_local_socket(args[1]):
+            kind = None
+    elif event == "socket.getaddrinfo" and args and not (args[0] is None or _is_ip_literal(args[0])):
+        kind = "network"
+    if kind:
+        BLOCKS.append(kind)
+        raise GuardBlocked(f"{kind} is blocked during the behavioral diff ({event})")
+
+
+def _is_local_socket(address) -> bool:
+    """A Unix socket path inside the temp folder (multiprocessing helpers, test servers) is not the network."""
+    return isinstance(address, (str, bytes)) and _is_scratch(address)
 
 
 GUARD_WRITES = {"allowed": False}
@@ -210,8 +265,135 @@ def _finish(value):
     return value
 
 
-def _build_args(item, owner):
+# ---- building self for methods (roadmap B3) ----
+# A method needs an instance. Recipes, first that works: a constructor call written in the repo with literal arguments
+# (tests first), a no-argument constructor, then values made from the __init__ type hints. The recipe is chosen once
+# per function and replayed for every input, so each input gets a fresh instance and old and new code get the same one.
+_SAMPLE_DEPTH = 2
+
+
+SELF_VARIANTS = 4
+
+
+def _samples(variant: int):
+    """Plain values per type, a different set for each variant: one instance alone hides bugs that only show for some
+    state (abs(x) + abs(y) and abs(x + y) agree for Point(1, 1))."""
+    import decimal
+    pick = lambda options: options[variant % len(options)]  # noqa: E731
+    return {int: pick([1, -3, 0, 7]), float: pick([1.5, -2.5, 0.0, 2.675]), str: pick(["x", "", "Hello World", "a-b/c"]),
+            bool: pick([True, False]), bytes: pick([b"x", b""]), complex: 1j,
+            decimal.Decimal: decimal.Decimal(pick(["10.00", "-2.675", "0", "0.005"])),
+            _REAL["date"]: pick([_REAL["date"](2024, 1, 15), _REAL["date"](2000, 2, 29)]),
+            _REAL["dt"]: pick([_REAL["dt"](2024, 1, 15, 12, 0), _REAL["dt"](1999, 12, 31, 23, 59, 59)]),
+            _dt.timedelta: pick([_dt.timedelta(hours=1), _dt.timedelta(0)]),
+            list: [], dict: {}, set: set(), tuple: (), frozenset: frozenset()}
+
+
+def _sample(tp, depth: int = 0, variant: int = 0):
+    """One plain, valid-looking value for a type hint. Raises LookupError when there is no sensible value."""
+    import typing
+    if tp is inspect.Parameter.empty or tp is typing.Any:
+        raise LookupError("no type hint")
+    origin = typing.get_origin(tp)
+    if origin is typing.Union or (origin is not None and getattr(origin, "__name__", "") == "UnionType"):
+        for m in [a for a in typing.get_args(tp) if a is not type(None)]:
+            try:
+                return _sample(m, depth, variant)
+            except LookupError:
+                continue
+        return None
+    base = origin if origin is not None else tp
+    for k, v in _samples(variant).items():
+        if base is k:
+            return v
+    if isinstance(base, type) and issubclass(base, enum.Enum):
+        members = list(base)
+        return members[variant % len(members)]
+    if getattr(base, "__name__", "") in ("Sequence", "Iterable", "MutableSequence", "Collection"):
+        return []
+    if getattr(base, "__name__", "") in ("Mapping", "MutableMapping"):
+        return {}
+    if isinstance(base, type) and depth < _SAMPLE_DEPTH:
+        return _synth(base, depth + 1, variant)
+    raise LookupError(f"no value for {tp!r}")
+
+
+def _init_hints(cls) -> tuple:
+    import typing
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError) as exc:
+        raise LookupError(f"no signature: {exc}") from exc
+    try:
+        hints = typing.get_type_hints(cls.__init__)
+    except Exception:  # noqa: BLE001 - unresolvable forward references: fall back to the raw annotations
+        hints = {}
+    params = [p for p in list(sig.parameters.values())[1:] if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+    return params, hints
+
+
+def _synth(cls, depth: int = 0, variant: int = 0):
+    """An instance of cls from its __init__ type hints. Optional parameters keep their defaults."""
+    params, hints = _init_hints(cls)
     pos, kw = [], {}
+    for i, p in enumerate(params):
+        if p.default is not inspect.Parameter.empty:
+            continue
+        # Offset by position, so fields of one type differ from each other (Point(1, -3), not Point(1, 1)).
+        value = _sample(hints.get(p.name, p.annotation), depth, variant + i)
+        if p.kind == p.KEYWORD_ONLY:
+            kw[p.name] = value
+        else:
+            pos.append(value)
+    return cls(*pos, **kw)
+
+
+def _instance_maker(owner, spec):
+    """(make, recipe, failure). make(i) returns a fresh instance for input i, rotating through the instances that
+    could be built, so the inputs see several different states. None and the reason when no recipe worked."""
+    tried = []
+    good_calls = []
+    for call in spec.get("self_calls") or []:
+        def from_call(call=call):
+            pos, kw, _ = _build_args(call, None)
+            return owner(*pos, **kw)
+        try:
+            reset_determinism()
+            from_call()
+            good_calls.append(from_call)
+        except GuardBlocked:
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            tried.append(f"example call: {type(exc).__name__}")
+    if good_calls:
+        return (lambda i: good_calls[i % len(good_calls)]()), f"{len(good_calls)} example call(s) in the repo", ""
+    variants = []
+    for v in range(SELF_VARIANTS):
+        try:
+            reset_determinism()
+            _synth(owner, 0, v)
+            variants.append(v)
+        except GuardBlocked:
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            if not variants and v == 0:
+                tried.append(f"from type hints: {type(exc).__name__}: {str(exc)[:80]}")
+    if variants:
+        return (lambda i: _synth(owner, 0, variants[i % len(variants)])), "values made from the __init__ type hints", ""
+    try:
+        reset_determinism()
+        owner()
+        return (lambda i: owner()), "a no-argument constructor", ""
+    except GuardBlocked:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        tried.append(f"{owner.__name__}(): {type(exc).__name__}: {str(exc)[:80]}")
+    return None, "", f"could not build a {owner.__name__} to call the method on ({'; '.join(tried)})"
+
+
+def _build_args(item, make_self, index: int = 0):
+    """(positional, keyword, watched): watched pairs each argument's name with the object passed, for state after the call."""
+    pos, kw, watched = [], {}, []
     for arg in item["args"]:
         value = lg_codec.decode(arg["value"])
         kind = arg.get("kind", "pos")
@@ -223,9 +405,159 @@ def _build_args(item, owner):
             kw.update(value)
         else:
             kw[arg["name"]] = value
-    if owner is not None and not item.get("has_self"):
-        pos.insert(0, owner())
-    return pos, kw
+        watched.append((arg.get("name") or "?", value))
+    if make_self is not None and not item.get("has_self"):
+        instance = make_self(index)
+        pos.insert(0, instance)
+        watched.insert(0, ("self", instance))
+    return pos, kw, watched
+
+
+_IMMUTABLE = (str, bytes, int, float, complex, bool, type(None), tuple, frozenset, range, type, types.ModuleType,
+              types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+
+
+def _state_after(watched) -> dict | None:
+    """What the call left behind in its mutable arguments and in self (FR-14, roadmap B1).
+
+    Old and new code that return the same value can still differ in what they do to a list or an object they were
+    given. Immutable values cannot change, so they are left out and the result stays small."""
+    state = {}
+    for name, value in watched:
+        if isinstance(value, _IMMUTABLE) or isinstance(value, enum.Enum):
+            continue
+        if not isinstance(value, (list, dict, set, bytearray)) and not isinstance(getattr(value, "__dict__", None), dict):
+            continue
+        try:
+            state[name] = lg_codec.canon(value)
+        except Exception:  # noqa: BLE001 - an object we cannot read is simply not compared
+            continue
+    return state or None
+
+
+# ---- determinism (roadmap B2) ----
+# Old and new code are run with the same random seed, the same clock and the same uuid sequence, reset before every
+# input. Values that came from randomness or the time then agree whenever the code agrees, so such functions can be
+# checked instead of being dropped as non-deterministic. The clock moves forward 1 ms per reading, so code that waits
+# for time to pass still finishes.
+FROZEN_START = 1705320000.0  # 2024-01-15 12:00:00 UTC
+_CLOCK = {"t": FROZEN_START}
+_IDS = random.Random(0)
+DET = {"on": False}
+_REAL = {"dt": _dt.datetime, "date": _dt.date, "time": time.time, "time_ns": time.time_ns,
+         "uuid1": uuid.uuid1, "uuid4": uuid.uuid4}
+
+
+def _tick() -> float:
+    _CLOCK["t"] += 0.001
+    return _CLOCK["t"]
+
+
+def _fake_time():
+    return _tick()
+
+
+def _fake_time_ns():
+    return int(_tick() * 1_000_000_000)
+
+
+def _fake_uuid4():
+    return uuid.UUID(int=_IDS.getrandbits(128), version=4)
+
+
+def _fake_uuid1(node=None, clock_seq=None):
+    return uuid.UUID(int=_IDS.getrandbits(128), version=1)
+
+
+class _SameAsReal(type):
+    """isinstance(real_datetime, FrozenDatetime) stays True, so code that checks types behaves as before."""
+    def __instancecheck__(cls, obj):
+        return isinstance(obj, cls._real)
+
+    def __subclasscheck__(cls, sub):
+        return issubclass(sub, cls._real)
+
+
+class FrozenDatetime(_dt.datetime, metaclass=_SameAsReal):
+    _real = _dt.datetime
+
+    @classmethod
+    def now(cls, tz=None):
+        return _REAL["dt"].fromtimestamp(_tick(), tz)
+
+    @classmethod
+    def utcnow(cls):
+        return _REAL["dt"].fromtimestamp(_tick(), _dt.timezone.utc).replace(tzinfo=None)
+
+    @classmethod
+    def today(cls):
+        return cls.now()
+
+
+class FrozenDate(_dt.date, metaclass=_SameAsReal):
+    _real = _dt.date
+
+    @classmethod
+    def today(cls):
+        return _REAL["date"].fromtimestamp(_tick())
+
+
+_SWAPS = {id(_REAL["dt"]): FrozenDatetime, id(_REAL["date"]): FrozenDate, id(_REAL["time"]): _fake_time,
+          id(_REAL["time_ns"]): _fake_time_ns, id(_REAL["uuid4"]): _fake_uuid4, id(_REAL["uuid1"]): _fake_uuid1}
+_SCANNED: set = set()
+
+
+def install_determinism() -> None:
+    DET["on"] = True
+    _dt.datetime, _dt.date = FrozenDatetime, FrozenDate
+    time.time, time.time_ns = _fake_time, _fake_time_ns
+    uuid.uuid4, uuid.uuid1 = _fake_uuid4, _fake_uuid1
+
+
+# Library modules whose own "now" should follow the frozen clock. Other libraries keep their references: swapping a
+# class some library compares by identity (pydantic, ORMs) could change its behavior instead of fixing the clock.
+TIME_HELPERS = {"django.utils.timezone"}
+
+
+def freeze_references(root_real: str) -> None:
+    """Replace names bound at import time (`from datetime import datetime`, `from uuid import uuid4`) in the
+    project's own modules and in a few framework time helpers."""
+    if not DET["on"]:
+        return
+    for name, mod in list(sys.modules.items()):
+        if name in _SCANNED or mod is None or name in ("lg_codec", "__main__"):
+            continue
+        path = getattr(mod, "__file__", None)
+        if not path:
+            continue
+        if name not in TIME_HELPERS and not os.path.realpath(path).startswith(root_real):
+            continue
+        _SCANNED.add(name)
+        try:
+            items = list(vars(mod).items())
+        except TypeError:
+            continue
+        for attr, value in items:
+            swap = _SWAPS.get(id(value))
+            if swap is not None:
+                try:
+                    setattr(mod, attr, swap)
+                except (AttributeError, TypeError):
+                    pass
+
+
+def reset_determinism() -> None:
+    if not DET["on"]:
+        return
+    _CLOCK["t"] = FROZEN_START
+    _IDS.seed(0)
+    random.seed(0)
+    np = sys.modules.get("numpy")
+    if np is not None:
+        try:
+            np.random.seed(0)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def run_function(spec, root_real):
@@ -254,18 +586,31 @@ def run_function(spec, root_real):
     span = _span(fn)
     hits: set = set()
     trace = _tracer(span, hits) if span else None
-    for item in spec["inputs"]:
-        start = len(BLOCKS)
+    freeze_references(root_real)
+    make_self, recipe, no_self = None, "", ""
+    if owner is not None and not all(i.get("has_self") for i in spec["inputs"]):
         try:
-            pos, kw = _build_args(item, owner)
+            make_self, recipe, no_self = _instance_maker(owner, spec)
+        except GuardBlocked as exc:
+            no_self = f"building a {owner.__name__} was blocked: {exc}"
+    for index, item in enumerate(spec["inputs"]):
+        start = len(BLOCKS)
+        reset_determinism()
+        if owner is not None and make_self is None and not item.get("has_self"):
+            results.append({"outcome": "setup_failed", "detail": no_self})
+            continue
+        try:
+            pos, kw, watched = _build_args(item, make_self, index)
         except BaseException as exc:  # noqa: BLE001
             results.append({"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"})
             continue
         try:
             sys.settrace(trace)
+            _IN_CALL["active"] = True
             try:
                 value = _with_timeout(lambda: _finish(fn(*pos, **kw)))  # noqa: B023
             finally:
+                _IN_CALL["active"] = False
                 sys.settrace(None)
             outcome = {"outcome": "return", "value": lg_codec.canon(value)}
         except GuardBlocked as exc:
@@ -277,55 +622,87 @@ def run_function(spec, root_real):
                 outcome = {"outcome": "exit", "detail": type(exc).__name__}
             else:
                 outcome = {"outcome": "raise", "type": type(exc).__name__, "message": lg_codec._scrub(str(exc))[:500]}
+        if outcome["outcome"] in ("return", "raise"):
+            state = _state_after(watched)
+            if state:
+                outcome["state"] = state
         if len(BLOCKS) > start:
             outcome["blocked_kinds"] = sorted(set(BLOCKS[start:]))
         results.append(outcome)
-    return {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
+    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
+    if recipe:
+        out["self_recipe"] = recipe
+    return out
 
 
-def main(request_path, result_path):
+def setup_django(request) -> str | None:
+    django_settings = request.get("django_settings")
+    if not django_settings:
+        return None
+    try:
+        os.environ["DJANGO_SETTINGS_MODULE"] = django_settings
+        import django
+        django.setup()
+        return None
+    except BaseException as exc:  # noqa: BLE001
+        return f"{django_settings}: {type(exc).__name__}: {exc}"[:400]
+
+
+def prepare(request, with_django: bool = True) -> tuple[str, str | None]:
+    """Blocks, determinism, import path and working folder for one tree. Returns (root_real, Django setup error)."""
     GUARD_WRITES["allowed"] = True
-    with open(request_path) as fh:
-        request = json.load(fh)
     # Before the blocks go in: on Python 3.9 finding the temp folder writes a probe file through open().
     SCRATCH["temp"] = os.path.realpath(tempfile.gettempdir()) + os.sep
     GUARD_WRITES["allowed"] = False
     install_blocks()
+    if request.get("deterministic", True):
+        install_determinism()
     if HERE in sys.path:
         sys.path.remove(HERE)
     if sys.path and sys.path[0] in ("", HERE):
         sys.path.pop(0)
     root = request["root"]
     os.chdir(root)
-    for extra in reversed(request.get("sys_path") or []):
-        sys.path.insert(0, extra)
+    add_paths(request)
     root_real = os.path.realpath(root) + os.sep
     SCRATCH["protect"] = [root_real] + [os.path.realpath(p) + os.sep for p in request.get("protect") or []]
-    setup_error = None
-    django_settings = request.get("django_settings")
-    if django_settings:
-        try:
-            os.environ["DJANGO_SETTINGS_MODULE"] = django_settings
-            import django
-            django.setup()
-        except BaseException as exc:  # noqa: BLE001
-            setup_error = f"{type(exc).__name__}: {exc}"
+    return root_real, (setup_django(request) if with_django else None)
+
+
+def add_paths(request) -> None:
+    for extra in reversed(request.get("sys_path") or []):
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+
+
+def execute(request, root_real: str, setup_error: str | None) -> dict:
+    """Run every requested function. Output of the target code goes nowhere."""
     out = {}
-    real_stdout = sys.stdout
     sys.stdout = open(os.devnull, "w")  # noqa: SIM115 - devnull is allowed by the guard
     if setup_error:
         # Code that does not need the framework can still be run. Code that does will fail to import below,
         # and the runner adds this as the cause.
-        out["__setup_error__"] = f"{django_settings}: {setup_error}"[:400]
+        out["__setup_error__"] = setup_error
     for spec in request["functions"]:
         key = f"{spec['module']}:{spec['qualname']}"
         try:
             out[key] = run_function(spec, root_real)
         except BaseException as exc:  # noqa: BLE001
             out[key] = {"status": "worker_error", "reason": "".join(traceback.format_exception_only(type(exc), exc)).strip()}
+    return out
+
+
+def write_result(out: dict, result_path: str) -> None:
     GUARD_WRITES["allowed"] = True
     with open(result_path, "w") as fh:
         json.dump(out, fh, sort_keys=True)
+
+
+def main(request_path, result_path):
+    with open(request_path) as fh:
+        request = json.load(fh)
+    root_real, setup_error = prepare(request)
+    write_result(execute(request, root_real, setup_error), result_path)
 
 
 if __name__ == "__main__":
