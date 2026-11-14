@@ -303,7 +303,11 @@ def words(s):
 WORDS_NEW = WORDS_OLD.replace("[a-z]+", "[a-z0-9]+")
 
 
-def test_regex_only_edit_detected_by_from_regex_sample(tmp_path, make_cfg):
+def test_regex_only_edit_detected_by_from_regex_sample(tmp_path, make_cfg, monkeypatch):
+    # Draws are a fixed, derandomized count; only the hard time caps can cut them short on a loaded machine (the full
+    # suite on Python 3.10 once). This test is about which strings are drawn, so it lifts the caps.
+    monkeypatch.setattr(inputs, "SEED_BUDGET_S", 30.0)
+    monkeypatch.setattr(inputs, "REGEX_CHILD_MIN_S", 30.0)
     cfg, base, work, targets = two_trees(tmp_path, make_cfg, {"pkg/__init__.py": ""}, "pkg/words.py", WORDS_OLD, WORDS_NEW)
     edit = examples.edit_info(targets[0].source, targets[0].new_source)
     assert edit["regexes"] == [{"fn": "findall", "old": "[a-z]+", "new": "[a-z0-9]+", "flags_old": 0, "flags_new": 0}]
@@ -391,7 +395,7 @@ def test_real_js_to_json_edit_builds_inputs_quickly(tmp_path, make_cfg, variant)
     items, _ = inputs.build({"qualname": t.qualname, "kind": t.kind, "params": t.params}, None, 500, cfg.state_dir, examples=ex)
     took = time.monotonic() - started
     assert ex["edit"]["regexes"], "the pattern change must be seen"
-    assert took < inputs.SEED_BUDGET_S + 3, took
+    assert took < inputs.SEED_BUDGET_S + inputs.REGEX_CHILD_MIN_S + 3, took
     assert items and len(items) <= 500
     # No edit input makes the edited pattern backtrack: an unterminated quote spliced into the tests' long strings would
     # time out in both versions and use up the worker's budget.

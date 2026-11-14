@@ -31,3 +31,12 @@ until the reviewer passes it. Newest entries at the bottom.
 - Task B implemented (176 tests; all five real-miss fixtures detected, 15 of 16 new tests fail on the old
   code). Found while merging D: with B's regex sampling, one end-to-end test took 42 minutes on the real
   js_to_json pattern. Sent back to bound input-building time before review.
+- Task B: time bounded (regex work in a child process, 2 s budget); review REVISE (spliced edit inputs
+  caused a false alarm on an error-message refactor), then PASS in round 2. Committed 89b1149 (182 tests).
+- Task E (carve the arguments callers pass to the edited function) started.
+- Task E implemented (192 tests). On real code: youtube-dl 1 is now detected through a carved call from
+  match_str (with fix tests); tqdm 4 still unreached because every caller instance comes from the only literal
+  constructor in the tests (total=10). Review REVISE: a carved `self` restored from the old code skips
+  `__init__`, causing a false alarm when the edit adds a field; replay counts inflated; slow capture could
+  cause silent timeouts; carved inputs could exceed max_inputs. Also one Task B test flaked on 3.10 under
+  load (regex-sampling time budget). All sent back.

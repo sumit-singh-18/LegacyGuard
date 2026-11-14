@@ -254,6 +254,8 @@ def display(enc, plain_decimal: bool = False) -> str:
         return f"<{enc['cls'].split(':')[-1]}>"
     if t == "repr":
         return v
+    if t == "removed":
+        return "<removed>"
     if t == "exception":
         return f"raises {enc['type']}: {enc['message']}"
     return str(v) if v is not None else f"<{t}>"

@@ -454,7 +454,11 @@ def _object_items(sym: dict, objects: dict, bases: list[dict]) -> list[dict]:
 
 REGEX_CALL_S = 0.05       # one pattern on one string, in the guard's own process
 REGEX_PAIR_BUDGET_S = 1.0
-REGEX_DRAW_S = 1.0        # Hypothesis drawing from one pair of patterns (the child's hard timeout is the outer bound)
+REGEX_DRAW_S = 2.0        # Hypothesis drawing from one pair of patterns (the child's hard timeout is the outer bound)
+# The regex child gets at least this long, whatever is left of the seed budget: starting it (a fresh interpreter that
+# imports Hypothesis) alone takes about a second, more on a busy machine. The draw count is fixed (REGEX_DRAWS,
+# derandomized); the time limits are only hard caps against a pattern Hypothesis or re backtracks on.
+REGEX_CHILD_MIN_S = 3.0
 
 
 class _RegexSlow(BaseException):
@@ -491,7 +495,7 @@ def _regex_outcome(compiled, fn: str, text: str):
     return (m.span(), m.groups()) if m else None
 
 
-SEED_BUDGET_S = 2.0       # all edit-derived input building for one function: object scanning and regex sampling
+SEED_BUDGET_S = 2.0       # all edit-derived input building for one function: object scanning and regex sampling (the regex child gets at least REGEX_CHILD_MIN_S)
 
 
 def _deadline_left(deadline: float | None) -> float:
@@ -734,7 +738,7 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
         # Drop splices on which a changed regex backtracks for too long: old and new would both time out, so they
         # compare nothing and only use up the worker's time (youtube-dl's js_to_json on an unterminated quote).
         screen = list(dict.fromkeys(texts[id(item)] for item in kinds["splice"]))
-        slow, samples = _regex_child(regexes, screen, state_dir, _deadline_left(deadline))
+        slow, samples = _regex_child(regexes, screen, state_dir, max(_deadline_left(deadline), REGEX_CHILD_MIN_S))
         if slow is None:
             kinds["splice"] = []  # not screened in time: none rather than risk them
         elif slow:

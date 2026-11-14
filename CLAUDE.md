@@ -52,7 +52,7 @@ reached, non-deterministic). Comment-, whitespace- and docstring-only edits prod
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 125 tests after the validation-run-1 fixes to "verified"). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 202 tests after Sprint 5). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -115,6 +115,28 @@ reached, non-deterministic). Comment-, whitespace- and docstring-only edits prod
   PRs only, fail-on none).
 - **Fixes:** the worker's `open()` replacement is a callable object (Python 3.10 pathlib bound it as a
   method); socket binds to loopback are allowed (urllib3 probes `::1` at import).
+
+## Sprint 5 (on main, 2026-11-14), from validation run 1 (docs/validation/2026-11-bugsinpy.md)
+
+Built with the researcher/implementer/reviewer agents (.claude/agents/, /sprint-loop); each task passed review.
+- **Honest verified (A):** see the Statuses section. Every changed statement must be reached; callers are gated
+  on the edited functions they reach (worker spec "gate", traced into "gate_lines"); no-op edits skipped.
+- **Harness (C):** `tools/validate.py --fix-tests with|without|both`; "without" uses a synthetic base commit and is
+  the headline number; records every input source behind a detection.
+- **Planted bugs (D):** `runner/mutants.py` adds mutmut-style string operators and a MutRex subset of regex
+  operators (CCR, RM, QC, M2C, CCN, CA); verbose/ignore-case aware; lookaround bodies, backreferences and their
+  groups, and scoped-flag groups left alone; every mutant must compile with the call's flags.
+- **Inputs (B):** examples.py resolves test arguments through variables, loops, parametrize, fixtures and module
+  constants; `lg_codec.Construct` recipes for objects built in tests (decoded only in the worker); edit-derived
+  inputs (source "edit", always weak): literals spliced into strings, dict values, numbers around changed
+  constants, and regex samples from old vs new patterns in a child process under a 2 s budget (3 s floor).
+- **Carving (E):** before the main runs, one baseline run records the arguments callers pass into the edited
+  function (worker `run_capture`); added as source "carved" (not weak), counts on Result and in the note. A
+  recorded `self` is dropped when its class, another class in the file, or an imported base changed
+  (`_class_reshaped`; not covered: `import x; x.Base`, star imports, installed packages).
+- **Methods judged on their own effect on self:** the worker snapshots self before each call and reports only
+  attributes added, changed or removed by the call; `__init__`/`__post_init__`/`__setstate__`/`__new__` are
+  judged on the whole instance. Counterexamples name what changed (`then self.last=1` vs `then self unchanged`).
 
 ## Known gaps still open
 

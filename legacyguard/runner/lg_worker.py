@@ -486,21 +486,76 @@ _IMMUTABLE = (str, bytes, int, float, complex, bool, type(None), tuple, frozense
               types.FunctionType, types.BuiltinFunctionType, types.MethodType)
 
 
-def _state_after(watched) -> dict | None:
+def _watchable(value) -> bool:
+    if isinstance(value, _IMMUTABLE) or isinstance(value, enum.Enum) or isinstance(value, (lg_stubs.FakeConnection, lg_stubs.FakeCursor)):
+        return False
+    return isinstance(value, (list, dict, set, bytearray)) or isinstance(getattr(value, "__dict__", None), dict)
+
+
+# Methods whose job is to set up the instance: their whole result on self is what they do, so it is compared in full.
+_BUILDERS = {"__init__", "__post_init__", "__setstate__", "__new__"}
+
+
+def _self_before(fn, watched) -> object:
+    """canon(self) before the call, for comparing only what the call does to it; None when not needed."""
+    name = getattr(getattr(fn, "__func__", fn), "__name__", "")
+    if name in _BUILDERS:
+        return None
+    for n, value in watched:
+        if n == "self" and _watchable(value):
+            try:
+                return lg_codec.canon(value)
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+_REMOVED = {"t": "removed"}
+
+
+def _effect(before, after):
+    """What a call did to self: the attributes it added, removed (marked) or changed, with their values after the
+    call, in the same shape as canon. None when it did nothing.
+
+    The instance is built differently by old and new code (a field the new __init__ adds), or comes from a recording of
+    the old code. A method is judged on what it does to self, not on how self was built: that is __init__'s own
+    result, compared in full there."""
+    if before == after:
+        return None
+    if not (isinstance(before, dict) and isinstance(after, dict) and before.get("t") == after.get("t") == "obj"
+            and (before.get("state") or {}).get("t") == (after.get("state") or {}).get("t") == "dict"):
+        return after
+    old = {lg_codec._key(k): (k, v) for k, v in before["state"]["v"]}
+    new = {lg_codec._key(k): (k, v) for k, v in after["state"]["v"]}
+    changed = [list(new[k]) for k in new if k not in old or old[k][1] != new[k][1]]
+    changed += [[old[k][0], _REMOVED] for k in old if k not in new]
+    if not changed and before.get("cls") == after.get("cls"):
+        return None
+    changed.sort(key=lambda kv: lg_codec._key(kv[0]))
+    # "effect": an attribute missing here was left as it was, not unset (the counterexample text says "unchanged").
+    return {**after, "state": {"t": "dict", "v": changed}, "effect": True}
+
+
+def _state_after(watched, self_before=None) -> dict | None:
     """What the call left behind in its mutable arguments and in self (FR-14, roadmap B1).
 
     Old and new code that return the same value can still differ in what they do to a list or an object they were
-    given. Immutable values cannot change, so they are left out and the result stays small."""
+    given. Immutable values cannot change, so they are left out and the result stays small. Other arguments are
+    compared in full: both versions build them from the same input. For self, given self_before, only the call's own
+    effect is kept (_effect)."""
     state = {}
     for name, value in watched:
-        if isinstance(value, _IMMUTABLE) or isinstance(value, enum.Enum) or isinstance(value, (lg_stubs.FakeConnection, lg_stubs.FakeCursor)):
-            continue
-        if not isinstance(value, (list, dict, set, bytearray)) and not isinstance(getattr(value, "__dict__", None), dict):
+        if not _watchable(value):
             continue
         try:
-            state[name] = lg_codec.canon(value)
+            canon = lg_codec.canon(value)
         except Exception:  # noqa: BLE001 - an object we cannot read is simply not compared
             continue
+        if name == "self" and self_before is not None:
+            canon = _effect(self_before, canon)
+            if canon is None:
+                continue
+        state[name] = canon
     return state or None
 
 
@@ -737,6 +792,133 @@ def run_function(spec, root_real):
     return out
 
 
+# ---- carving (roadmap 3c, Sprint 5 task E) ----
+# The caller's inputs run on the baseline while a trace hook records the arguments of every call into an edited
+# function, at the call, before the body can change them (test carving, Elbaum et al. 2009). Each recorded call is
+# encoded like a harvested test input, so it replays through _build_args. A call with a value that cannot be encoded
+# is skipped and counted; `self` that cannot be encoded is left out, and the replay builds an instance as usual.
+CAPTURE_MAX = 40
+CAPTURE_INPUTS = 100   # caller inputs run at most, per caller
+_GEN_FLAGS = inspect.CO_GENERATOR | inspect.CO_COROUTINE | getattr(inspect, "CO_ASYNC_GENERATOR", 0)
+
+
+def _encode_frame_call(frame, code, first: str) -> dict:
+    """{"args": [...], "has_self": bool} for the call that opened frame. first: "self" (a method: its instance is kept
+    when it can be encoded), "drop" (a classmethod's cls) or "" (a plain function). Raises lg_codec.Unencodable."""
+    loc = frame.f_locals
+    n = code.co_argcount + code.co_kwonlyargcount
+    names = code.co_varnames[:n]
+    args, has_self = [], False
+    for i, name in enumerate(names):
+        if i == 0 and first == "drop":
+            continue
+        kind = "pos" if i < code.co_argcount else "kw"
+        if i == 0 and first == "self":
+            try:
+                args.append({"name": "self", "kind": "pos", "value": lg_codec.encode_input(loc[name])})
+                has_self = True
+            except Exception:  # noqa: BLE001 - the replay builds an instance instead
+                pass
+            continue
+        args.append({"name": name, "kind": kind, "value": lg_codec.encode_input(loc[name])})
+    if code.co_flags & inspect.CO_VARARGS:
+        name = code.co_varnames[n]
+        args.append({"name": name, "kind": "varargs", "value": lg_codec.encode_input(list(loc[name]))})
+    if code.co_flags & inspect.CO_VARKEYWORDS:
+        name = code.co_varnames[n + (1 if code.co_flags & inspect.CO_VARARGS else 0)]
+        args.append({"name": name, "kind": "varkw", "value": lg_codec.encode_input(dict(loc[name]))})
+    return {"args": args, "has_self": has_self}
+
+
+def _capture_tracer(wanted: dict, state: dict):
+    """A global trace function recording calls into the code objects in wanted ({code: (key, first, limit)}) into
+    state["calls"][key] (distinct by encoded value) and counting unencodable ones in state["unstored"][key]."""
+    resumed: list = []  # generator frames already recorded: a resume is not a new call
+
+    def enter(frame, event, arg):
+        hit = wanted.get(frame.f_code)
+        if hit is None or event != "call":
+            return None
+        key, first, limit = hit
+        calls = state["calls"][key]
+        if len(calls) >= limit:
+            return None
+        if frame.f_code.co_flags & _GEN_FLAGS:
+            if any(f is frame for f in resumed):
+                return None
+            resumed.append(frame)
+        try:
+            item = _encode_frame_call(frame, frame.f_code, first)
+        except Exception:  # noqa: BLE001 - Unencodable, or a value whose pickling fails: this call is not replayable
+            state["unstored"][key] += 1  # calls, repeats included: a value that cannot be encoded cannot be compared either
+            return None
+        sig = json.dumps(item, sort_keys=True)
+        if sig not in state["seen"][key]:
+            state["seen"][key].add(sig)
+            calls.append(item)
+        return None
+    return enter
+
+
+def _capture_target(entry):
+    """(code object, first-argument rule) of an edited function, or None when it has no Python code to watch."""
+    fn, owner, _ = _resolve(entry["module"], entry["qualname"])
+    if fn is None:
+        return None
+    first = "self" if owner is not None else ("drop" if inspect.ismethod(fn) else "")
+    target = inspect.unwrap(getattr(fn, "__func__", fn))
+    code = getattr(target, "__code__", None)
+    return (code, first) if code is not None else None
+
+
+def run_capture(spec, root_real) -> dict:
+    """Run a caller's inputs and record the calls it makes into the edited functions in spec["capture"]
+    ([{"module", "qualname", "max"}]). Returns {"status", "captured": {key: [call, ...]}, "unstored": {key: n}}."""
+    keys = [f"{e['module']}:{e['qualname']}" for e in spec["capture"]]
+    state = {"calls": {k: [] for k in keys}, "unstored": {k: 0 for k in keys}, "seen": {k: set() for k in keys}}
+    out = {"status": "ran", "captured": state["calls"], "unstored": state["unstored"]}
+    try:
+        fn, owner, reason = _resolve(spec["module"], spec["qualname"])
+    except BaseException as exc:  # noqa: BLE001 - nothing captured; the main runs report the import problem
+        return {**out, "status": "import_error", "reason": f"{type(exc).__name__}: {exc}"}
+    if fn is None:
+        return {**out, "status": "uncallable", "reason": reason}
+    wanted = {}
+    for key, entry in zip(keys, spec["capture"]):
+        try:
+            found = _capture_target(entry)
+        except BaseException:  # noqa: BLE001
+            found = None
+        if found is not None:
+            wanted[found[0]] = (key, found[1], int(entry.get("max") or CAPTURE_MAX))
+    if not wanted:
+        return out
+    freeze_references(root_real)
+    if STUBS["on"]:
+        lg_stubs.patch_loaded()
+    make_self = None
+    if owner is not None and not all(i.get("has_self") for i in spec["inputs"]):
+        try:
+            make_self, _, _ = _instance_maker(owner, spec)
+        except GuardBlocked:
+            make_self = None
+    trace = _capture_tracer(wanted, state)
+    deadline = time.monotonic() + min(FUNCTION_BUDGET_S, float(spec.get("budget") or FUNCTION_BUDGET_S))
+    timeouts = 0
+    for index, item in enumerate(spec["inputs"][:CAPTURE_INPUTS]):
+        if all(len(state["calls"][k]) >= lim for k, _, lim in wanted.values()):
+            break
+        left = deadline - time.monotonic()
+        if left <= 0.01 or timeouts >= 2:
+            break
+        if owner is not None and make_self is None and not item.get("has_self"):
+            break
+        # One slow call must not run past the caller's share of the recording time: the limit is what is left of it.
+        got = _call_once(fn, item, make_self, index, trace, min(SHORT_TIMEOUT_S if timeouts else CALL_TIMEOUT_S, left))
+        timeouts += got.get("outcome") == "timeout"
+    return out
+
+
 def _gate_spec(spec, root_real):
     """(real path, line numbers) for spec["gate"] = {"file": path relative to the root, "ranges": [[first, last], ...]}."""
     g = spec.get("gate") or {}
@@ -755,6 +937,7 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
         pos, kw, watched = _build_args(item, make_self, index)
     except BaseException as exc:  # noqa: BLE001
         return {"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"}
+    self_before = _self_before(fn, watched)
     try:
         sys.settrace(trace)
         _IN_CALL["active"] = True
@@ -776,7 +959,7 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
         else:
             outcome = {"outcome": "raise", "type": type(exc).__name__, "message": lg_codec._scrub(str(exc))[:500]}
     if outcome["outcome"] in ("return", "raise"):
-        state = _state_after(watched)
+        state = _state_after(watched, self_before)
         if state:
             outcome["state"] = state
         if lg_stubs.EVENTS:
@@ -902,7 +1085,7 @@ def execute(request, root_real: str, setup_error: str | None) -> dict:
     for spec in request["functions"]:
         key = f"{spec['module']}:{spec['qualname']}"
         try:
-            out[key] = run_function(spec, root_real)
+            out[key] = run_capture(spec, root_real) if spec.get("capture") else run_function(spec, root_real)
         except BaseException as exc:  # noqa: BLE001
             out[key] = {"status": "worker_error", "reason": "".join(traceback.format_exception_only(type(exc), exc)).strip()}
     return out

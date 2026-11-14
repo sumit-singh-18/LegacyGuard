@@ -82,6 +82,12 @@ class Result:
     statements_total: int = 0       # 0 when there was no gate to judge by
     callees: list = field(default_factory=list)  # for a caller: the edited functions whose statements it was judged by
     unreached_note: str = ""        # a caller's difference although its inputs ran none of the changed statements
+    carved_captured: int = 0        # distinct calls into this function recorded from its callers on the baseline (Sprint 5 task E)
+    carved_added: int = 0           # of those, added to the inputs (not already among them, within max_inputs)
+    carved_already: int = 0         # recorded calls that were already among the inputs
+    carved_replayed: int = 0        # added calls that ran to a return or an exception in both versions
+    carved_unstored: int = 0        # calls (repeats included) not recorded because a value could not be encoded
+    carved_note: str = ""           # why no calls were recorded, when the recording run failed or timed out
 
     @property
     def subject(self) -> str:
@@ -283,13 +289,66 @@ def _show_io(event: dict) -> str:
     return f"HTTP {event.get('method')} {event.get('url')}{extra}"[:240]
 
 
+SHOWN_VALUE = 60   # characters of one value in a state difference
+SHOWN_ITEMS = 3    # differing attributes, keys or positions shown per name
+
+
+def _short(enc) -> str:
+    text = "<removed>" if enc.get("t") == "removed" else lg_codec.display(enc, plain_decimal=True)
+    return text if len(text) <= SHOWN_VALUE else text[:SHOWN_VALUE - 1] + "…"
+
+
+def _keyed(enc) -> dict | None:
+    """{shown key: value} for an object's attributes or a dict's items; None for other shapes."""
+    if enc.get("t") == "obj" and (enc.get("state") or {}).get("t") == "dict":
+        pairs = enc["state"]["v"]
+    elif enc.get("t") == "dict":
+        pairs = enc["v"]
+    else:
+        return None
+    return {lg_codec.display(k): v for k, v in pairs}
+
+
+def _state_parts(name: str, mine: dict | None, theirs: dict | None) -> list[str]:
+    """What one argument (or self) was left as by this version, where it differs from the other version: the
+    attributes, keys or positions that differ, each value cut short. For self as a call's effect (the "effect" mark),
+    an attribute the call did not touch is "unchanged"; a self the call did not touch at all is "self unchanged"."""
+    if mine is None:
+        return [f"{name} unchanged" if name == "self" else f"{name} not readable"]
+    if theirs is None:
+        theirs = {}
+    shown_more = lambda parts, total: parts[:SHOWN_ITEMS] + ([f"+{total - SHOWN_ITEMS} more"] if total > SHOWN_ITEMS else [])  # noqa: E731
+    a = _keyed(mine)
+    b = _keyed(theirs) if theirs else ({} if a is not None else None)
+    if a is not None and b is not None and mine.get("cls") == theirs.get("cls", mine.get("cls")):
+        obj = mine.get("t") == "obj"
+        keys = sorted(k for k in set(a) | set(b) if _key(a.get(k) or {}) != _key(b.get(k) or {}))
+        if keys:
+            missing = "unchanged" if mine.get("effect") or not theirs else ("not set" if obj else "absent")
+            parts = []
+            for k in keys:
+                label = f"{name}.{k.strip(chr(39))}" if obj and k.startswith("'") else f"{name}[{k}]"
+                if k not in a:
+                    parts.append(f"{label} {missing}")
+                elif a[k].get("t") == "removed":
+                    parts.append(f"{label} removed")
+                else:
+                    parts.append(f"{label}={_short(a[k])}")
+            return shown_more(parts, len(parts))
+    if mine.get("t") in ("list", "tuple") and theirs.get("t") == mine.get("t") and len(mine["v"]) == len(theirs.get("v") or []):
+        idx = [i for i, (x, y) in enumerate(zip(mine["v"], theirs["v"])) if _key(x) != _key(y)]
+        if idx:
+            return shown_more([f"{name}[{i}]={_short(mine['v'][i])}" for i in idx], len(idx))
+    return [f"{name}={_short(mine)}"]
+
+
 def _show_outcome(o: dict, other: dict | None = None) -> str:
     """The outcome as people read it. State is shown only for names whose state differs from the other version."""
     text = lg_codec.display(o["v"], plain_decimal=True) if o["k"] == "return" else f"raises {o['type']}: {o['message']}"
     mine, theirs = o.get("s") or {}, (other or {}).get("s") or {}
     changed = [n for n in sorted(set(mine) | set(theirs)) if _key(mine.get(n) or {}) != _key(theirs.get(n) or {})]
     if changed:
-        parts = [f"{n}={lg_codec.display(mine[n], plain_decimal=True)}" if n in mine else f"{n} not readable" for n in changed]
+        parts = [p for n in changed for p in _state_parts(n, mine.get(n), theirs.get(n))]
         text += ", then " + ", ".join(parts)
     mine_io, theirs_io = o.get("io") or [], (other or {}).get("io") or []
     if _key({"x": mine_io}) != _key({"x": theirs_io}):
@@ -370,6 +429,11 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         r.reason = {"uncallable": "a nested function cannot be called directly", "import_blocked": f"importing the module {bad.get('reason')}"}.get(
             bad["status"], f"could not run: {bad.get('reason') or bad['status']}")
         return r
+    replayed = set()
+    for item, oa, on in zip(items, a["results"], n["results"]):
+        if item.get("source") == "carved" and oa.get("outcome") in ("return", "raise") and on.get("outcome") in ("return", "raise"):
+            replayed.add(item.get("carved_id"))
+    r.carved_replayed = len(replayed)
     blocked: set[str] = set()
     setup_failures = 0
     setup_detail = ""
@@ -432,9 +496,9 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         if target.via and r.statements_total and not r.statements_reached:
             r.unreached_note = (f"The inputs never ran the changed statements of {callee_names(target.callees)} (reached 0 of {r.statements_total}), "
                                 "so this difference may come from elsewhere: an earlier edit this session, another function, or non-determinism")
-        # The example a person reads first: from real tests, then the repo's own examples, ordinary values before
+        # The example a person reads first: from real tests or real calls recorded from callers, then the repo's own examples, ordinary values before
         # NaN and infinity, a returned value before an error, and short before long.
-        r.differences.sort(key=lambda d: (d["noise"], d["source"] != "tests", d["source"] != "examples", d["special"],
+        r.differences.sort(key=lambda d: (d["noise"], d["source"] not in ("tests", "carved"), d["source"] != "examples", d["special"],
                                           d["before_raw"]["k"] != "return" or d["after_raw"]["k"] != "return",
                                           len(d["call"]) + len(d["before"]) + len(d["after"])))
         r.only_special = all(d["special"] for d in r.differences)
@@ -527,6 +591,24 @@ def _tree_specs(specs: list[dict], runnable: dict, old: bool) -> list[dict]:
         ranges = (t.callee_old_gate if old else t.callee_new_gate) if t.via and t.callee_file else []
         out.append({**spec, "gate": {"file": t.callee_file, "ranges": ranges}} if ranges else spec)
     return out
+
+
+def carved_text(r: Result) -> str:
+    """What recording the callers' calls gave this function (Sprint 5 task E), or '' when it had no callers to record."""
+    if r.carved_note:
+        return r.carved_note[:1].upper() + r.carved_note[1:]
+    unstored = f"{r.carved_unstored} calls (repeats included) had a value that could not be stored" if r.carved_unstored else ""
+    if not r.carved_captured:
+        return f"No call from its callers could be recorded: {unstored}" if unstored else ""
+    parts = [f"{r.carved_already} already among its inputs"] if r.carved_already else []
+    cut = r.carved_captured - r.carved_already - r.carved_added
+    if cut > 0:
+        parts.append(f"{cut} left out at the input limit")
+    if r.carved_unstored:
+        parts.append(f"{r.carved_unstored} more calls, repeats included, had a value that could not be stored")
+    extra = f" ({'; '.join(parts)})" if parts else ""
+    return (f"{r.carved_captured} calls recorded from its callers on the code before the edit{extra}; "
+            f"{r.carved_replayed} of the {r.carved_added} added ran to a return or an exception in both versions")
 
 
 def confidence_text(r: Result) -> str:
@@ -633,20 +715,286 @@ def _self_calls(cfg, conn, t: Target, work_root: str) -> list[dict]:
     return out
 
 
-def _with_mutants(specs: list[dict], runnable: dict, limit: int) -> list[dict]:
+def _with_mutants(specs: list[dict], runnable: dict, limit: int, old_root: str | None = None) -> list[dict]:
     """The specs for the first baseline run, with planted bugs for each edited function (roadmap B6). Only that run
-    gets them: the mutants are compared with the old function's own results, so the other runs stay as fast as before."""
+    gets them: the mutants are compared with the old function's own results, so the other runs stay as fast as before.
+    old_root: the baseline tree, whose module text tells the planner about `from re import sub` style aliases."""
     if limit <= 0:
         return specs
     out = []
+    texts: dict = {}
     for spec in specs:
         t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
         if t.kind == "route":
             out.append(spec)
             continue
-        plan = mutants.generate(t.source, t.source_start, t.old_gate, limit) if t.source and t.source_start and not t.via else None
+        plan = None
+        if t.source and t.source_start and not t.via:
+            if t.file not in texts:
+                try:
+                    texts[t.file] = (Path(old_root) / t.file).read_text(errors="replace") if old_root else None
+                except (OSError, ValueError):
+                    texts[t.file] = None
+            try:
+                plan = mutants.generate(t.source, t.source_start, t.old_gate, limit, module_source=texts[t.file])
+            except Exception:  # noqa: BLE001 - planted bugs are a bonus: without them the pass has no confidence score
+                plan = None
         out.append({**spec, "mutants": plan} if plan else spec)
     return out
+
+
+MAX_CARVED = 40          # recorded calls per edited function, distinct by encoded value
+CARVE_SHARE = 0.25       # of the per-run time limit; the main runs get what the capture pass left
+CARVE_CALLER_INPUTS = 100  # caller inputs sent to the capture pass (the worker stops early once the cap is reached)
+
+
+def _carve_plan(specs: list[dict], runnable: dict) -> tuple[list[dict], dict]:
+    """(capture specs for the baseline, {edited key: [caller keys]}). A capture spec is a caller's own spec with the
+    edited functions it reaches to watch. Only edited functions in this check with a caller in this check count."""
+    edited = {key: t for key, (t, _) in runnable.items() if not t.via and t.kind != "route"}
+    by_caller: dict[str, list[dict]] = {}
+    for key, (t, _) in runnable.items():
+        if not t.via or not t.callee_file:
+            continue
+        for ekey, e in edited.items():
+            if e.file == t.callee_file and e.qualname in t.callees:
+                by_caller.setdefault(key, []).append({"module": ekey.split(":", 1)[0], "qualname": e.qualname, "max": MAX_CARVED})
+    out = []
+    for spec in specs:
+        key = f"{spec['module']}:{spec['qualname']}"
+        if key in by_caller and spec.get("kind") != "http":
+            out.append({k: v for k, v in spec.items() if k not in ("mutants", "gate")} | {"inputs": spec["inputs"][:CARVE_CALLER_INPUTS], "capture": by_caller[key]})
+    return out, by_caller
+
+
+def _carved_items(results: list[dict], key: str) -> tuple[list[dict], int]:
+    """(the distinct calls recorded for one edited function across its callers' capture results, as inputs without an
+    id yet; calls skipped because a value could not be encoded, repeats included)."""
+    items, seen, skipped = [], set(), 0
+    for res in results:
+        for call in (res.get("captured") or {}).get(key, []):
+            sig = _key({"a": call.get("args"), "s": bool(call.get("has_self"))})
+            if sig in seen or len(items) >= MAX_CARVED:
+                continue
+            seen.add(sig)
+            items.append({"args": call["args"], "has_self": bool(call.get("has_self")), "source": "carved"})
+        skipped += int((res.get("unstored") or {}).get(key, 0) or 0)
+    return items, skipped
+
+
+def _without_self(item: dict) -> dict:
+    """The input with its recorded `self` left out, so the worker builds a fresh instance for it."""
+    if not item.get("has_self"):
+        return item
+    return {**item, "args": [a for a in item["args"] if a.get("name") != "self"], "has_self": False}
+
+
+def _merge_carved(items: list[dict], carved: list[dict], max_inputs: int) -> tuple[list[dict], dict]:
+    """(inputs, counts). Carved calls go after declared examples and inputs harvested from tests, ahead of everything
+    else; the whole stays within max_inputs, and what does not fit is cut from the carved calls, never from the head.
+    Calls already among the inputs are not repeated. Each carved call that is added gets a carved_id.
+    counts: {"already": calls already among the inputs, "cut": calls left out at the input limit, "added": calls added}."""
+    have = {_key({"a": i.get("args"), "s": bool(i.get("has_self"))}) for i in items}
+    fresh, seen = [], set()
+    for c in carved:
+        sig = _key({"a": c["args"], "s": bool(c.get("has_self"))})
+        if sig not in have and sig not in seen:
+            seen.add(sig)
+            fresh.append(c)
+    already = len(carved) - len(fresh)
+    k = 0
+    while k < len(items) and (items[k].get("expect") is not None or items[k].get("source") == "tests"):
+        k += 1
+    head, rest = items[:k], items[k:]
+    room = max(0, max_inputs - len(head))
+    added = [{**c, "carved_id": i} for i, c in enumerate(fresh[:room])]
+    merged = head + added + rest[:max(0, max_inputs - len(head) - len(added))]
+    return merged, {"already": already, "cut": len(fresh) - len(added), "added": len(added)}
+
+
+def _parsed(cache: dict, root: str, rel: str):
+    """(source, ast tree) of a file in a tree, parsed once per check; None if it cannot be read or parsed."""
+    key = (root, rel)
+    if key not in cache:
+        import ast
+        try:
+            text = (Path(root) / rel).read_text(errors="replace")
+            cache[key] = (text, ast.parse(text))
+        except (OSError, ValueError, SyntaxError, RecursionError, MemoryError):
+            cache[key] = None
+    return cache[key]
+
+
+def _class_texts(cache: dict, root: str, rel: str) -> dict | None:
+    """{class qualname: its source text, with each method's text as a separate entry under "Class.method"}."""
+    got = _parsed(cache, root, rel)
+    if got is None:
+        return None
+    import ast
+    text, tree = got
+    out: dict = {}
+
+    def walk(nodes, prefix):
+        for n in nodes:
+            if isinstance(n, ast.ClassDef):
+                q = f"{prefix}{n.name}"
+                out[q] = ast.get_source_segment(text, n) or ""
+                for m in n.body:
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        out[f"{q}.{m.name}"] = ast.get_source_segment(text, m) or ""
+                walk(n.body, q + ".")
+    walk(tree.body, "")
+    return out
+
+
+def _imported_bases(cache: dict, root: str, rel: str, cls: str) -> list[tuple[str, str]]:
+    """[(file, class name)] for the bases of cls defined in the same file or imported with `from x import Name` from a
+    module in the same tree. Bases reached any other way (module attributes, star imports, installed packages) are not followed."""
+    got = _parsed(cache, root, rel)
+    if got is None:
+        return []
+    import ast
+    _, tree = got
+    node = next((n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls.split(".")[0]), None)
+    for part in cls.split(".")[1:]:
+        node = next((n for n in (node.body if node else []) if isinstance(n, ast.ClassDef) and n.name == part), None)
+    if node is None:
+        return []
+    names = {b.id for b in node.bases if isinstance(b, ast.Name)}
+    # Bases defined in the same file: compared already, but their own imported bases are followed from there.
+    out = [(rel, n.name) for n in tree.body if isinstance(n, ast.ClassDef) and n.name in names]
+    for imp in tree.body:
+        if not isinstance(imp, ast.ImportFrom):
+            continue
+        for alias in imp.names:
+            if (alias.asname or alias.name) not in names:
+                continue
+            parts = (imp.module or "").split(".") if imp.module else []
+            if imp.level:
+                base = Path(rel).parent
+                for _ in range(imp.level - 1):
+                    base = base.parent
+                candidates = [base.joinpath(*parts)] if parts else [base]
+            else:
+                # Absolute imports resolve from the tree root, the file's folder, and the import root of the file's
+                # package (src layouts: src/pkg/base.py is imported as pkg.base).
+                try:
+                    pkg_root = module_for(rel, root)[1]
+                except Exception:  # noqa: BLE001
+                    pkg_root = ""
+                candidates = ([Path(*parts), Path(rel).parent.joinpath(*parts)] +
+                              ([Path(pkg_root).joinpath(*parts)] if pkg_root else [])) if parts else []
+            for c in candidates:
+                for f in (f"{c}.py", f"{c}/__init__.py"):
+                    if (Path(root) / f).is_file():
+                        out.append((f, alias.name))
+                        break
+                else:
+                    continue
+                break
+    return out
+
+
+def _class_reshaped(baseline_root: str, work_root: str, t: Target, cache: dict | None = None) -> bool:
+    """True if a `self` recorded on the baseline may have a shape no instance of the new code has. pickle skips
+    __init__, so such an input could show a difference real calls never do (a field the new __init__ adds).
+
+    Conservative: true when the class that owns method t changed anywhere other than in t itself, when any other class
+    in the same file changed (a base class, or a class whose instances end up in self), or when a base class imported
+    with `from x import Base` from the same tree changed (followed up to three steps). A base class reached another way
+    (`import x` then `x.Base`, a star import, an installed package) is not covered."""
+    if t.kind != "method" or "." not in t.qualname:
+        return False
+    cache = {} if cache is None else cache
+    cls = t.qualname.rsplit(".", 1)[0]
+    old, new = _class_texts(cache, baseline_root, t.file), _class_texts(cache, work_root, t.file)
+    if old is None or new is None or cls not in old or cls not in new:
+        return True
+
+    def rest(texts: dict) -> dict:
+        out = {}
+        for q, text in texts.items():
+            if q == t.qualname:
+                continue
+            out[q] = text.replace(texts.get(t.qualname, "\0"), "", 1) if q == cls else text
+        return out
+    if rest(old) != rest(new):
+        return True
+    todo, seen = [(t.file, cls, 0)], set()
+    while todo:
+        rel, name, depth = todo.pop()
+        if depth >= 3 or (rel, name) in seen:
+            continue
+        seen.add((rel, name))
+        for f, base in _imported_bases(cache, work_root, rel, name):
+            a, b = _class_texts(cache, baseline_root, f), _class_texts(cache, work_root, f)
+            if a is None or b is None or a.get(base) != b.get(base) or \
+                    any(a.get(q) != b.get(q) for q in set(a) | set(b) if q.startswith(base + ".")):
+                return True
+            todo.append((f, base, depth + 1))
+    return False
+
+
+def _carve(cfg, py: str, baseline_root: str, sys_path: list[str], specs: list[dict], runnable: dict, limit_s: float,
+           warm_names: list[str], max_inputs: int, reshaped: set) -> dict:
+    """The capture pass (Sprint 5 task E): run the callers' inputs on the baseline, record the calls they make into the
+    edited functions, and put those calls into the edited functions' inputs as source "carved". A recorded `self` is
+    left out for a method whose class changed outside the method (reshaped keys, see _class_reshaped).
+
+    Returns {edited key: {"captured", "unstored", "already", "cut", "added", "note"}}, with "__elapsed__": seconds the
+    pass took. Fails open: any problem leaves the inputs as they were, and the note says why nothing was recorded."""
+    started = time.monotonic()
+    out: dict = {}
+    try:
+        capture_specs, by_caller = _carve_plan(specs, runnable)
+        if not capture_specs:
+            return {}
+        edited_keys = list(dict.fromkeys(f"{e['module']}:{e['qualname']}" for entries in by_caller.values() for e in entries))
+        per_caller = max(0.5, limit_s * 0.6 / len(capture_specs))
+        capture_specs = [{**c, "budget": per_caller} for c in capture_specs]
+        got = _run_worker(cfg, py, baseline_root, sys_path, capture_specs, limit_s, warm_names)
+        if not got or FAILED in got:
+            why = (got or {}).get(FAILED) or "no result"
+            note = f"the run that records its callers' calls stopped after {time.monotonic() - started:.1f} s ({why}), so none were recorded"
+            out = {k: {"captured": 0, "unstored": 0, "already": 0, "cut": 0, "added": 0, "note": note} for k in edited_keys}
+            return out
+        for ekey in edited_keys:
+            callers = [got.get(c) or {} for c, entries in by_caller.items() if any(f"{e['module']}:{e['qualname']}" == ekey for e in entries)]
+            items, skipped = _carved_items(callers, ekey)
+            info = {"captured": len(items), "unstored": skipped, "already": 0, "cut": 0, "added": 0, "note": ""}
+            if items:
+                if ekey in reshaped:
+                    items = [_without_self(i) for i in items]
+                spec = next(s for s in specs if f"{s['module']}:{s['qualname']}" == ekey)
+                spec["inputs"], counts = _merge_carved(spec["inputs"], items, max_inputs)
+                info.update(counts)
+            out[ekey] = info
+        return out
+    except Exception:  # noqa: BLE001 - carving is a bonus; the check runs on the inputs it had
+        return out
+    finally:
+        if out:
+            out["__elapsed__"] = time.monotonic() - started
+
+
+def _finish_specs(specs: list[dict], runnable: dict, results: dict) -> tuple[list[dict], dict]:
+    """Specs ready to run: an edited function that is still without inputs is untested, and a method with few inputs
+    has them repeated so each way of building its instance runs."""
+    out_specs, out_runnable = [], {}
+    for spec in specs:
+        key = f"{spec['module']}:{spec['qualname']}"
+        t, _ = runnable[key]
+        items = spec["inputs"]
+        if not items:
+            results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no inputs could be built for its signature")
+            continue
+        if t.kind == "method" and len(items) < SELF_VARIANTS:
+            # Each input runs on a differently built instance, so a method with few inputs is repeated to see each one.
+            items = [dict(item) for item in (items * SELF_VARIANTS)[:SELF_VARIANTS]]
+            spec = {**spec, "inputs": items}
+        out_specs.append(spec)
+        out_runnable[key] = (t, items)
+    return out_specs, out_runnable
 
 
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
@@ -687,13 +1035,12 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             continue
         if t.declared:
             items = [dict(i) for i in t.declared] + items
-        if not items:
+        if not items and not (not t.via and any(c.via and c.callee_file == t.file and t.qualname in c.callees for c in targets[:MAX_FUNCTIONS])):
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no inputs could be built for its signature")
             continue
+        # An edited function with callers in this check stays even without inputs of its own: the calls its callers
+        # make may give it some (carving, below).
         module, sys_rel = module_for(t.file, work_root)
-        if t.kind == "method" and 0 < len(items) < SELF_VARIANTS:
-            # Each input runs on a differently built instance, so a method with few inputs is repeated to see each one.
-            items = [dict(item) for item in (items * SELF_VARIANTS)[:SELF_VARIANTS]]
         spec = {"module": module, "qualname": t.qualname, "inputs": items}
         self_calls = _self_calls(cfg, conn, t, work_root)
         if self_calls:
@@ -703,6 +1050,7 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         roots.add(sys_rel)
     for t in targets[MAX_FUNCTIONS:]:
         results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason=f"more than {MAX_FUNCTIONS} functions changed at once")
+    carved: dict = {}  # edited function's key -> (calls recorded from its callers, calls skipped as unencodable)
     if specs:
         def paths_for(base: str) -> list[str]:
             ordered = list(dict.fromkeys([*extra, *sorted(roots), ""]))
@@ -710,8 +1058,24 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         deadline = float(bd["timeout_s"])
         use_self = bool(bd.get("self_diff", True))
         warm_names = warm.third_party_imports(work_root, sorted({t.file for t, _ in runnable.values()}), extra)
+        # A `self` recorded on the baseline (from tests or from callers) is unpickled without __init__, so it keeps the
+        # old class's shape. When the class changed outside the method, such inputs get a freshly built instance instead.
+        parse_cache: dict = {}
+        reshaped = {key for key, (t, _) in runnable.items() if _class_reshaped(baseline_root, work_root, t, parse_cache)}
+        for spec in specs:
+            if f"{spec['module']}:{spec['qualname']}" in reshaped:
+                spec["inputs"] = [_without_self(i) for i in spec["inputs"]]
+        carved = _carve(cfg, py, baseline_root, paths_for(baseline_root), specs, runnable, deadline * CARVE_SHARE, warm_names,
+                        int(bd["max_inputs"]), reshaped)
+        recorded_s = carved.pop("__elapsed__", 0.0)
+        if any(info["added"] for info in carved.values()):
+            # Carved inputs to run: the recording time comes out of the same limit, and the three runs get what it left.
+            # A recording run that gave nothing leaves the limit as it was.
+            deadline = max(deadline - recorded_s, deadline * (1 - CARVE_SHARE))
+        specs, runnable = _finish_specs(specs, runnable, results)
+    if specs:
         specs_old = _tree_specs(specs, runnable, old=True)
-        specs_a = _with_mutants(specs_old, runnable, int(bd.get("mutants", 8)))
+        specs_a = _with_mutants(specs_old, runnable, int(bd.get("mutants", 8)), baseline_root)
         specs_n = _tree_specs(specs, runnable, old=False)
         with cf.ThreadPoolExecutor(3) as pool:
             fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs_a, deadline, warm_names)
@@ -723,7 +1087,11 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         setup_note = next((x["__setup_error__"] for x in (n, a) if x and "__setup_error__" in x), None)
         for key, (t, items) in runnable.items():
             if failed:
-                results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, inputs_tried=len(items), reason=failed)
+                reason = failed
+                if failed == "timed out" and deadline < float(bd["timeout_s"]):
+                    reason = (f"timed out: the runs had {deadline:.0f} s of the {float(bd['timeout_s']):.0f} s limit, after "
+                              f"{recorded_s:.1f} s spent recording its callers' calls")
+                results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, inputs_tried=len(items), reason=reason)
                 continue
             results[t.qualname] = compare_one(t, items, a.get(key) if a else None, b.get(key) if b else None, n.get(key) if n else None, use_self)
             if setup_note and results[t.qualname].status == UNTESTED:
@@ -731,6 +1099,11 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
     for t in targets:
         results[t.qualname].via, results[t.qualname].via_file = t.via, t.via_file
         results[t.qualname].callees = list(t.callees)
+    for key, info in carved.items():
+        r = results.get(key.split(":", 1)[1])
+        if r is not None:
+            r.carved_captured, r.carved_unstored, r.carved_note = info["captured"], info["unstored"], info["note"]
+            r.carved_added, r.carved_already = info["added"], info["already"]
     return [results[t.qualname] for t in targets]
 
 
@@ -745,11 +1118,14 @@ def format_note(results: list[Result]) -> str:
             io = (f"Database and HTTP calls were answered by stand-ins (no rows, HTTP 200 with an empty body), so for "
                   f"{r.inputs_with_io} inputs what agreed is the calls made, not their real results. ") if r.inputs_with_io else ""
             reach = f"; the inputs {reached_text(r)}" if r.statements_total else ""
+            carved = carved_text(r)
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
-                         f"({r.inputs_completed} returned a value{reach}). " + (f"{conf}. " if conf else "") + io +
+                         f"({r.inputs_completed} returned a value{reach}). " + (f"{carved}. " if carved else "") + (f"{conf}. " if conf else "") + io +
                          "The inputs are the repo's own examples plus guesses, so this is not a proof; values it did not try can still differ.")
         elif r.status == UNTESTED:
-            lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. Nothing is known about this edit from execution.")
+            carved = carved_text(r)
+            lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. " + (f"{carved}. " if carved else "") +
+                         "Nothing is known about this edit from execution.")
     if len(own) > 4:
         lines.append(f"+{len(own) - 4} more functions; /legacyguard:status lists them.")
     if callers:
@@ -774,6 +1150,8 @@ def format_wake(result: Result, finding_id: str) -> str:
         lines.append(f"This function was not edited. It {result.via}, which was edited in {result.via_file}.")
     for d in result.differences[:MAX_SHOWN]:
         lines.append(f"{d['call']}  before {d['before']}  after {d['after']}  [{d['source']}]")
+    if any(d.get("source") == "carved" for d in result.differences[:MAX_SHOWN]):
+        lines.append("Inputs marked [carved] are calls a caller of this function made on the code before the edit, recorded and replayed.")
     if result.only_special:
         lines.append("Every differing input contains NaN or infinity. On the ordinary values tried, old and new code agree.")
     if result.only_float_noise:

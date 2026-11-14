@@ -334,6 +334,9 @@ def _function(r) -> dict:
            "inputs_compared": r.inputs_compared, "mutants_killed": r.mutants_killed, "mutants_total": r.mutants_total}
     if r.via:
         out["via"], out["via_file"] = r.via, r.via_file
+    carved = {k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
+    if carved["captured"] or carved["unstored"] or carved["note"]:
+        out["carved"] = carved
     if r.differences:
         d = r.differences[0]
         out["counterexample"] = {"call": d.get("call"), "before": d.get("before"), "after": d.get("after"),

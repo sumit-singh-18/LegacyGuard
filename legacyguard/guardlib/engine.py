@@ -186,10 +186,13 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             # unchecked, and a second finding for a break already reported at its source is noise.
             was_open = any(f["kind"] == "behavior_difference" and f["file"] == r.file and f["item"] == r.qualname and f["state"] == "open"
                            for f in data["findings"])
-            callee = r.via.split()[-1]
-            source_status = edited.get(callee)
+            # The function `via` names (for a caller two steps away, the caller in between) and every edited function
+            # the caller reaches: a difference already reported at any of them makes the caller's own finding noise.
+            callees = list(dict.fromkeys([r.via.split()[-1]] + [c.rsplit(".", 1)[-1] for c in r.callees]))
+            statuses = [edited.get(c) for c in callees]
+            source_status = next((s for s in statuses if s in (differ.DIFFERENT, differ.BROKEN)), None)
             if source_status is None and any(f["kind"] == "behavior_difference" and f["state"] == "open" and not f.get("via") and f["file"] == r.via_file
-                                             and f["item"].rsplit(".", 1)[-1] == callee for f in data["findings"]):
+                                             and f["item"].rsplit(".", 1)[-1] in callees for f in data["findings"]):
                 # At Stop only the callers may be re-run; the edited function's own open difference is already in the ledger.
                 source_status = differ.DIFFERENT
             if r.status == differ.UNTESTED:
@@ -219,6 +222,9 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             state = "waived" if waived else "intended" if intended else "open"
             extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared,
                      "statements": [r.statements_reached, r.statements_total], **via}
+            if r.carved_captured or r.carved_unstored:
+                extra["carved"] = {"captured": r.carved_captured, "added": r.carved_added, "replayed": r.carved_replayed,
+                                   "already": r.carved_already, "unstored": r.carved_unstored}
             if intended:
                 extra["intent"] = (decl or callee_decl)["description"]
             if r.declared_failures:
@@ -242,7 +248,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                                                  (f", {r.dropped_nondeterministic} dropped as non-deterministic" if r.dropped_nondeterministic else "") +
                                                  (f"; {differ.reached_text(r)}" + (f" of {differ.callee_names(r.callees)}" if r.via and r.callees else "")
                                                   if r.statements_total else "") +
-                                                 (f"; {differ.confidence_text(r)}" if r.mutants_total else ""),
+                                                 (f"; {differ.confidence_text(r)}" if r.mutants_total else "") +
+                                                 (f"; {differ.carved_text(r)}" if differ.carved_text(r) else ""),
                                         code_hash=r.code_hash, state="recorded",
                                         extra={"inputs_compared": r.inputs_compared, "mutants": [r.mutants_killed, r.mutants_total],
                                                "statements": [r.statements_reached, r.statements_total], **via})
