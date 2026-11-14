@@ -709,14 +709,15 @@ def _examples(cfg, conn, t: Target, edit: dict | None = None, regex_cache: dict 
         return None
     name = t.qualname.rsplit(".", 1)[-1]
     params = [p["name"] for p in t.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
+    # One time budget for collecting examples, objects and edit inputs (regex sampling draws on it too).
+    deadline = time.monotonic() + input_lib.SEED_BUDGET_S
     try:
-        files = examples.calling_files(conn, name, t.file) or [f for f in examples.files_naming(cfg.root, name) if f != t.file]
-        out = examples.collect(cfg.root, t.source, name, params, files)
+        # Without an index, files that import the function from its own module come first (Sprint 6 task 6.2).
+        files = examples.calling_files(conn, name, t.file) or examples.files_naming(cfg.root, name, own_file=t.file)
+        out = examples.collect(cfg.root, t.source, name, params, files, deadline=deadline)
     except Exception:  # noqa: BLE001
         return None
-    # Both are bonuses: a failure leaves the examples as they were. They share one time budget, which input building
-    # (regex sampling) also draws on.
-    deadline = time.monotonic() + input_lib.SEED_BUDGET_S
+    # Both are bonuses: a failure leaves the examples as they were.
     out["seed_deadline"] = deadline
     try:
         out["objects"] = examples.param_objects(cfg.root, t.file, name, t.params, files, deadline)
