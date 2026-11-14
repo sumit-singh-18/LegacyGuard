@@ -162,15 +162,15 @@ def test_harness_on_local_fixtures(tmp_path, capsys):
     assert bug["deciding_input"]["source"] == "examples" and "'2-4'" in bug["deciding_input"]["call"]  # the docstring
     # parse_range: generated inputs differ only by repeating the docstring's '2-4'.
     assert bug["deciding_input"]["independent_sources"] == ["examples"]
-    # scale (n * 2 -> n * 3): the docstring's scale(3) and generated small ints both differ. The counterexample
-    # shown first is the example; every source is still recorded.
+    # scale (n * 2 -> n * 3): the docstring's scale(3), generated small ints and the edit's own numbers (2, 3 and
+    # around them) all differ. The counterexample shown first is the example; every source is still recorded.
     sc = next(f for f in wide["different"] if f["qualname"] == "scale")
-    assert sc["counterexample"]["source"] == "examples" and sc["independent_sources"] == ["examples", "generated"]
+    assert sc["counterexample"]["source"] == "examples" and sc["independent_sources"] == ["edit", "examples", "generated"]
     assert any(d["source"] == "generated" and not d["repeats_example"] for d in sc["differing_inputs"])
-    assert wide["deciding_input"]["sources"] == ["examples", "generated"]
-    assert wide["deciding_input"]["independent_sources"] == ["examples", "generated"]
+    assert wide["deciding_input"]["sources"] == ["edit", "examples", "generated"]
+    assert wide["deciding_input"]["independent_sources"] == ["edit", "examples", "generated"]
     ds = data["metrics"]["deciding_sources"]  # true detections only: separator-mislabeled is a false alarm
-    assert ds["first_shown"] == {"examples": 3} and ds["cases_by_source"] == {"examples": 3, "generated": 3}
+    assert ds["first_shown"] == {"examples": 3} and ds["cases_by_source"] == {"edit": 2, "examples": 3, "generated": 3}
     assert (ds["tests_or_examples_only"], ds["also_other_sources"]) == (1, 2)  # bug-off-by-one; bug-no-files, separator
     assert "Warning: no files given and 3 source files differ" in md
     assert "Different outside the bug's files (not credited): `rng/other.py::scale`" in md

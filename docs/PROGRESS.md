@@ -23,3 +23,11 @@ until the reviewer passes it. Newest entries at the bottom.
   decisions recorded in docs/ROADMAP.md 3c.
 - Task A round 1 done (125 tests), Task C round 1 done (114 tests); both back with their reviewers.
 - Task D done in its worktree (133 tests; regex-only edit now gets 7 of 8 planted bugs caught); sent to review.
+- Task A: reviewer PASS in round 2. Committed f365ae2.
+- Task B (inputs from tests and the edit) started in the main checkout.
+- Task C: reviewer PASS in round 2. Committed 8525ba8.
+- Task D: reviewer REVISE (the real youtube-dl js_to_json regex, triple-quoted and verbose, still got no
+  planted bugs; noise from verbose comments and ignore-case), then PASS in round 2. Committed 7dcb259.
+- Task B implemented (176 tests; all five real-miss fixtures detected, 15 of 16 new tests fail on the old
+  code). Found while merging D: with B's regex sampling, one end-to-end test took 42 minutes on the real
+  js_to_json pattern. Sent back to bound input-building time before review.

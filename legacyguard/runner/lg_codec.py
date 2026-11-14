@@ -26,6 +26,12 @@ class Unencodable(Exception):
     pass
 
 
+# The worker and the harvest plugin import this file as the top-level module "lg_codec"; the guard imports it as
+# "runner.lg_codec". Objects described by a Construct are built only in the target interpreter: building one in the
+# guard would import and run the project's code in the guard's own process.
+IN_TARGET = __name__ == "lg_codec"
+
+
 def _scrub(text: str) -> str:
     return _ADDR.sub("0x…", text)
 
@@ -87,12 +93,28 @@ class FakeMarker:
         return f"<fake {self.__lg_fake__}>"
 
 
+class Construct:
+    """Recipe for an object a test builds, such as Command('ls -la', ''): the worker imports cls and calls it with args.
+
+    cls is "module:qualname". The object is built again for every call, so one call's changes never reach the next."""
+
+    def __init__(self, cls: str, args=(), kwargs=None):
+        self.cls, self.args, self.kwargs = cls, list(args), dict(kwargs or {})
+
+    def __repr__(self):
+        parts = [repr(a) for a in self.args] + [f"{k}={v!r}" for k, v in self.kwargs.items()]
+        return f"{self.cls.split(':')[-1]}({', '.join(parts)})"
+
+
 def encode_input(value, depth: int = 0):
     """Reversible encoding. Falls back to pickle for rich objects; raises Unencodable otherwise."""
     if depth > MAX_DEPTH:
         raise Unencodable("too deep")
     if isinstance(value, FakeMarker):
         return {"t": "fake", "v": value.__lg_fake__}
+    if isinstance(value, Construct):
+        return {"t": "construct", "cls": value.cls, "args": [encode_input(a, depth + 1) for a in value.args],
+                "kw": [[k, encode_input(v, depth + 1)] for k, v in value.kwargs.items()]}
     simple = _simple(value)
     if simple is not None:
         return simple
@@ -153,6 +175,11 @@ def decode(enc):
         return _load_class(enc["cls"])[v]
     if t == "fake":
         return FAKES[v]()
+    if t == "construct":
+        if not IN_TARGET:
+            raise ValueError("objects from a recipe are built only in the target interpreter")
+        cls = _load_class(enc["cls"])
+        return cls(*[decode(a) for a in enc.get("args", [])], **{k: decode(x) for k, x in enc.get("kw", [])})
     if t == "pickle":
         return pickle.loads(base64.b64decode(v))  # noqa: S301 - written by this guard during the developer's own test run
     raise ValueError(f"unknown tag {t}")
@@ -220,6 +247,9 @@ def display(enc, plain_decimal: bool = False) -> str:
         return f"<{enc['cls'].split(':')[-1]} from a test>"
     if t == "fake":
         return f"<fake {v}>"
+    if t == "construct":
+        parts = [display(a, plain_decimal) for a in enc.get("args", [])] + [f"{k}={display(x, plain_decimal)}" for k, x in enc.get("kw", [])]
+        return f"{enc['cls'].split(':')[-1]}({', '.join(parts)})"
     if t == "obj":
         return f"<{enc['cls'].split(':')[-1]}>"
     if t == "repr":

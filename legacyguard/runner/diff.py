@@ -39,6 +39,7 @@ class Target:
     old_gate: list = field(default_factory=list)  # statements the edit changed, as line ranges in the baseline file
     new_gate: list = field(default_factory=list)  # the same, in the edited file
     source: str = ""                               # the function's text before the edit, for example values
+    new_source: str = ""                           # its text after the edit: with source, the edit's own values
     via: str = ""                                  # not edited itself: "calls states_in_range" (FR-41)
     via_file: str = ""                             # the file whose edit made this function worth running
     source_start: int = 0                          # first line of `source` in the baseline file
@@ -140,7 +141,8 @@ def changed_targets(rel: str, before: str | None, after: str | None) -> list[Tar
             old = c.before
             old_gate, new_gate = examples.gates(before, after, c.before, c.after)
             out[c.qualname] = Target(rel, c.qualname, c.after.kind, old.params, symbols.sha(c.after.node_text),
-                                     old_gate=old_gate, new_gate=new_gate, source=old.node_text, source_start=old.line_start)
+                                     old_gate=old_gate, new_gate=new_gate, source=old.node_text, source_start=old.line_start,
+                                     new_source=c.after.node_text)
         elif c.kind in ("renamed", "visibility_changed") and c.before.kind != "class":
             pass  # the old name is gone; static checks report it, and callers show up at Stop
     changed_names = _changed_constants(before, after)
@@ -580,9 +582,23 @@ def _examples(cfg, conn, t: Target) -> dict | None:
     params = [p["name"] for p in t.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
     try:
         files = examples.calling_files(conn, name, t.file) or [f for f in examples.files_naming(cfg.root, name) if f != t.file]
-        return examples.collect(cfg.root, t.source, name, params, files)
+        out = examples.collect(cfg.root, t.source, name, params, files)
     except Exception:  # noqa: BLE001
         return None
+    # Both are bonuses: a failure leaves the examples as they were. They share one time budget, which input building
+    # (regex sampling) also draws on.
+    deadline = time.monotonic() + input_lib.SEED_BUDGET_S
+    out["seed_deadline"] = deadline
+    try:
+        out["objects"] = examples.param_objects(cfg.root, t.file, name, t.params, files, deadline)
+    except Exception:  # noqa: BLE001
+        pass
+    if t.new_source and not t.via:
+        try:
+            out["edit"] = examples.edit_info(t.source, t.new_source)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 def _self_calls(cfg, conn, t: Target, work_root: str) -> list[dict]:
@@ -635,6 +651,9 @@ def _with_mutants(specs: list[dict], runnable: dict, limit: int) -> list[dict]:
 
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
     """Run old twice and new once, in parallel subprocesses, on the same inputs."""
+    # The test-file list is cached per root for one check; a long-lived caller (backtest, the validation
+    # harness) may have checked out another commit since, so every check starts from a fresh list.
+    examples._TEST_FILES.clear()
     if harvest is None:
         harvest = load_harvest(cfg)
     bd = cfg.behavioral_diff
