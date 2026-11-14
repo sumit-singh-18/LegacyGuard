@@ -109,7 +109,24 @@ def story(data: dict) -> list[dict]:
         elif f["kind"] == "frozen":
             steps.append({"kind": "blocked" if f["state"] == "blocked" else "open" if f["state"] == "open" else "fixed", "id": f["id"],
                           "text": f"{_clean(f['subject'])}. {outcome(f).capitalize()}."})
+    steps += _skipped_steps(data)
     return steps
+
+
+def _skipped_steps(data: dict) -> list[dict]:
+    """Callers of edited code left out of a check (engine.targets_for, roadmap 6.5), one step per reason, so the
+    report says they were not run instead of leaving them out."""
+    by_reason: dict[str, list[str]] = {}
+    for key, s in (data.get("callers_skipped") or {}).items():
+        by_reason.setdefault(_clean(s.get("reason") or "no reason recorded"), []).append(f"`{key.split('::', 1)[-1]}` in {key.split('::', 1)[0]}")
+    out = []
+    for reason, names in by_reason.items():
+        n = len(names)
+        shown = ", ".join(names[:5]) + (f", +{n - 5} more" if n > 5 else "")
+        out.append({"kind": "unchecked", "id": None,
+                    "text": f"{n} caller{'s' if n != 1 else ''} of edited code {'were' if n != 1 else 'was'} not run: {reason} ({shown}). "
+                            f"Nothing is known about {'them' if n != 1 else 'it'} from execution."})
+    return out
 
 
 STORY_LABEL = {"asked": "You asked", "broke": "What broke", "fixed": "What fixed it", "open": "Needs you", "accepted": "Accepted", "checked": "Checked",
