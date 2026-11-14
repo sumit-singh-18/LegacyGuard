@@ -157,6 +157,20 @@ def annotations(cfg, out: Outcome) -> list[str]:
     return lines
 
 
+def not_run(out: Outcome) -> list[dict]:
+    """Skipped callers that no file's check ran after all, each once (a caller of two edited files is skipped twice,
+    or skipped for one file and run for another)."""
+    ran = {(r.file, r.qualname) for r in out.results}
+    seen: set = set()
+    keep = []
+    for s in out.skipped:
+        key = (s["file"], s["qualname"])
+        if key not in ran and key not in seen:
+            seen.add(key)
+            keep.append(s)
+    return keep
+
+
 def report(cfg, out: Outcome) -> str:
     failing = out.failing(cfg)
     verified = [r for r in out.results if r.status == diff.DONE]
@@ -189,7 +203,7 @@ def report(cfg, out: Outcome) -> str:
     if untested:
         lines += ["<details><summary>Could not be checked</summary>", ""]
         lines += [f"- `{r.file}::{r.qualname}`: {r.reason}" for r in untested] + ["", "</details>", ""]
-    skipped_text = engine.skipped_note(out.skipped)
+    skipped_text = engine.skipped_note(not_run(out))
     if skipped_text:
         lines += ["<details><summary>Callers not run</summary>", ""] + [f"- {x}" for x in skipped_text.splitlines()] + ["", "</details>", ""]
     lines.append("Agreement is evidence on the inputs tried, not a proof.")

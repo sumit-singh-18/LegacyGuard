@@ -502,10 +502,11 @@ def _deadline_left(deadline: float | None) -> float:
     return SEED_BUDGET_S if deadline is None else deadline - time.monotonic()
 
 
-def _regex_child(regexes: list[dict], screen: list[str], state_dir: Path, seconds: float) -> tuple[list[str] | None, list[str]]:
+def _regex_child(regexes: list[dict], screen: list[str], state_dir: Path, seconds: float,
+                 sample: bool = True) -> tuple[list[str] | None, list[str]]:
     """(strings on which a changed regex backtracks too long, regex samples), worked out in a child process killed
     after `seconds`. The first is None when the child did not get that far: the caller then drops what it meant to
-    screen.
+    screen. With sample=False the child only screens (the samples are already known) and exits right after.
 
     Hypothesis's from_regex can itself backtrack for minutes on a nested pattern (youtube-dl's js_to_json), and off the
     main thread no signal can stop that, so the outer bound is a process boundary, not a timer."""
@@ -515,7 +516,7 @@ def _regex_child(regexes: list[dict], screen: list[str], state_dir: Path, second
     import sys
     code = "import sys; sys.path.insert(0, sys.argv[1]); from runner import inputs; inputs._child_main()"
     env = {**os.environ, "HYPOTHESIS_STORAGE_DIRECTORY": str(Path(state_dir) / ".hypothesis")}
-    payload = json.dumps({"regexes": regexes, "screen": screen, "state_dir": str(state_dir)})
+    payload = json.dumps({"regexes": regexes, "screen": screen, "state_dir": str(state_dir), "sample": sample})
     try:
         done = subprocess.run([sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parent.parent)], input=payload,
                               capture_output=True, text=True, timeout=seconds, env=env)
@@ -560,6 +561,8 @@ def _child_main() -> None:
             except Exception:  # noqa: BLE001
                 continue
     print(json.dumps({"slow": slow}), flush=True)
+    if req.get("sample") is False:
+        return
     print(json.dumps({"samples": _regex_samples(req["regexes"], Path(req["state_dir"]))}), flush=True)
 
 
@@ -677,9 +680,15 @@ def _synthetic_bases(sym: dict) -> list[dict]:
     return bases
 
 
-def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path, deadline: float | None = None) -> list[dict]:
+def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path, deadline: float | None = None,
+                regex_cache: dict | None = None, regex_floor: bool = True) -> list[dict]:
     """Inputs aimed at the edit: its regexes' distinguishing strings, its numbers, its literals spliced into text and
     dict examples. Each is a copy of an example call (or placeholder call) with one argument replaced.
+
+    regex_cache: {"samples": [...]} shared between calls for the same edit, so the regex samples are drawn once; a later
+    call only screens its own splices. regex_floor: the regex child gets at least REGEX_CHILD_MIN_S even when the seed
+    budget is spent (the function's first build); without it, a call made after the budget is spent drops the splices
+    it could not screen and reuses only the samples it was given.
 
     Every one is marked weak, like a generated guess: a spliced or sampled value may simply be invalid, and two
     different rejections of it ("too many values to unpack" against "bad address") say nothing about valid calls. A
@@ -738,7 +747,17 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
         # Drop splices on which a changed regex backtracks for too long: old and new would both time out, so they
         # compare nothing and only use up the worker's time (youtube-dl's js_to_json on an unterminated quote).
         screen = list(dict.fromkeys(texts[id(item)] for item in kinds["splice"]))
-        slow, samples = _regex_child(regexes, screen, state_dir, max(_deadline_left(deadline), REGEX_CHILD_MIN_S))
+        seconds = _deadline_left(deadline)
+        if regex_floor:
+            seconds = max(seconds, REGEX_CHILD_MIN_S)
+        cached = regex_cache.get("samples") if regex_cache is not None else None
+        if cached is None:
+            slow, samples = _regex_child(regexes, screen, state_dir, seconds)
+            if regex_cache is not None:
+                regex_cache["samples"] = list(samples)
+        else:
+            samples = list(cached)
+            slow = _regex_child(regexes, screen, state_dir, seconds, sample=False)[0] if screen else []
         if slow is None:
             kinds["splice"] = []  # not screened in time: none rather than risk them
         elif slow:
@@ -765,6 +784,46 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
                     out.append(item)
                     break
     return out
+
+
+CARVED_EDIT_SHARE = 6   # edit inputs built on carved calls take at most 1/6 of max_inputs
+
+
+def with_carved_edit_items(sym: dict, items: list[dict], edit: dict | None, state_dir: Path, max_inputs: int,
+                           deadline: float | None = None, regex_cache: dict | None = None) -> tuple[list[dict], int]:
+    """(inputs, how many were added): edit-derived variants of the carved calls among `items` (Sprint 6 task 6.1).
+
+    Carved calls are recorded after the function's own inputs are built, so without this they never serve as bases for
+    the edit's values (a dict example only a caller passes). The variants are source "edit", weak as every edit input,
+    and carry base "carved". They go right after the last carved call; the whole stays within max_inputs, and what does
+    not fit is cut from the inputs after them, never from the carved calls or anything before them. Regex work stays
+    within the function's seed budget (no floor): splices that cannot be screened in time are left out. When the edit
+    changed a regex, the seed deadline has usually passed by the time carving is done, so splices on carved bases are
+    then usually dropped (regex samples, numbers and dict values remain)."""
+    if not edit:
+        return items, 0
+    carved_at = [i for i, item in enumerate(items) if item.get("source") == "carved"]
+    if not carved_at:
+        return items, 0
+    split = carved_at[-1] + 1
+    room = min(max(1, max_inputs // CARVED_EDIT_SHARE), max_inputs - split)
+    if room <= 0:
+        return items, 0
+    bases = [items[i] for i in carved_at]
+    built = _edit_items(sym, bases, edit, state_dir, deadline, regex_cache, regex_floor=False)
+    have = {json.dumps([item.get("args"), bool(item.get("has_self"))], sort_keys=True) for item in items}
+    fresh = []
+    for item in built:
+        sig = json.dumps([item["args"], bool(item.get("has_self"))], sort_keys=True)
+        if sig not in have:
+            have.add(sig)
+            fresh.append({**item, "base": "carved"})
+        if len(fresh) >= room:
+            break
+    if not fresh:
+        return items, 0
+    head, tail = items[:split], items[split:]
+    return head + fresh + tail[:max(0, max_inputs - split - len(fresh))], len(fresh)
 
 
 # Hints the strategies above can build. A hint they cannot build would leave the parameter worse off than no hint.
@@ -826,7 +885,8 @@ def build(sym: dict, harvested: dict | None, max_inputs: int, state_dir: Path, e
     except Exception:  # noqa: BLE001
         pass
     try:
-        edit = _edit_items(sym, items, (examples or {}).get("edit"), state_dir, (examples or {}).get("seed_deadline"))
+        edit = _edit_items(sym, items, (examples or {}).get("edit"), state_dir, (examples or {}).get("seed_deadline"),
+                           (examples or {}).get("regex_cache"), (examples or {}).get("regex_floor", True))
     except Exception:  # noqa: BLE001
         edit = []
     # Seeded inputs (tests, examples, the edit) use at most two thirds of a full budget; the rest is left for the

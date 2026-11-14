@@ -308,6 +308,15 @@ def _remember_skipped(data: dict, skipped: list[dict]) -> None:
         store[f"{s['file']}::{s['qualname']}"] = {"reason": s["reason"][:200], "via_file": s["via_file"]}
 
 
+def prune_skipped(data: dict, changed: list[str]) -> None:
+    """At Stop: forget skipped callers whose edited file no longer differs from the baseline (the edit was undone),
+    so the report does not list callers of code that is no longer changed."""
+    store = data.get("callers_skipped") or {}
+    still = set(changed)
+    for key in [k for k, s in store.items() if s.get("via_file") not in still]:
+        store.pop(key, None)
+
+
 def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, differ.Result]]:
     """Add findings to the ledger. Returns new, unwaived differences: the ones that may wake Claude."""
     wake: list[tuple[dict, differ.Result]] = []
@@ -315,6 +324,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
     edited = {r.qualname.rsplit(".", 1)[-1]: r.status for r in results if r.via}
     edited.update({r.qualname.rsplit(".", 1)[-1]: r.status for r in results if not r.via})
     for r in results:
+        # Any result for a function means it was tried this time, as a caller or as an edited function.
+        (data.get("callers_skipped") or {}).pop(f"{r.file}::{r.qualname}", None)
         via = {"via": r.via, "via_file": r.via_file, **({"callees": r.callees} if r.callees else {})} if r.via else {}
         if r.via:
             # What happened to each caller is kept for the session map, whether or not it becomes a finding.
@@ -328,7 +339,6 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             try:
                 ledger.note_caller_outcome(data, f"{r.file}::{r.qualname}", _own_hash(cfg, r.file, r.qualname),
                                            r.status == differ.UNTESTED and getattr(r, "baseline_unrunnable", False), r.reason or "")
-                (data.get("callers_skipped") or {}).pop(f"{r.file}::{r.qualname}", None)  # it ran this time
             except Exception:  # noqa: BLE001 - memory is a ranking hint; losing it never fails the record
                 pass
             # A caller is in the report only when it shows something the edited function's own result does not.

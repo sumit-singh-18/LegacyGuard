@@ -88,7 +88,8 @@ class Result:
     carved_replayed: int = 0        # added calls that ran to a return or an exception in both versions
     carved_unstored: int = 0        # calls (repeats included) not recorded because a value could not be encoded
     carved_note: str = ""           # why no calls were recorded, when the recording run failed or timed out
-    baseline_unrunnable: bool = False  # untested because every input raised or failed setup on the baseline (roadmap 6.5)
+    carved_weak: int = 0            # of the added calls, those recorded only while guessed caller inputs ran (weak)
+    baseline_unrunnable: bool = False  # untested because every own, non-guessed input raised or failed setup on the baseline (roadmap 6.5)
 
     @property
     def subject(self) -> str:
@@ -474,7 +475,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         if _key(ca) != _key(cn):
             same_state = _key(ca.get("s") or {}) == _key(cn.get("s") or {}) and _key({"x": ca.get("io")}) == _key({"x": cn.get("io")})
             r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca, cn), "after": _show_outcome(cn, ca), "source": item["source"],
-                                  "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
+                                  **({"base": item["base"]} if item.get("base") else {}), "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
                                   "special": _has_special(item), "state": not same_state,
                                   "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
     # A pass must rest on inputs that ran every changed statement (D-043). Guessed values for an untyped parameter often
@@ -516,8 +517,10 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     if r.inputs_completed == 0:
         r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:120]})") + \
                    (f"; {slow} inputs ran past the time limit" if slow else "")
-        # On the baseline every input raised or could not be set up: the cause is not this edit (engine ranking, roadmap 6.5).
-        old = [oa.get("outcome") for item, oa in zip(items, a["results"]) if item.get("expect") is None]
+        # On the baseline every input of the caller's own that is not a guess (no declared, carved, weak or edit-derived
+        # input) raised or could not be set up: the cause is not this edit (engine ranking, roadmap 6.5).
+        old = [oa.get("outcome") for item, oa in zip(items, a["results"])
+               if item.get("expect") is None and item.get("source") != "carved" and not _is_guess(item)]
         r.baseline_unrunnable = bool(old) and all(o in ("raise", "setup_failed") for o in old)
         return r
     where = f" of {callee_names(target.callees)}" if target.via and target.callees else ""
@@ -611,8 +614,10 @@ def carved_text(r: Result) -> str:
     if r.carved_unstored:
         parts.append(f"{r.carved_unstored} more calls, repeats included, had a value that could not be stored")
     extra = f" ({'; '.join(parts)})" if parts else ""
+    weak = (f"; {r.carved_weak} of the {r.carved_added} added were recorded only while guessed caller inputs ran, so two different "
+            f"errors on them are not counted") if r.carved_weak else ""
     return (f"{r.carved_captured} calls recorded from its callers on the code before the edit{extra}; "
-            f"{r.carved_replayed} of the {r.carved_added} added ran to a return or an exception in both versions")
+            f"{r.carved_replayed} of the {r.carved_added} added ran to a return or an exception in both versions{weak}")
 
 
 def confidence_text(r: Result) -> str:
@@ -660,30 +665,77 @@ def _index(cfg):
         return None
 
 
-def _examples(cfg, conn, t: Target) -> dict | None:
-    """Example values and calls from the function's own text and from its callers, tests first (FR-36)."""
+def _merged_edit(edits: list[dict]) -> dict | None:
+    """One edit_info from several (the edited functions a caller reaches): each part's values, in order, repeats dropped."""
+    edits = [e for e in edits if e]
+    if not edits:
+        return None
+    out: dict = {}
+    for part in ("literals", "fragments", "numbers", "regexes"):
+        seen, values = set(), []
+        for e in edits:
+            for v in e.get(part) or []:
+                sig = json.dumps([type(v).__name__, v], sort_keys=True, default=repr)
+                if sig not in seen:
+                    seen.add(sig)
+                    values.append(v)
+        out[part] = values
+    return out
+
+
+def _edit_of(t: Target, cache: dict) -> dict | None:
+    """examples.edit_info for an edited function, worked out once per check; None for a caller or on any failure."""
+    key = (t.file, t.qualname)
+    if key not in cache:
+        cache[key] = None
+        if t.source and t.new_source and not t.via:
+            try:
+                cache[key] = examples.edit_info(t.source, t.new_source)
+            except Exception:  # noqa: BLE001 - edit inputs are a bonus
+                pass
+    return cache[key]
+
+
+def _callee_edit(t: Target, targets: list[Target], cache: dict) -> dict | None:
+    """For a caller: the merged edit info of the edited functions in this check that it reaches (Sprint 6 task 6.1)."""
+    if not t.via or not t.callee_file:
+        return None
+    return _merged_edit([_edit_of(e, cache) for e in targets
+                         if not e.via and e.kind != "route" and e.file == t.callee_file and e.qualname in t.callees])
+
+
+def _examples(cfg, conn, t: Target, edit: dict | None = None, regex_cache: dict | None = None) -> dict | None:
+    """Example values and calls from the function's own text and from its callers, tests first (FR-36).
+
+    edit: the edit info its edit-derived inputs are built from (the function's own edit, or for a caller the edits of
+    the edited functions it reaches); None for an edited function means its own edit, worked out here. regex_cache: shared with the edited function, so a caller reuses its regex samples
+    and does not start another sampling child; a caller's regex work then stays within its own seed budget."""
     if not t.source:
         return None
     name = t.qualname.rsplit(".", 1)[-1]
     params = [p["name"] for p in t.params if p["name"] not in ("self", "cls") and not p["name"].startswith("*")]
+    # One time budget for collecting examples, objects and edit inputs (regex sampling draws on it too).
+    deadline = time.monotonic() + input_lib.SEED_BUDGET_S
     try:
-        files = examples.calling_files(conn, name, t.file) or [f for f in examples.files_naming(cfg.root, name) if f != t.file]
-        out = examples.collect(cfg.root, t.source, name, params, files)
+        # Without an index, files that import the function from its own module come first (Sprint 6 task 6.2).
+        files = examples.calling_files(conn, name, t.file) or examples.files_naming(cfg.root, name, own_file=t.file)
+        out = examples.collect(cfg.root, t.source, name, params, files, deadline=deadline)
     except Exception:  # noqa: BLE001
         return None
-    # Both are bonuses: a failure leaves the examples as they were. They share one time budget, which input building
-    # (regex sampling) also draws on.
-    deadline = time.monotonic() + input_lib.SEED_BUDGET_S
+    # Both are bonuses: a failure leaves the examples as they were.
     out["seed_deadline"] = deadline
     try:
         out["objects"] = examples.param_objects(cfg.root, t.file, name, t.params, files, deadline)
     except Exception:  # noqa: BLE001
         pass
-    if t.new_source and not t.via:
-        try:
-            out["edit"] = examples.edit_info(t.source, t.new_source)
-        except Exception:  # noqa: BLE001
-            pass
+    if edit is None and not t.via:
+        edit = _edit_of(t, {})
+    if edit:
+        out["edit"] = edit
+        if regex_cache is not None:
+            out["regex_cache"] = regex_cache
+        if t.via:
+            out["regex_floor"] = False
     return out
 
 
@@ -767,21 +819,41 @@ def _carve_plan(specs: list[dict], runnable: dict) -> tuple[list[dict], dict]:
     for spec in specs:
         key = f"{spec['module']}:{spec['qualname']}"
         if key in by_caller and spec.get("kind") != "http":
-            out.append({k: v for k, v in spec.items() if k not in ("mutants", "gate")} | {"inputs": spec["inputs"][:CARVE_CALLER_INPUTS], "capture": by_caller[key]})
+            inputs = [{**i, "weak": _is_guess(i)} for i in spec["inputs"][:CARVE_CALLER_INPUTS]]
+            out.append({k: v for k, v in spec.items() if k not in ("mutants", "gate")} | {"inputs": inputs, "capture": by_caller[key]})
     return out, by_caller
+
+
+def _is_guess(item: dict) -> bool:
+    """True exactly where compare_one treats the caller's own input as weak: inputs marked weak (generated values for
+    untyped parameters, objects tried on parameters nothing else fills) and edit-derived values. Generated values for
+    typed parameters, a no-argument call, tests, examples, declared and carved inputs are not guesses. A call recorded
+    while a guess runs is a guess too: it is replayed as a weak carved input."""
+    return item.get("expect") is None and (bool(item.get("weak")) or item.get("source") == "edit")
 
 
 def _carved_items(results: list[dict], key: str) -> tuple[list[dict], int]:
     """(the distinct calls recorded for one edited function across its callers' capture results, as inputs without an
-    id yet; calls skipped because a value could not be encoded, repeats included)."""
-    items, seen, skipped = [], set(), 0
+    id yet; calls skipped because a value could not be encoded, repeats included).
+
+    A call recorded only while guessed caller inputs ran is weak (two different rejections of it prove nothing); one
+    also recorded under a caller input the project wrote, by any caller, is not."""
+    items, seen, skipped = [], {}, 0
     for res in results:
         for call in (res.get("captured") or {}).get(key, []):
             sig = _key({"a": call.get("args"), "s": bool(call.get("has_self"))})
-            if sig in seen or len(items) >= MAX_CARVED:
+            weak = bool(call.get("weak"))
+            if sig in seen:
+                if not weak:
+                    seen[sig].pop("weak", None)
                 continue
-            seen.add(sig)
-            items.append({"args": call["args"], "has_self": bool(call.get("has_self")), "source": "carved"})
+            if len(items) >= MAX_CARVED:
+                continue
+            item = {"args": call["args"], "has_self": bool(call.get("has_self")), "source": "carved"}
+            if weak:
+                item["weak"] = True
+            seen[sig] = item
+            items.append(item)
         skipped += int((res.get("unstored") or {}).get(key, 0) or 0)
     return items, skipped
 
@@ -972,6 +1044,7 @@ def _carve(cfg, py: str, baseline_root: str, sys_path: list[str], specs: list[di
                 spec = next(s for s in specs if f"{s['module']}:{s['qualname']}" == ekey)
                 spec["inputs"], counts = _merge_carved(spec["inputs"], items, max_inputs)
                 info.update(counts)
+                info["weak"] = sum(1 for i in spec["inputs"] if i.get("source") == "carved" and i.get("weak"))
             out[ekey] = info
         return out
     except Exception:  # noqa: BLE001 - carving is a bonus; the check runs on the inputs it had
@@ -979,6 +1052,24 @@ def _carve(cfg, py: str, baseline_root: str, sys_path: list[str], specs: list[di
     finally:
         if out:
             out["__elapsed__"] = time.monotonic() - started
+
+
+def _add_carved_edit_items(cfg, specs: list[dict], carved: dict, seeds: dict, max_inputs: int) -> None:
+    """Edit-derived variants of the carved calls (Sprint 6 task 6.1), added to the specs in place before the three main
+    runs, so OLD-A, OLD-B and NEW get the same inputs. Built only for edited functions that got carved calls and have an
+    edit to draw on; regex work stays within each function's seed budget. Fails open: a problem leaves the inputs as
+    they were."""
+    for spec in specs:
+        key = f"{spec['module']}:{spec['qualname']}"
+        seed = seeds.get(key)
+        if not seed or not (carved.get(key) or {}).get("added"):
+            continue
+        try:
+            spec["inputs"], added = input_lib.with_carved_edit_items(seed["sym"], spec["inputs"], seed["edit"], cfg.state_dir,
+                                                                     max_inputs, seed["deadline"], seed["cache"])
+        except Exception:  # noqa: BLE001
+            continue
+        carved[key]["edit_added"] = added
 
 
 def _finish_specs(specs: list[dict], runnable: dict, results: dict) -> tuple[list[dict], dict]:
@@ -1016,6 +1107,9 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
     extra = cfg.raw.get("source_roots") or []
     conn = _index(cfg)
     alias_cache: dict[str, dict] = {}
+    edit_cache: dict = {}
+    regex_caches: dict = {}  # (file, qualname) of an edited function -> its regex samples, shared with its callers
+    seeds: dict = {}  # an edited function's key -> what its edit inputs were built from, for carved bases (task 6.1)
     for t in targets[:MAX_FUNCTIONS]:
         if t.kind == "route":
             app = cfg.raw.get("app") or ""
@@ -1032,8 +1126,20 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             except OSError:
                 alias_cache[t.file] = {}
         params = _resolve_aliases(t.params, alias_cache[t.file])
-        items, reason = input_lib.build({"qualname": t.qualname, "kind": t.kind, "params": params}, harvest.get(f"{t.file}::{t.qualname}"), int(bd["max_inputs"]), cfg.state_dir,
-                                        examples=_examples(cfg, conn, t), stub_db=str(bd.get("io", "stub")) == "stub")
+        if t.via:
+            edit = _callee_edit(t, targets, edit_cache)
+            # A caller never draws regex samples of its own: it reuses those of the edited function it reaches, when there
+            # is exactly one and its samples are already drawn, and otherwise has none (its splices are still screened).
+            reached = [(e.file, e.qualname) for e in targets if not e.via and e.file == t.callee_file and e.qualname in t.callees]
+            got = regex_caches.get(reached[0]) if len(reached) == 1 else None
+            regex_cache = {"samples": list(got["samples"]) if got and "samples" in got else []}
+        else:
+            edit = _edit_of(t, edit_cache)
+            regex_cache = regex_caches.setdefault((t.file, t.qualname), {})
+        ex = _examples(cfg, conn, t, edit, regex_cache)
+        sym = {"qualname": t.qualname, "kind": t.kind, "params": params}
+        items, reason = input_lib.build(sym, harvest.get(f"{t.file}::{t.qualname}"), int(bd["max_inputs"]), cfg.state_dir,
+                                        examples=ex, stub_db=str(bd.get("io", "stub")) == "stub")
         if reason:
             results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason=reason)
             continue
@@ -1052,6 +1158,8 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         specs.append(spec)
         runnable[f"{module}:{t.qualname}"] = (t, items)
         roots.add(sys_rel)
+        if not t.via and edit:
+            seeds[f"{module}:{t.qualname}"] = {"sym": sym, "edit": edit, "deadline": (ex or {}).get("seed_deadline"), "cache": regex_cache}
     for t in targets[MAX_FUNCTIONS:]:
         results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason=f"more than {MAX_FUNCTIONS} functions changed at once")
     carved: dict = {}  # edited function's key -> (calls recorded from its callers, calls skipped as unencodable)
@@ -1076,6 +1184,7 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             # Carved inputs to run: the recording time comes out of the same limit, and the three runs get what it left.
             # A recording run that gave nothing leaves the limit as it was.
             deadline = max(deadline - recorded_s, deadline * (1 - CARVE_SHARE))
+        _add_carved_edit_items(cfg, specs, carved, seeds, int(bd["max_inputs"]))
         specs, runnable = _finish_specs(specs, runnable, results)
     if specs:
         specs_old = _tree_specs(specs, runnable, old=True)
@@ -1108,6 +1217,7 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         if r is not None:
             r.carved_captured, r.carved_unstored, r.carved_note = info["captured"], info["unstored"], info["note"]
             r.carved_added, r.carved_already = info["added"], info["already"]
+            r.carved_weak = info.get("weak", 0)
     return [results[t.qualname] for t in targets]
 
 

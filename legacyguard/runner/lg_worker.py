@@ -832,7 +832,10 @@ def _encode_frame_call(frame, code, first: str) -> dict:
 
 def _capture_tracer(wanted: dict, state: dict):
     """A global trace function recording calls into the code objects in wanted ({code: (key, first, limit)}) into
-    state["calls"][key] (distinct by encoded value) and counting unencodable ones in state["unstored"][key]."""
+    state["calls"][key] (distinct by encoded value) and counting unencodable ones in state["unstored"][key].
+
+    Each recorded call carries "weak": whether the caller input running now (state["weak_now"]) is a guess. A call
+    recorded first under a guess and later made again under a non-guess becomes non-weak, even past the limit."""
     resumed: list = []  # generator frames already recorded: a resume is not a new call
 
     def enter(frame, event, arg):
@@ -841,7 +844,9 @@ def _capture_tracer(wanted: dict, state: dict):
             return None
         key, first, limit = hit
         calls = state["calls"][key]
-        if len(calls) >= limit:
+        weak_now = bool(state.get("weak_now"))
+        full = len(calls) >= limit
+        if full and (weak_now or not state["weak_left"][key]):
             return None
         if frame.f_code.co_flags & _GEN_FLAGS:
             if any(f is frame for f in resumed):
@@ -853,8 +858,15 @@ def _capture_tracer(wanted: dict, state: dict):
             state["unstored"][key] += 1  # calls, repeats included: a value that cannot be encoded cannot be compared either
             return None
         sig = json.dumps(item, sort_keys=True)
-        if sig not in state["seen"][key]:
-            state["seen"][key].add(sig)
+        known = state["seen"][key].get(sig)
+        if known is not None:
+            if known["weak"] and not weak_now:
+                known["weak"] = False
+                state["weak_left"][key] -= 1
+        elif not full:
+            item["weak"] = weak_now
+            state["seen"][key][sig] = item
+            state["weak_left"][key] += weak_now
             calls.append(item)
         return None
     return enter
@@ -873,9 +885,11 @@ def _capture_target(entry):
 
 def run_capture(spec, root_real) -> dict:
     """Run a caller's inputs and record the calls it makes into the edited functions in spec["capture"]
-    ([{"module", "qualname", "max"}]). Returns {"status", "captured": {key: [call, ...]}, "unstored": {key: n}}."""
+    ([{"module", "qualname", "max"}]). Returns {"status", "captured": {key: [call, ...]}, "unstored": {key: n}}.
+    A caller input with "weak" set is a guess: the calls it makes are recorded with "weak": True (see _capture_tracer)."""
     keys = [f"{e['module']}:{e['qualname']}" for e in spec["capture"]]
-    state = {"calls": {k: [] for k in keys}, "unstored": {k: 0 for k in keys}, "seen": {k: set() for k in keys}}
+    state = {"calls": {k: [] for k in keys}, "unstored": {k: 0 for k in keys}, "seen": {k: {} for k in keys},
+             "weak_left": {k: 0 for k in keys}, "weak_now": False}
     out = {"status": "ran", "captured": state["calls"], "unstored": state["unstored"]}
     try:
         fn, owner, reason = _resolve(spec["module"], spec["qualname"])
@@ -905,14 +919,20 @@ def run_capture(spec, root_real) -> dict:
     trace = _capture_tracer(wanted, state)
     deadline = time.monotonic() + min(FUNCTION_BUDGET_S, float(spec.get("budget") or FUNCTION_BUDGET_S))
     timeouts = 0
-    for index, item in enumerate(spec["inputs"][:CAPTURE_INPUTS]):
-        if all(len(state["calls"][k]) >= lim for k, _, lim in wanted.values()):
+    inputs = spec["inputs"][:CAPTURE_INPUTS]
+    strong_left = [False] * (len(inputs) + 1)  # strong_left[i]: some input from i on is not a guess
+    for i in range(len(inputs) - 1, -1, -1):
+        strong_left[i] = strong_left[i + 1] or not inputs[i].get("weak")
+    for index, item in enumerate(inputs):
+        # Full everywhere: stop, unless a non-guess input still to come could make a call recorded under a guess non-weak.
+        if all(len(state["calls"][k]) >= lim and not (state["weak_left"][k] and strong_left[index]) for k, _, lim in wanted.values()):
             break
         left = deadline - time.monotonic()
         if left <= 0.01 or timeouts >= 2:
             break
         if owner is not None and make_self is None and not item.get("has_self"):
             break
+        state["weak_now"] = bool(item.get("weak"))
         # One slow call must not run past the caller's share of the recording time: the limit is what is left of it.
         got = _call_once(fn, item, make_self, index, trace, min(SHORT_TIMEOUT_S if timeouts else CALL_TIMEOUT_S, left))
         timeouts += got.get("outcome") == "timeout"

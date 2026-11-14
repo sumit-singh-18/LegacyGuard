@@ -58,6 +58,12 @@ def build(cfg, data: dict) -> dict:
              "prompts": data.get("prompts_used", 0), "wakeups": data.get("wakeups", 0), "generated": dt.datetime.now().isoformat(timespec="minutes"),
              "counts": counts, "turned_back": sum(1 for f in visible if f["state"] == "resolved"), "statuses": list(ledger.STATUSES),
              "index": idb.exists(cfg.root), "coverage": True, "truncated": 0, "note": NOTE, "footer": report.FOOTER, "not_followed": []}
+    try:  # the current caller budget, for the panel's "Checked by the guard?" text
+        from guardlib import engine
+        from runner import diff as differ
+        model["caller_budget"] = [engine.MAX_DEPENDENTS, differ.MAX_FUNCTIONS]
+    except Exception:  # noqa: BLE001 - the page falls back to the defaults
+        pass
     ran = data.get("callers_run") or {}
     skipped = data.get("callers_skipped") or {}  # callers left out of a check, never tried (roadmap 6.5)
     if model["index"] and changed:
@@ -208,8 +214,8 @@ function panel(){const a=$('aside'),n=sel&&N.get(sel);if(!n){a.innerHTML='<p cla
   else if(n.ran&&n.ran.status==='agree')c='Yes. It was run with the edited code, and old and new agree on '+esc(n.ran.inputs)+' inputs. That is not a proof.';
   else if(n.ran&&n.ran.status==='differ')c='Yes, and its result changed: '+(n.ran.example?'<pre>'+esc(n.ran.example)+'</pre>':'see the findings.');
   else if(n.ran)c='It was tried and could not be run'+(n.ran.reason?': '+esc(n.ran.reason):'')+'.';
-  else if(n.layer===1)c='No. The guard runs up to six direct callers, the ones in the same file first. This one was not among them.';
-  else c='No. Only functions that call the edited one directly are run.';
+  else if(n.layer<=2){const b=M.caller_budget||[8,12];c='No. For each edit the guard runs up to '+b[0]+' callers, one or two steps away, within '+b[1]+' functions per check; callers more likely to run go first. This one was not among them.'}
+  else c='No. Only callers one or two steps away from the edited function are run.';
   h+=f('Checked by the guard?',c)}
  if(n.routes.length)h+=f('Reached from',n.routes.map(esc).join('<br>'));a.innerHTML=h+'</dl>'}
 function pick(id){sel=id;draw();panel()}

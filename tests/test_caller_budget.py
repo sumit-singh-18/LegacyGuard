@@ -63,8 +63,9 @@ def test_no_skipped_callers_means_no_note(tmp_path, make_cfg):
 
 
 def test_caller_with_no_completed_input_ranked_last_on_the_next_edit(tmp_path, make_cfg, monkeypatch):
-    # a_bad sorts first by every static key (same hop, plain function, one parameter, first file) but never completes.
-    bad = "from pkg.core import helper\n\ndef a_bad(x):\n    return helper(int('not a number'))\n"
+    # a_bad sorts first by every static key (same hop, plain function, no parameter, first file) but never completes;
+    # its one input is the no-argument call, which is the caller's own (not a guess), so the cause is on the baseline.
+    bad = "from pkg.core import helper\n\ndef a_bad():\n    return helper(int('not a number'))\n"
     files = {"pkg/__init__.py": "", "pkg/core.py": CORE, "pkg/a_bad.py": bad, "pkg/z_funcs.py": FUNCS}
     cfg, base, root, changed = _project(tmp_path, make_cfg, files)
     data = ledger.fresh("s")
@@ -86,7 +87,7 @@ def test_caller_with_no_completed_input_ranked_last_on_the_next_edit(tmp_path, m
     assert engine.skipped_note(skipped).startswith("1 caller not run: earlier in this session no input ran to completion")
 
     # The memory is tied to the caller's code: once a_bad is edited it is ranked on static signals again.
-    (root / "pkg/a_bad.py").write_text(bad.replace("int('not a number')", "x"))
+    (root / "pkg/a_bad.py").write_text(bad.replace("int('not a number')", "1"))
     monkeypatch.setattr(engine, "MAX_DEPENDENTS", 8)
     deps3 = engine.dependents(cfg, "pkg/core.py", changed, {t.qualname for t in changed}, memory=data["callers_unrunnable"])
     assert [d.qualname for d in deps3][0] == "a_bad"
@@ -280,3 +281,54 @@ def test_ci_report_lists_callers_not_run(tmp_path, make_cfg):
     cfg = make_cfg(tmp_path)
     out = ci.Outcome(base="abc", skipped=[{"file": "x.py", "qualname": "X.run", "via_file": "m.py", "reason": "r"}])
     assert "1 caller not run: r (X.run)" in ci.report(cfg, out)
+    # Skipped twice (callers of two edited files) and skipped-then-run elsewhere: listed once, or not at all.
+    out.skipped += [{"file": "x.py", "qualname": "X.run", "via_file": "n.py", "reason": "r"},
+                    {"file": "y.py", "qualname": "y", "via_file": "m.py", "reason": "r"}]
+    out.results.append(diff.Result("y.py", "y", diff.DONE, "h"))
+    assert [s["qualname"] for s in ci.not_run(out)] == ["X.run"]
+    assert "1 caller not run: r (X.run)" in ci.report(cfg, out)
+
+
+def _raise(msg="bad"):
+    return {"outcome": "raise", "type": "ValueError", "message": msg}
+
+
+def _caller_target():
+    return diff.Target("c.py", "c", "function", [{"name": "x", "annotation": None, "default": None}], "h", via="calls f", via_file="m.py")
+
+
+def _item(source, **extra):
+    from conftest import call
+    return {**call(1), "source": source, **extra}
+
+
+def test_only_guessed_inputs_failing_on_the_baseline_is_not_remembered(tmp_path, make_cfg):
+    # Only edit-derived, weak and carved inputs ran, and they raise on the old code: that says nothing about the
+    # caller's own inputs, so it is not marked unrunnable and not remembered.
+    t = _caller_target()
+    items = [_item("edit"), _item("generated", weak=True), _item("carved", carved_id=1)]
+    old = {"status": "ran", "results": [_raise(), _raise(), _raise()], "lines": None}
+    new = {"status": "ran", "results": [_raise("other"), _raise("other"), _raise("other")], "lines": None}
+    r = diff.compare_one(t, items, old, old, {**new, "results": [{"outcome": "timeout"}] * 3}, True)
+    assert r.status == diff.UNTESTED and "no input ran to completion" in r.reason and not r.baseline_unrunnable
+    data = ledger.fresh("s")
+    root = write_tree(tmp_path / "p", {"c.py": "def c(x):\n    return x\n"})
+    engine.record(make_cfg(root), data, [r])
+    assert "c.py::c" not in data["callers_unrunnable"]
+    # One input of the caller's own that also raises on the baseline: now the cause is on the baseline side.
+    items2 = items + [_item("tests")]
+    old2 = {**old, "results": old["results"] + [_raise()]}
+    r2 = diff.compare_one(t, items2, old2, old2, {**new, "results": [{"outcome": "timeout"}] * 4}, True)
+    assert r2.baseline_unrunnable
+
+
+def test_skipped_entry_dropped_on_any_result_and_pruned_at_stop(tmp_path, make_cfg):
+    root = write_tree(tmp_path / "p", {"c.py": "def c(x):\n    return x\n"})
+    cfg = make_cfg(root)
+    data = ledger.fresh("s")
+    data["callers_skipped"] = {"c.py::c": {"reason": "r", "via_file": "m.py"}, "d.py::d": {"reason": "r", "via_file": "gone.py"},
+                               "e.py::e": {"reason": "r", "via_file": "m.py"}}
+    engine.record(cfg, data, [diff.Result("c.py", "c", diff.DONE, "h")])  # an edited-function result, not a caller one
+    assert "c.py::c" not in data["callers_skipped"]
+    engine.prune_skipped(data, ["m.py"])  # gone.py's edit was undone, so its skipped callers are forgotten
+    assert list(data["callers_skipped"]) == ["e.py::e"]
