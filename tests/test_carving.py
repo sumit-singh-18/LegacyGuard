@@ -455,3 +455,87 @@ def test_reshaped_base_class_found_in_a_src_layout(tmp_path):
     found = _diff._imported_bases({}, str(new), "src/pkg/meter.py", "Meter")
     assert ("src/pkg/base.py", "Base") in found
     assert old.exists()
+
+
+# ---- calls recorded while guessed caller inputs ran are weak (Sprint 6, follow-up to task 6.1) ----
+
+PARSE_OLD = '''
+def parse(s):
+    if not s.isdigit():
+        raise ValueError("not a number: " + s)
+    return int(s)
+'''
+PARSE_NEW = PARSE_OLD.replace('"not a number: "', '"bad number: "')
+GUESS_CALLER = '''
+from pkg.fmt import parse
+
+
+def run(n):
+    return parse(str(n) + "x")
+'''
+
+
+def _parse_setup(tmp_path, make_cfg, extra=None, caller=GUESS_CALLER, old=PARSE_OLD, new=PARSE_NEW):
+    files = {"pkg/__init__.py": "", "pkg/app.py": caller, **(extra or {})}
+    root = write_tree(tmp_path / "proj", {**files, "pkg/fmt.py": new})
+    cfg = make_cfg(root)
+    base = write_tree(cfg.state_dir / "baseline", {**files, "pkg/fmt.py": old})
+    changed = diff.changed_targets("pkg/fmt.py", (base / "pkg/fmt.py").read_text(), (root / "pkg/fmt.py").read_text())
+    deps = engine.dependents(cfg, "pkg/fmt.py", changed, {t.qualname for t in changed})
+    assert [d.qualname for d in deps] == ["run"]
+    return {r.qualname: r for r in diff.run(cfg, str(base), str(root), changed + deps, harvest={})}
+
+
+def test_call_recorded_under_guessed_caller_inputs_is_weak(tmp_path, make_cfg):
+    results = _parse_setup(tmp_path, make_cfg)
+    r = results["parse"]
+    # parse('5x') and the like: old and new raise different messages, but only guessed caller inputs made those calls.
+    assert r.carved_added > 0 and r.carved_weak == r.carved_added, r
+    assert not r.differences, [d["call"] for d in r.differences][:3]
+    assert r.status != diff.DIFFERENT and r.dropped_invalid > 0
+    assert f"{r.carved_weak} of the {r.carved_added} added were recorded only while guessed caller inputs ran" in diff.carved_text(r)
+
+
+def test_call_recorded_under_a_test_input_still_counts(tmp_path, make_cfg):
+    test = "from pkg.app import run\n\n\ndef test_run():\n    run(5)\n"
+    results = _parse_setup(tmp_path, make_cfg, {"tests/test_app.py": test})
+    r = results["parse"]
+    assert r.status == diff.DIFFERENT, r.reason
+    carved = [d for d in r.differences if d["source"] == "carved"]
+    assert "parse(s='5x')" in [d["call"] for d in carved]
+    assert r.carved_weak < r.carved_added
+
+
+def test_carved_items_non_weak_wins_across_callers():
+    a = {"args": [{"name": "s", "kind": "pos", "value": lg_codec.encode_input("1x")}], "has_self": False}
+    b = {"args": [{"name": "s", "kind": "pos", "value": lg_codec.encode_input("2x")}], "has_self": False}
+    first = {"captured": {"k": [{**a, "weak": True}, {**b, "weak": True}]}}
+    second = {"captured": {"k": [{**a, "weak": False}]}}
+    items, _ = diff._carved_items([first, second], "k")
+    assert [i.get("weak", False) for i in items] == [False, True]
+    assert not diff._is_guess({"source": "generated"})  # typed parameters or no parameters: compare_one treats it as real
+    assert diff._is_guess({"source": "generated", "weak": True}) and diff._is_guess({"source": "edit", "weak": True})
+    assert diff._is_guess({"source": "examples", "weak": True})  # objects tried on a parameter nothing else fills
+    assert not diff._is_guess({"source": "tests"}) and not diff._is_guess({"source": "examples"})
+    assert not diff._is_guess({"source": "generated", "expect": 1})  # declared examples
+
+
+def test_call_recorded_under_a_no_argument_caller_is_not_weak(tmp_path, make_cfg):
+    # A caller without parameters runs once with no arguments: compare_one treats that input as real, so the call it
+    # records is not weak either, and two different errors on it count.
+    caller = 'from pkg.fmt import parse\n\n\ndef run():\n    return parse(str(len("abcd")) + "!")\n'
+    r = _parse_setup(tmp_path, make_cfg, caller=caller)["parse"]
+    assert r.carved_added == 1 and r.carved_weak == 0, r
+    assert r.status == diff.DIFFERENT, r.reason
+    assert "parse(s='4!')" in [d["call"] for d in r.differences if d["source"] == "carved"]
+
+
+def test_weak_carved_call_still_counts_on_a_one_sided_raise(tmp_path, make_cfg):
+    # The only caller input is a guess (untyped), so its recorded calls are weak; old returns and new raises on them.
+    old = "def parse(s):\n    return s.upper()\n"
+    new = "def parse(s):\n    return int(s)\n"
+    r = _parse_setup(tmp_path, make_cfg, old=old, new=new)["parse"]
+    assert r.carved_added > 0 and r.carved_weak == r.carved_added, r
+    assert r.status == diff.DIFFERENT, r.reason
+    carved = [d for d in r.differences if d["source"] == "carved"]
+    assert carved and any("ValueError" in d["after"] and "ValueError" not in d["before"] for d in carved), carved[:2]
