@@ -285,6 +285,36 @@ Baseline to beat: 2 of 7 checkable BugsInPy bugs detected without the fix's own 
   Fuzzing Book's Python carver (https://www.fuzzingbook.org/html/Carver.html). Inference: a placeholder for values
   that cannot be stored, keeping the rest of the call, and reporting the replay rate.
 
+## 3d. Sprints 6-8 (planned 2026-11-14 from validation run 2 and the open roadmap items)
+
+**Method change: a held-out set.** Sprint 5 and 6 tune against the same nine bugs, which risks overfitting. Sprint 6
+adds a second, held-out set of BugsInPy bugs from other projects, chosen by the researcher with the same criteria and
+never used to tune the guard. Every later validation run reports both sets; the held-out number is the one for the
+README.
+
+**Sprint 6, input quality (from docs/validation/2026-11-run2.md, ranked by misses each would turn into detections):**
+
+| Task | What | Evidence / target |
+|---|---|---|
+| 6.1 | Carved calls and callers' example calls as bases for edit inputs (and edit inputs for callers) | youtube-dl 1 without fix tests |
+| 6.2 | Example files that import the function from its own module come first; resolve fixtures and `str.format` | thefuck 7 with fix tests; thefuck 1 |
+| 6.3 | Splice edit literals into string arguments of constructed objects | thefuck 7 without fix tests (unverified) |
+| 6.4 | Inputs aimed at the condition guarding a changed statement; a pool of library date formats | tqdm 4, youtube-dl 5 (least certain) |
+| 6.5 | Skip callers that cannot be called (static and from earlier results in the session) | time and budget, no detections |
+| 6.6 | A guarded "slowdown" result for timeouts only in the new code (never counted as a detection) | new evidence kind (youtube-dl 10) |
+| 6.7 | Held-out corpus + validation run 3 on both sets | generalisation |
+
+**Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
+--check`, buf when present); D3 `/legacyguard:characterize`; `/legacyguard:impact` and the MCP `impact` tool on the
+resolved call graph; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
+validation on the FastAPI and Flask apps picked in run 1's research.
+
+**Sprint 8, larger items:** A3 the per-project daemon; C1 recorded answers from the project's test database
+(record and replay within a rolled-back transaction, C2).
+
+**Deferred, with reason:** E2 (TypeScript) stays out of scope until the Python results on the held-out set are
+stable; depth in Python is the product's claim.
+
 ## 4. Success metrics to publish
 
 - Detection rate on BugsInPy reversals and on mutants (target: >70% for functions that can be checked).
