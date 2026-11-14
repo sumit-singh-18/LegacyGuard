@@ -41,7 +41,75 @@ def _covered(conn, file: str, qualname: str) -> bool:
         return False
 
 
-def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> list[differ.Target]:
+def _own_hash(cfg, file: str, qualname: str) -> str | None:
+    """The hash of a function's current code alone (not of what it calls), so session memory ends when it is edited."""
+    text = virtual.read_current(str(Path(cfg.root) / file))
+    if text is None:
+        return None
+    sym = next((s for s in symbols.extract(text)[0] if s.qualname == qualname), None)
+    return symbols.sha(sym.node_text) if sym is not None else None
+
+
+class _Buildable:
+    """Static guess whether the guard can build an instance of a class, for ranking its methods (roadmap 6.5).
+
+    The worker builds `self` from constructor calls written in the repo (examples.constructor_calls over the class's
+    own file and the files the index says call it, or files naming it without an index), then from __init__ type
+    hints, then with no arguments. So a class is unlikely to be built when its own __init__ has a required parameter
+    with no type hint and that same search finds no call to it. A class without its own __init__ is not judged.
+    Each class is judged once per check."""
+
+    def __init__(self, root: str, conn=None):
+        self.root = root
+        self.conn = conn
+        self._symbols: dict[str, dict] = {}
+        self._classes: dict[tuple[str, str], str] = {}
+
+    def why_not(self, file: str, qualname: str, kind: str) -> str:
+        """Why the method's instance is unlikely to be built, or "" when nothing says so."""
+        if kind != "method" or "." not in qualname:
+            return ""
+        cls = qualname.rsplit(".", 1)[0]
+        if (file, cls) not in self._classes:
+            self._classes[(file, cls)] = self._judge(file, cls)
+        return self._classes[(file, cls)]
+
+    def _judge(self, file: str, cls: str) -> str:
+        from runner import examples
+        if file not in self._symbols:
+            text = virtual.read_current(str(Path(self.root) / file))
+            self._symbols[file] = {s.qualname: s for s in symbols.extract(text)[0]} if text is not None else {}
+        init = self._symbols[file].get(f"{cls}.__init__")
+        if init is None:
+            return ""
+        params = init.params[1:]  # the first parameter is the instance, whatever it is called
+        untyped = [p["name"] for p in params if p.get("default") is None and not p["name"].startswith("*") and not p.get("annotation")]
+        if not untyped:
+            return ""
+        name = cls.rsplit(".", 1)[-1]
+        names = [p["name"] for p in params if not p["name"].startswith("*")]
+        if examples.constructor_calls(self.root, file, name, names, examples.calling_files(self.conn, name, file)):
+            return ""
+        return ("the guard is unlikely to build their class (its __init__ has required parameters with no type hint, "
+                "and no call to the class was found in the repo)")
+
+
+def skipped_note(skipped: list[dict]) -> str:
+    """One line per reason for the callers left out of a check, so none is dropped silently (roadmap 6.5)."""
+    by_reason: dict[str, list[str]] = {}
+    for s in skipped:
+        by_reason.setdefault(s["reason"], []).append(s["qualname"])
+    lines = []
+    for reason, names in by_reason.items():
+        n = len(names)
+        shown = ", ".join(names[:5]) + (f", +{n - 5} more" if n > 5 else "")
+        lines.append(f"{n} caller{'s' if n != 1 else ''} not run: {reason} ({shown}). Nothing is known about "
+                     f"{'them' if n != 1 else 'it'} from execution.")
+    return "\n".join(lines)
+
+
+def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str], *, memory: dict | None = None,
+               skipped: list | None = None, limit: int | None = None) -> list[differ.Target]:
     """Functions that call an edited one, up to two steps away (FR-41, roadmap B7).
 
     An edit to a shared helper changes what its callers return, and the helper itself is often the one function that
@@ -54,6 +122,11 @@ def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> 
       3. plain functions before methods, which need an instance;
       4. fewer required parameters;
       5. the edited file before others, then by file and name.
+    Two signals come before all of these and put a caller last (roadmap 6.5; validation run 2 lost the budget to
+    youtube-dl extractor methods that never ran): first, earlier in this session it came out untested because no
+    input ran to completion or its instance could not be built (`memory`, the ledger's "callers_unrunnable", valid
+    while the caller's own code is unchanged); then the static guess in _Buildable. Callers past the budget (`limit`,
+    at most MAX_DEPENDENTS) go into `skipped` with their reason, which skipped_note turns into the note's lines.
 
     A caller reached by several edges keeps its best-ranked one for `via` and the ranking. It is gated on the changed
     statements of every edited function it reaches, one or two hops away: it passes only if its inputs run all of them
@@ -72,7 +145,8 @@ def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> 
             edges = []
         names = {t.qualname for t in changed}
         combined = symbols.sha("|".join(sorted(t.code_hash for t in changed)))
-        callers: dict = {}   # (file, qualname) -> {"best": (rank, edge), "edited": [targets], "pair": (then, now)}
+        callers: dict = {}   # (file, qualname) -> {"best": (rank, edge), "edited": [targets], "pair": (then, now), ...}
+        buildable = _Buildable(cfg.root, conn)
         for e, t in edges:
             key = (e.file, e.qualname)
             if e.qualname in taken or (e.file == rel and e.qualname in names):
@@ -83,10 +157,19 @@ def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> 
                 pair = _sym_pair(cfg, e.file, e.qualname)
                 if pair is None:
                     continue
-                callers[key] = {"best": None, "edited": [], "pair": pair, "covered": _covered(conn, e.file, e.qualname)}
+                remembered = ledger.unrunnable_caller(memory, f"{e.file}::{e.qualname}", symbols.sha(pair[1].node_text))
+                why = f"earlier in this session {remembered}" if remembered else ""
+                static = ""
+                if not why:
+                    try:
+                        static = buildable.why_not(e.file, e.qualname, pair[1].kind)
+                    except Exception:  # noqa: BLE001 - a guess that fails puts nothing last
+                        static = ""
+                callers[key] = {"best": None, "edited": [], "pair": pair, "covered": _covered(conn, e.file, e.qualname),
+                                "remembered": why, "static": static}
             c = callers[key]
             then, now = c["pair"]
-            rank = (e.hops, e.how != "resolved", not c["covered"], now.kind == "method", _required(then.params),
+            rank = (bool(c["remembered"]), bool(c["static"]), e.hops, e.how != "resolved", not c["covered"], now.kind == "method", _required(then.params),
                     e.file != rel, e.file, e.qualname)
             if c["best"] is None or rank < c["best"][0]:
                 c["best"] = (rank, e)
@@ -95,8 +178,22 @@ def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> 
     finally:
         if conn is not None:
             conn.close()
+    budget = MAX_DEPENDENTS if limit is None else max(0, min(MAX_DEPENDENTS, limit))
+    ranked = sorted(callers.values(), key=lambda c: c["best"][0])
+    if skipped is not None:
+        if budget >= MAX_DEPENDENTS:
+            over = f"over the limit of {budget} callers per edit (callers more likely to run went first)"
+        elif budget == 0:
+            over = f"the run's {differ.MAX_FUNCTIONS} places went to the edited functions"
+        else:
+            over = (f"only {budget} of the run's {differ.MAX_FUNCTIONS} places were left after the edited functions "
+                    "(callers more likely to run went first)")
+        for c in ranked[budget:]:
+            e = c["best"][1]
+            skipped.append({"file": e.file, "qualname": e.qualname, "via_file": rel,
+                            "reason": c["remembered"] or c["static"] or over})
     out = []
-    for c in sorted(callers.values(), key=lambda c: c["best"][0])[:MAX_DEPENDENTS]:
+    for c in ranked[:budget]:
         e, (then, now) = c["best"][1], c["pair"]
         callee = e.callee.rsplit(".", 1)[-1]
         out.append(differ.Target(e.file, e.qualname, now.kind, then.params, symbols.sha(now.node_text + "|calls|" + combined),
@@ -127,13 +224,22 @@ def route_targets(cfg, targets: list[differ.Target]) -> list[differ.Target]:
         conn.close()
 
 
-def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
+def targets_for(cfg, rel: str, data: dict, skipped: list | None = None) -> list[differ.Target]:
     """Changed functions, the functions that call them, and functions with an open difference.
 
-    A revert must be proved by running the function again, and that includes a caller whose difference came from this file."""
+    A revert must be proved by running the function again, and that includes a caller whose difference came from this file.
+
+    The run takes the first MAX_FUNCTIONS targets, so the order is: changed functions, anything with an open
+    difference (never cut), routes, callers in their ranked order. Callers that do not fit are cut here rather than
+    by the run, added to `skipped` (see skipped_note) and kept in the ledger (_remember_skipped)."""
     before, after = baseline.read_baseline(cfg, rel), virtual.read_current(str(Path(cfg.root) / rel))
     targets = {t.qualname: t for t in differ.changed_targets(rel, before, after)}
-    for dep in dependents(cfg, rel, list(targets.values()), set(targets)):
+    own = list(targets)
+    room = differ.MAX_FUNCTIONS - len(targets)
+    extra: list[dict] = []
+    deps = dependents(cfg, rel, list(targets.values()), set(targets), memory=data.get("callers_unrunnable"),
+                      skipped=extra, limit=room)
+    for dep in deps:
         targets[dep.qualname] = dep
     for route in route_targets(cfg, list(targets.values())):
         targets[route.qualname] = route
@@ -162,7 +268,53 @@ def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
                     gate = differ.caller_gate(edited)
                     targets[q] = differ.Target(f["file"], q, pair[1].kind, pair[0].params, symbols.sha(pair[1].node_text + "|recheck"),
                                                via=f["via"], via_file=rel, **gate)
-    return sorted(targets.values(), key=lambda t: t.qualname)
+    dep_order = {d.qualname: i for i, d in enumerate(deps)}
+    # Anything with an open difference is re-run, whoever added it: a revert can only clear it by running it again.
+    open_diffs = {(f["file"], f["item"]) for f in data["findings"] if f["kind"] == "behavior_difference" and f["state"] == "open"}
+
+    def place(t):
+        if t.qualname in own:
+            return (0, 0, t.qualname)
+        if (t.file, t.qualname) in open_diffs:
+            return (1, 0, t.qualname)
+        if t.kind == "route":
+            return (2, 0, t.qualname)
+        if t.qualname in dep_order:
+            return (3, dep_order[t.qualname], t.qualname)
+        return (1, 0, t.qualname)
+    ordered = sorted(targets.values(), key=place)
+    if len(ordered) > differ.MAX_FUNCTIONS:
+        # Re-checks and routes pushed some ranked callers past the run's limit: name them rather than drop them silently.
+        for t in ordered[differ.MAX_FUNCTIONS:]:
+            if place(t)[0] == 3:
+                extra.append({"file": t.file, "qualname": t.qualname, "via_file": rel,
+                              "reason": f"the run's {differ.MAX_FUNCTIONS} places went to the edited functions, open differences "
+                                        "and routes, and to callers more likely to run"})
+        ordered = [t for i, t in enumerate(ordered) if i < differ.MAX_FUNCTIONS or place(t)[0] != 3]
+    kept = {(t.file, t.qualname) for t in ordered}
+    extra[:] = [s for s in extra if (s["file"], s["qualname"]) not in kept]
+    _remember_skipped(data, extra)
+    if skipped is not None:
+        skipped.extend(extra)
+    return ordered
+
+
+def _remember_skipped(data: dict, skipped: list[dict]) -> None:
+    """Callers left out of a check stay in the ledger as "callers_skipped" {file::qualname: {reason, via_file}}
+    until a later check runs them (record removes them), for the Stop report and session map (roadmap 6.5).
+    They are not written into "callers_run": the session map reads every entry there as "tried, could not be run"."""
+    store = data.setdefault("callers_skipped", {})
+    for s in skipped:
+        store[f"{s['file']}::{s['qualname']}"] = {"reason": s["reason"][:200], "via_file": s["via_file"]}
+
+
+def prune_skipped(data: dict, changed: list[str]) -> None:
+    """At Stop: forget skipped callers whose edited file no longer differs from the baseline (the edit was undone),
+    so the report does not list callers of code that is no longer changed."""
+    store = data.get("callers_skipped") or {}
+    still = set(changed)
+    for key in [k for k, s in store.items() if s.get("via_file") not in still]:
+        store.pop(key, None)
 
 
 def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, differ.Result]]:
@@ -172,6 +324,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
     edited = {r.qualname.rsplit(".", 1)[-1]: r.status for r in results if r.via}
     edited.update({r.qualname.rsplit(".", 1)[-1]: r.status for r in results if not r.via})
     for r in results:
+        # Any result for a function means it was tried this time, as a caller or as an edited function.
+        (data.get("callers_skipped") or {}).pop(f"{r.file}::{r.qualname}", None)
         via = {"via": r.via, "via_file": r.via_file, **({"callees": r.callees} if r.callees else {})} if r.via else {}
         if r.via:
             # What happened to each caller is kept for the session map, whether or not it becomes a finding.
@@ -181,6 +335,12 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                 "statements": [r.statements_reached, r.statements_total],
                 "example": (f"{r.differences[0]['call']} gave {r.differences[0]['before']} before and {r.differences[0]['after']} after"
                             if r.differences else "")[:300]}
+            # Remembered so later edits in this session rank it last (dependents, roadmap 6.5).
+            try:
+                ledger.note_caller_outcome(data, f"{r.file}::{r.qualname}", _own_hash(cfg, r.file, r.qualname),
+                                           r.status == differ.UNTESTED and getattr(r, "baseline_unrunnable", False), r.reason or "")
+            except Exception:  # noqa: BLE001 - memory is a ranking hint; losing it never fails the record
+                pass
             # A caller is in the report only when it shows something the edited function's own result does not.
             # Its agreement on a few inputs says little while the function it calls is known to differ or went
             # unchecked, and a second finding for a break already reported at its source is noise.

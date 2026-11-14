@@ -27,6 +27,7 @@ class Outcome:
     results: list = field(default_factory=list)       # diff.Result
     breaks: list = field(default_factory=list)        # (file, checks.Break)
     lines: dict = field(default_factory=dict)         # "file::qualname" -> line in the new file
+    skipped: list = field(default_factory=list)       # callers left out of the budget, with reasons (engine.skipped_note)
 
     def failing(self, cfg) -> list:
         out = [r for r in self.results if r.status in (diff.DIFFERENT, diff.BROKEN)
@@ -122,7 +123,8 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
         if rel not in changed or not engine.is_guarded_source(cfg, rel) or before is None or not after:
             continue
         targets = diff.changed_targets(rel, before, after)
-        targets += engine.dependents(cfg, rel, targets, {t.qualname for t in targets})
+        targets += engine.dependents(cfg, rel, targets, {t.qualname for t in targets}, skipped=out.skipped,
+                                     limit=diff.MAX_FUNCTIONS - len(targets))
         targets += engine.route_targets(cfg, targets)
         seen = {(r.file, r.qualname) for r in out.results}
         targets = [t for t in targets if (t.file, t.qualname) not in seen]
@@ -153,6 +155,20 @@ def annotations(cfg, out: Outcome) -> list[str]:
     for rel, b in out.breaks:
         lines.append(f"::warning file={rel},title=LegacyGuard contract::{_esc(b.text())}")
     return lines
+
+
+def not_run(out: Outcome) -> list[dict]:
+    """Skipped callers that no file's check ran after all, each once (a caller of two edited files is skipped twice,
+    or skipped for one file and run for another)."""
+    ran = {(r.file, r.qualname) for r in out.results}
+    seen: set = set()
+    keep = []
+    for s in out.skipped:
+        key = (s["file"], s["qualname"])
+        if key not in ran and key not in seen:
+            seen.add(key)
+            keep.append(s)
+    return keep
 
 
 def report(cfg, out: Outcome) -> str:
@@ -187,6 +203,9 @@ def report(cfg, out: Outcome) -> str:
     if untested:
         lines += ["<details><summary>Could not be checked</summary>", ""]
         lines += [f"- `{r.file}::{r.qualname}`: {r.reason}" for r in untested] + ["", "</details>", ""]
+    skipped_text = engine.skipped_note(not_run(out))
+    if skipped_text:
+        lines += ["<details><summary>Callers not run</summary>", ""] + [f"- {x}" for x in skipped_text.splitlines()] + ["", "</details>", ""]
     lines.append("Agreement is evidence on the inputs tried, not a proof.")
     return "\n".join(lines)
 

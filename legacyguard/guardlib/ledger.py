@@ -28,7 +28,8 @@ def _path(state_dir: Path) -> Path:
 def fresh(session_id: str | None) -> dict:
     return {"session_id": session_id, "started": dt.datetime.now().isoformat(timespec="seconds"), "baseline_commit": None, "dirty_files": [],
             "baseline_ok": False, "prompt_text": [], "prompts_used": 0, "wakeups": 0, "next_id": 1, "findings": [], "stop_blocked_for": [],
-            "outside_notified": [], "context_sent": [], "edits": 0, "report": None, "callers_run": {}}
+            "outside_notified": [], "context_sent": [], "edits": 0, "report": None, "callers_run": {},
+            "callers_unrunnable": {}, "callers_skipped": {}}
 
 
 def load(state_dir: Path) -> dict:
@@ -70,6 +71,26 @@ def add_finding(data: dict, *, kind: str, status: str, source: str, subject: str
     data["next_id"] += 1
     data["findings"].append(finding)
     return finding, True
+
+
+def note_caller_outcome(data: dict, key: str, own_hash: str | None, unrunnable: bool, reason: str) -> None:
+    """Session memory of callers that could not be run, keyed by file::qualname and the caller's own code hash
+    (roadmap 6.5). `unrunnable` must mean the cause is on the baseline side (diff.Result.baseline_unrunnable: every
+    input raised or failed setup on the code before the session), never something the edit did. Any other outcome
+    for the caller forgets it."""
+    memory = data.setdefault("callers_unrunnable", {})
+    if unrunnable and own_hash:
+        memory[key] = {"hash": own_hash, "reason": (reason or "it could not be run")[:160]}
+    else:
+        memory.pop(key, None)
+
+
+def unrunnable_caller(memory: dict | None, key: str, own_hash: str) -> str:
+    """The remembered reason a caller could not be run, while its code is unchanged; "" otherwise."""
+    entry = (memory or {}).get(key)
+    if not entry or entry.get("hash") != own_hash:
+        return ""
+    return entry.get("reason") or "it could not be run"
 
 
 def find(data: dict, finding_id: str) -> dict | None:

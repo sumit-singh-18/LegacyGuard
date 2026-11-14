@@ -60,6 +60,7 @@ def _contract_findings(cfg, data, changed):
 
 def _behavior_findings(cfg, data, changed):
     root = cfg.root
+    engine.prune_skipped(data, changed)  # callers skipped for an edit that is no longer in the tree (roadmap 6.5)
     for rel in changed:
         if not engine.is_guarded_source(cfg, rel):
             continue

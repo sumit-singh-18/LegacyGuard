@@ -28,7 +28,8 @@ def handle(event: dict):
                 f["state"] = "applied"
         if not data.get("baseline_ok") or not engine.is_guarded_source(cfg, rel):
             return None
-        targets = engine.targets_for(cfg, rel, data)
+        skipped: list = []  # callers left out of the budget, named in the note (roadmap 6.5)
+        targets = engine.targets_for(cfg, rel, data, skipped=skipped)
     if not targets:
         return None
     results = differ.run(cfg, str(baseline.baseline_dir(cfg)), root, targets)
@@ -45,11 +46,12 @@ def handle(event: dict):
     except Exception as exc:  # noqa: BLE001 - a test run that cannot start must not hide the diff's result
         from _common import log_error
         log_error(root, f"affected tests: {type(exc).__name__}: {exc}")
+    skipped_text = engine.skipped_note(skipped)
     if texts:
-        raise Wake("\n\n".join(texts))
+        raise Wake("\n\n".join(texts + ([skipped_text] if skipped_text else [])))
     # No difference: Claude is told what was run and what that does and does not show, as context only (D-045).
     # Without it Claude cannot know the edit was checked, and repeats the work or assumes nothing looked.
-    note = differ.format_note(results)
+    note = "\n".join(x for x in (differ.format_note(results), skipped_text) if x)
     return hook_output("PostToolUse", context=note) if note else None
 
 

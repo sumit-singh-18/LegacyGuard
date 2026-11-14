@@ -89,7 +89,7 @@ class Result:
     carved_unstored: int = 0        # calls (repeats included) not recorded because a value could not be encoded
     carved_note: str = ""           # why no calls were recorded, when the recording run failed or timed out
     carved_weak: int = 0            # of the added calls, those recorded only while guessed caller inputs ran (weak)
-    # (Task 6.5 adds baseline_unrunnable below.)
+    baseline_unrunnable: bool = False  # untested because every own, non-guessed input raised or failed setup on the baseline (roadmap 6.5)
 
     @property
     def subject(self) -> str:
@@ -517,6 +517,11 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     if r.inputs_completed == 0:
         r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:120]})") + \
                    (f"; {slow} inputs ran past the time limit" if slow else "")
+        # On the baseline every input of the caller's own that is not a guess (no declared, carved, weak or edit-derived
+        # input) raised or could not be set up: the cause is not this edit (engine ranking, roadmap 6.5).
+        old = [oa.get("outcome") for item, oa in zip(items, a["results"])
+               if item.get("expect") is None and item.get("source") != "carved" and not _is_guess(item)]
+        r.baseline_unrunnable = bool(old) and all(o in ("raise", "setup_failed") for o in old)
         return r
     where = f" of {callee_names(target.callees)}" if target.via and target.callees else ""
     if untraced and target.via:
