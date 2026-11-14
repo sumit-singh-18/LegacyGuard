@@ -1,0 +1,87 @@
+# Real BugsInPy bugs (roadmap 3b). Commit hashes from BugsInPy bug.info (checked character by character against each bug.info by the research reviewer agent, 2026-11-13);
+# patches are BugsInPy's bug_patch.txt, downloaded into patches/.
+# Run: .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml \
+#        --workdir /private/tmp/claude-501/lg-validation --out /private/tmp/claude-501/lg-validation/out
+cases:
+  - name: youtube-dl-1          # _match_one
+    repo: https://github.com/ytdl-org/youtube-dl
+    kind: bug
+    buggy: 99036a1298089068dcf80c0985bfcc3f8c24f281
+    fixed: 1cc47c667419e0eadc0a6989256ab7b276852adf
+    files: [youtube_dl/utils.py]
+    patch: patches/youtube-dl-1.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: youtube-dl-3          # unescapeHTML
+    repo: https://github.com/ytdl-org/youtube-dl
+    kind: bug
+    buggy: f5469da9e6e259c1690c7ef54f1da1c19f65036f
+    fixed: 95f3f7c20a05e7ac490e768b8470b20538ef8581
+    files: [youtube_dl/utils.py]
+    patch: patches/youtube-dl-3.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: youtube-dl-5          # unified_timestamp
+    repo: https://github.com/ytdl-org/youtube-dl
+    kind: bug
+    buggy: b02b960c6bba834d9e7199ac53430c7933079dc8
+    fixed: 7dc2a74e0ac9cfa74cc9de6f586ffd5cc8bac0d9
+    files: [youtube_dl/utils.py]
+    patch: patches/youtube-dl-5.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: youtube-dl-10         # js_to_json
+    repo: https://github.com/ytdl-org/youtube-dl
+    kind: bug
+    buggy: 85d586617750d38d742a24f141b099f6b898d269
+    fixed: d305dd73a3d6927f0a2c63d08662a183fa173833
+    files: [youtube_dl/utils.py]
+    patch: patches/youtube-dl-10.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: youtube-dl-11         # str_to_int
+    repo: https://github.com/ytdl-org/youtube-dl
+    kind: bug
+    buggy: b568561eba6f4aceb87419e21aba11567c5de7da
+    fixed: 348c6bf1c1a00eec323d6e21ff7b9b12699afe04
+    files: [youtube_dl/utils.py]
+    patch: patches/youtube-dl-11.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: tqdm-4                # tqdm.format_meter
+    repo: https://github.com/tqdm/tqdm
+    kind: bug
+    buggy: 03b347646492131d889871939b40457d29147216
+    fixed: 964dee631d0ed30e2f799b42fc58ba5e73795a08
+    files: [tqdm/_tqdm.py]
+    patch: patches/tqdm-4.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: tqdm-9                # format_sizeof, tqdm.__len__ (patch also has whitespace-only hunks)
+    repo: https://github.com/tqdm/tqdm
+    kind: bug
+    buggy: 9da1d5d116aec7a23d8f6dc22d5e23ecb1c40a7c
+    fixed: d877c1dfb4739852105f7b967a8fceb869ac5042
+    files: [tqdm/_tqdm.py]
+    patch: patches/tqdm-9.patch
+    python: /private/tmp/claude-501/venv310/bin/python
+
+  - name: thefuck-1             # pip_unknown_command.get_new_command
+    repo: https://github.com/nvbn/thefuck
+    kind: bug
+    buggy: 2ced7a7f33ae0bec3ffc7a43ce95330bdf6cfcb9
+    fixed: 444908ce1c17767ef4aaf9e0b4950497914f7f63
+    files: [thefuck/rules/pip_unknown_command.py]
+    patch: patches/thefuck-1.patch
+    setup: &thefuck_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q psutil colorama six decorator pyte'
+
+  - name: thefuck-7             # php_s.match (fix also deletes module-level requires_output)
+    repo: https://github.com/nvbn/thefuck
+    kind: bug
+    buggy: 64d6835e15a22cf8803d398cbb593f748c550e8a
+    fixed: 75d2c43997ca703150cbdb4c46ed7b2e2e71fd11
+    files: [thefuck/rules/php_s.py]
+    patch: patches/thefuck-7.patch
+    setup: *thefuck_setup

@@ -1,0 +1,1510 @@
+{
+  "manifest": "/Users/sumit/Documents/LegacyGuard/repo/tools/validation/manifest.yaml",
+  "workdir": "/private/tmp/claude-501/lg-validation",
+  "generated": "2026-11-14T00:00:07",
+  "metrics": {
+    "cases": 9,
+    "ran": 9,
+    "checked": 7,
+    "errors": 0,
+    "unchecked": 2,
+    "error_cases": [],
+    "unchecked_cases": [
+      "thefuck-1",
+      "thefuck-7"
+    ],
+    "matched": 5,
+    "detection": {
+      "detected": 5,
+      "total": 7,
+      "rate": 0.714
+    },
+    "false_alarm": {
+      "alarms": 0,
+      "total": 0,
+      "rate": null
+    },
+    "untested": {
+      "functions": 34,
+      "total": 52,
+      "share": 0.654
+    },
+    "mutation": {
+      "killed": 0,
+      "total": 0,
+      "score": null
+    },
+    "seconds": {
+      "median": 2.841,
+      "p95": 3.982
+    }
+  },
+  "cases": [
+    {
+      "name": "youtube-dl-1",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 2.841,
+      "prep_seconds": 5.282,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "_match_one",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_str",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 32,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _match_one",
+          "via_file": "youtube_dl/utils.py",
+          "counterexample": {
+            "call": "match_str(filter_str='is_live', dct={'is_live': False})",
+            "before": "False",
+            "after": "True"
+          }
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_filter_func",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 197,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls match_str",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_str",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 32,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _match_one",
+          "via_file": "youtube_dl/utils.py",
+          "counterexample": {
+            "call": "match_str(filter_str='is_live', dct={'is_live': False})",
+            "before": "False",
+            "after": "True"
+          }
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_filter_func",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 197,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls match_str",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "_match_one",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 8.201
+    },
+    {
+      "name": "youtube-dl-3",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 3.865,
+      "prep_seconds": 0.242,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unescapeHTML",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 82,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "unescapeHTML(s='&a&quot;')",
+            "before": "'&a\"'",
+            "after": "'&a&quot;'"
+          }
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "clean_html",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 83,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "get_elements_by_attribute",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 79,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/adobepass.py",
+          "qualname": "AdobePassIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "HistoryTopicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/atvat.py",
+          "qualname": "ATVAtIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/baidu.py",
+          "qualname": "BaiduVideoIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bbc.py",
+          "qualname": "BBCIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bild.py",
+          "qualname": "BildIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unescapeHTML",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 82,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "unescapeHTML(s='&a&quot;')",
+            "before": "'&a\"'",
+            "after": "'&a&quot;'"
+          }
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "clean_html",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 83,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "get_elements_by_attribute",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 79,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/adobepass.py",
+          "qualname": "AdobePassIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "HistoryTopicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/atvat.py",
+          "qualname": "ATVAtIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/baidu.py",
+          "qualname": "BaiduVideoIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bbc.py",
+          "qualname": "BBCIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bild.py",
+          "qualname": "BildIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 4.182
+    },
+    {
+      "name": "youtube-dl-5",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 3.982,
+      "prep_seconds": 0.254,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unified_timestamp",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 76,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+            "before": "1463440500",
+            "after": "raises AttributeError: 'tuple' object has no attribute 'timetuple'"
+          }
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._json_ld",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/flipagram.py",
+          "qualname": "FlipagramIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/polskieradio.py",
+          "qualname": "PolskieRadioIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/theplatform.py",
+          "qualname": "ThePlatformIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._search_json_ld",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _json_ld",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "AENetworksIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/nationalgeographic.py",
+          "qualname": "NationalGeographicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/syfy.py",
+          "qualname": "SyfyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unified_timestamp",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 76,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+            "before": "1463440500",
+            "after": "raises AttributeError: 'tuple' object has no attribute 'timetuple'"
+          }
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._json_ld",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/flipagram.py",
+          "qualname": "FlipagramIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/polskieradio.py",
+          "qualname": "PolskieRadioIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/theplatform.py",
+          "qualname": "ThePlatformIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._search_json_ld",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _json_ld",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "AENetworksIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/nationalgeographic.py",
+          "qualname": "NationalGeographicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/syfy.py",
+          "qualname": "SyfyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 4.307
+    },
+    {
+      "name": "youtube-dl-10",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "verdict": "quiet",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 3.268,
+      "prep_seconds": 0.246,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "js_to_json",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 79,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "youtube_dl/extractor/krasview.py",
+          "qualname": "KrasViewIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/muenchentv.py",
+          "qualname": "MuenchenTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/patreon.py",
+          "qualname": "PatreonIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/pornhd.py",
+          "qualname": "PornHdIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/sbs.py",
+          "qualname": "SBSIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/srmediathek.py",
+          "qualname": "SRMediathekIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/tass.py",
+          "qualname": "TassIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "js_to_json",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 79,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/krasview.py",
+          "qualname": "KrasViewIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/muenchentv.py",
+          "qualname": "MuenchenTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/patreon.py",
+          "qualname": "PatreonIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/pornhd.py",
+          "qualname": "PornHdIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/sbs.py",
+          "qualname": "SBSIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/srmediathek.py",
+          "qualname": "SRMediathekIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/tass.py",
+          "qualname": "TassIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 3.57
+    },
+    {
+      "name": "youtube-dl-11",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 3.742,
+      "prep_seconds": 0.274,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "str_to_int",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 122,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "str_to_int(int_str=523)",
+            "before": "523",
+            "after": "raises TypeError: expected string or bytes-like object"
+          }
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "parse_count",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 86,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/adobetv.py",
+          "qualname": "AdobeTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/appleconnect.py",
+          "qualname": "AppleConnectIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/camdemy.py",
+          "qualname": "CamdemyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cloudy.py",
+          "qualname": "CloudyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cracked.py",
+          "qualname": "CrackedIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/drtuber.py",
+          "qualname": "DrTuberIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/eporner.py",
+          "qualname": "EpornerIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "str_to_int",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 122,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "str_to_int(int_str=523)",
+            "before": "523",
+            "after": "raises TypeError: expected string or bytes-like object"
+          }
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "parse_count",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 86,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/adobetv.py",
+          "qualname": "AdobeTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/appleconnect.py",
+          "qualname": "AppleConnectIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/camdemy.py",
+          "qualname": "CamdemyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cloudy.py",
+          "qualname": "CloudyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cracked.py",
+          "qualname": "CrackedIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/drtuber.py",
+          "qualname": "DrTuberIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/eporner.py",
+          "qualname": "EpornerIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 4.095
+    },
+    {
+      "name": "tqdm-4",
+      "kind": "bug",
+      "repo": "https://github.com/tqdm/tqdm",
+      "expect": "detected",
+      "verdict": "quiet",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.857,
+      "prep_seconds": 1.421,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "tqdm/_tqdm.py"
+      ],
+      "changed_files": [
+        "tqdm/_tqdm.py"
+      ],
+      "functions": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.format_meter",
+          "status": "untested",
+          "reason": "none of the 38 inputs tried reached the changed lines, so the edit itself was not exercised",
+          "inputs_compared": 38,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__repr__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.__iter__",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.update",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.display",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 143,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls __repr__",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__repr__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.display",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 143,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls __repr__",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.format_meter",
+          "status": "untested",
+          "reason": "none of the 38 inputs tried reached the changed lines, so the edit itself was not exercised",
+          "inputs_compared": 38,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.__iter__",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.update",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 3.307
+    },
+    {
+      "name": "tqdm-9",
+      "kind": "bug",
+      "repo": "https://github.com/tqdm/tqdm",
+      "expect": "detected",
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 0.936,
+      "prep_seconds": 0.14,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "tqdm/_tqdm.py"
+      ],
+      "changed_files": [
+        "tqdm/_tqdm.py"
+      ],
+      "functions": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_sizeof",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 88,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "format_sizeof(num=9.995, suffix='g')",
+            "before": "'10.0g'",
+            "after": "'9.99g'"
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__init__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 150,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__iter__",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__len__",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "__len__()",
+            "before": "None",
+            "after": "raises TypeError: object of type 'NoneType' has no len()"
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_meter",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 45,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_sizeof",
+          "via_file": "tqdm/_tqdm.py",
+          "counterexample": {
+            "call": "format_meter(n=1, total=9999, elapsed=1, unit_scale=True)",
+            "before": "'  0%|          | 1.00/10.0K [00:01<2:46:38, 1.00it/s]'",
+            "after": "'  0%|          | 1.00/10.00K [00:01<2:46:38, 1.00it/s]'"
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.close",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.update",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 151,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_sizeof",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 88,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "format_sizeof(num=9.995, suffix='g')",
+            "before": "'10.0g'",
+            "after": "'9.99g'"
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__len__",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "__len__()",
+            "before": "None",
+            "after": "raises TypeError: object of type 'NoneType' has no len()"
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_meter",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 45,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_sizeof",
+          "via_file": "tqdm/_tqdm.py",
+          "counterexample": {
+            "call": "format_meter(n=1, total=9999, elapsed=1, unit_scale=True)",
+            "before": "'  0%|          | 1.00/10.0K [00:01<2:46:38, 1.00it/s]'",
+            "after": "'  0%|          | 1.00/10.00K [00:01<2:46:38, 1.00it/s]'"
+          }
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__init__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 150,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.close",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.update",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 151,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__iter__",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 1.103
+    },
+    {
+      "name": "thefuck-1",
+      "kind": "bug",
+      "repo": "https://github.com/nvbn/thefuck",
+      "expect": "detected",
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 0.768,
+      "prep_seconds": 5.084,
+      "python": "/private/tmp/claude-501/lg-validation/envs/thefuck-1848729c/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "thefuck/rules/pip_unknown_command.py"
+      ],
+      "changed_files": [
+        "thefuck/rules/pip_unknown_command.py"
+      ],
+      "functions": [
+        {
+          "file": "thefuck/rules/pip_unknown_command.py",
+          "qualname": "get_new_command",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "thefuck/rules/pip_unknown_command.py",
+          "qualname": "get_new_command",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 5.899
+    },
+    {
+      "name": "thefuck-7",
+      "kind": "bug",
+      "repo": "https://github.com/nvbn/thefuck",
+      "expect": "detected",
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 0.671,
+      "prep_seconds": 0.165,
+      "python": "/private/tmp/claude-501/lg-validation/envs/thefuck-1848729c/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "thefuck/rules/php_s.py"
+      ],
+      "changed_files": [
+        "thefuck/rules/php_s.py"
+      ],
+      "functions": [
+        {
+          "file": "thefuck/rules/php_s.py",
+          "qualname": "match",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "thefuck/rules/php_s.py",
+          "qualname": "match",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 0.879
+    }
+  ]
+}
