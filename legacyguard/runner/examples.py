@@ -2,7 +2,7 @@
 
 Two uses, both read-only and without a model:
 
-* gates: the statements an edit changed. A Verified pass needs at least one input that ran one of them (D-043).
+* gates: the statements an edit changed. A Verified pass needs every one of them run by some input (D-043).
 * a pool of example values and whole example calls, taken from the function's own text (docstring included) and from
   the files that call it, tests first. Guessed inputs for an untyped parameter rarely reach real code paths; the
   project's own examples do.
@@ -42,7 +42,9 @@ def _statement_spans(source: str) -> list[tuple[int, int, bool]] | None:
         body = getattr(node, "body", None)
         if isinstance(body, list) and body and hasattr(body[0], "lineno"):
             end = max(node.lineno, body[0].lineno - 1)
-        inert = isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+        # A docstring, `global` and `nonlocal` never produce a traced line, so they can never count as reached.
+        inert = (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)) \
+            or isinstance(node, (ast.Global, ast.Nonlocal))
         spans.append((node.lineno, end, inert))
     return spans
 
@@ -88,6 +90,23 @@ def reached(gate: list[list[int]], executed: list[int] | None) -> bool | None:
         return None
     done = set(executed)
     return any(any(n in done for n in range(start, end + 1)) for start, end in gate)
+
+
+def coverage(gate: list[list[int]], executed: list[int] | None) -> tuple[list[list[int]], list[list[int]]] | None:
+    """(reached statements, statements never run) of a gate. None when there is nothing to judge by."""
+    if not gate or executed is None:
+        return None
+    done = set(executed)
+    hit, missed = [], []
+    for start, end in gate:
+        (hit if any(n in done for n in range(start, end + 1)) else missed).append([start, end])
+    return hit, missed
+
+
+def show_ranges(ranges: list[list[int]], limit: int = 6) -> str:
+    """'45-46, 50' for statement ranges."""
+    parts = [f"{s}-{e}" if e != s else f"{s}" for s, e in ranges[:limit]]
+    return ", ".join(parts) + (f" and {len(ranges) - limit} more" if len(ranges) > limit else "")
 
 
 # ---- example values ----

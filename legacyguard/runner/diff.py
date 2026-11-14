@@ -44,6 +44,14 @@ class Target:
     source_start: int = 0                          # first line of `source` in the baseline file
     requests: list = field(default_factory=list)   # kind "route": the HTTP requests to send (roadmap C3)
     declared: list = field(default_factory=list)   # inputs with an "expect" from declare_change (roadmap D1)
+    # A caller (via) passes only if its inputs ran the edited function's changed statements. Two steps away, that is
+    # still the edited function, not the caller in between.
+    # Every edited function this caller reaches counts (see caller_gate): new-tree statements, plus old-tree ones for
+    # edited functions whose edit only deleted code.
+    callees: list = field(default_factory=list)    # the edited functions' qualnames
+    callee_file: str = ""                          # their file
+    callee_old_gate: list = field(default_factory=list)
+    callee_new_gate: list = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +77,10 @@ class Result:
     mutants_survived: list = field(default_factory=list)
     via: str = ""
     via_file: str = ""
+    statements_reached: int = 0     # changed statements run by at least one input (the gate, D-043)
+    statements_total: int = 0       # 0 when there was no gate to judge by
+    callees: list = field(default_factory=list)  # for a caller: the edited functions whose statements it was judged by
+    unreached_note: str = ""        # a caller's difference although its inputs ran none of the changed statements
 
     @property
     def subject(self) -> str:
@@ -123,6 +135,8 @@ def changed_targets(rel: str, before: str | None, after: str | None) -> list[Tar
     out: dict[str, Target] = {}
     for c in symbol_diff.diff(before, after):
         if c.kind in ("body_changed", "signature_changed") and c.after.kind != "class":
+            if same_code(before, after, c.before, c.after):
+                continue  # comments, whitespace or the docstring only: running it cannot show anything
             old = c.before
             old_gate, new_gate = examples.gates(before, after, c.before, c.after)
             out[c.qualname] = Target(rel, c.qualname, c.after.kind, old.params, symbols.sha(c.after.node_text),
@@ -139,6 +153,41 @@ def changed_targets(rel: str, before: str | None, after: str | None) -> list[Tar
                 if before_sym is not None:
                     out[q] = Target(rel, q, s.kind, before_sym.params, symbols.sha(s.node_text + "|".join(sorted(changed_names))))
     return sorted(out.values(), key=lambda t: t.qualname)
+
+
+def _strip_own_docstring(node):
+    """The function without its own top docstring. Nested functions and classes keep theirs."""
+    import ast
+    body = node.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        node.body = body[1:] or [ast.Pass()]
+    return node
+
+
+def _function_dump(source: str, line: int, keep_docstring: bool) -> str | None:
+    """The parsed function defined at `line`, decorators included, without positions. None if not found."""
+    import ast
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+    node = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.lineno == line), None)
+    if node is None:
+        return None
+    return ast.dump(node if keep_docstring else _strip_own_docstring(node))
+
+
+# Code that reads docstrings at run time: there a docstring is behaviour (ply grammars, docopt usage, click help).
+DOC_READERS = re.compile(r"__doc__|^[ \t]*(?:import|from)[ \t]+(?:ply|docopt|click)\b", re.M)
+
+
+def same_code(before: str, after: str, before_sym, after_sym) -> bool:
+    """True if the two versions of a function parse to the same code once comments and whitespace are set aside, and
+    its own docstring too unless the file reads docstrings at run time. Such an edit cannot change what the function
+    does (validation run 1, tqdm 9)."""
+    keep = bool(DOC_READERS.search(before) or DOC_READERS.search(after))
+    old, new = _function_dump(before, before_sym.line_start, keep), _function_dump(after, after_sym.line_start, keep)
+    return old is not None and old == new
 
 
 def _module_assignments(source: str) -> dict[str, str]:
@@ -361,11 +410,26 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                                   "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
                                   "special": _has_special(item), "state": not same_state,
                                   "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
+    # A pass must rest on inputs that ran every changed statement (D-043). Guessed values for an untyped parameter often
+    # leave by an early return or an error, and old and new code then agree without the edit ever being exercised.
+    # A caller is held to the edited functions' statements: agreeing on inputs that never reach them says nothing.
+    parts = gate_parts(target, a, n)
+    untraced = any(executed is None for _, executed, _ in parts)
+    hit, missed, missed_old = [], [], []
+    if parts and not untraced:
+        for gate, executed, old_tree in parts:
+            h, m = examples.coverage(gate, executed)
+            hit += h
+            (missed_old if old_tree else missed).extend(m)
+        r.statements_reached, r.statements_total = len(hit), sum(len(g) for g, _, _ in parts)
     if r.declared_failures and not r.differences:
         r.status = DIFFERENT
         return r
     if r.differences:
         r.status = DIFFERENT
+        if target.via and r.statements_total and not r.statements_reached:
+            r.unreached_note = (f"The inputs never ran the changed statements of {callee_names(target.callees)} (reached 0 of {r.statements_total}), "
+                                "so this difference may come from elsewhere: an earlier edit this session, another function, or non-determinism")
         # The example a person reads first: from real tests, then the repo's own examples, ordinary values before
         # NaN and infinity, a returned value before an error, and short before long.
         r.differences.sort(key=lambda d: (d["noise"], d["source"] != "tests", d["source"] != "examples", d["special"],
@@ -386,17 +450,81 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:120]})") + \
                    (f"; {slow} inputs ran past the time limit" if slow else "")
         return r
-    # A pass must rest on inputs that ran the changed code (D-043). Guessed values for an untyped parameter often
-    # leave by an early return or an error, and old and new code then agree without the edit ever being exercised.
-    hit = examples.reached(target.new_gate, n.get("lines")) if target.new_gate else examples.reached(target.old_gate, a.get("lines"))
-    if hit is False:
-        r.reason = f"none of the {r.inputs_compared} inputs tried reached the changed lines, so the edit itself was not exercised"
+    where = f" of {callee_names(target.callees)}" if target.via and target.callees else ""
+    if untraced and target.via:
+        r.reason = f"the changed lines{where} could not be traced while it ran"
+        return r
+    if r.statements_total and not r.statements_reached:
+        r.reason = (f"none of the {r.inputs_compared} inputs tried reached the changed lines{where}, so the edit itself was not exercised"
+                    f" (reached 0 of {r.statements_total} changed statements)")
+        return r
+    if missed or missed_old:
+        never = []
+        if missed:
+            never.append(f"{_lines_word(missed)} {examples.show_ranges(missed)} never ran")
+        if missed_old:
+            never.append(f"{_lines_word(missed_old)} {examples.show_ranges(missed_old)} (in the code before the edit) never ran")
+        r.reason = f"inputs reached {r.statements_reached} of {r.statements_total} changed statements{where}; " + "; ".join(never)
         return r
     r.status = DONE
     m = a.get("mutation") or {}
     if m.get("applicable"):
         r.mutants_total, r.mutants_killed, r.mutants_survived = m["total"], m["killed"], m.get("survived", [])
     return r
+
+
+def _lines_word(ranges: list) -> str:
+    return "lines" if len(ranges) > 1 or ranges[0][0] != ranges[0][1] else "line"
+
+
+def callee_names(callees: list) -> str:
+    """'a, b' from edited functions' qualnames."""
+    return ", ".join(dict.fromkeys(c.rsplit(".", 1)[-1] for c in callees)) or "the edited function"
+
+
+def caller_gate(edited: list[Target]) -> dict:
+    """Target fields that gate a caller on every edited function it reaches (all in one file): their changed
+    statements in the new tree, or in the old tree for an edit that only deleted code."""
+    edited = [t for t in edited if t is not None]
+    if not edited:
+        return {}
+    return {"callees": [t.qualname for t in edited], "callee_file": edited[0].file,
+            "callee_new_gate": [g for t in edited for g in t.new_gate],
+            "callee_old_gate": [g for t in edited if not t.new_gate for g in t.old_gate]}
+
+
+def gate_parts(target: Target, a: dict, n: dict) -> list[tuple[list, list | None, bool]]:
+    """[(gate, executed lines, gate is in the old tree)]. A function's own gate is in the new tree, or the old one when
+    the edit only deleted code. A caller is judged by the edited functions' statements, traced while it ran."""
+    if target.via:
+        parts = []
+        if target.callee_new_gate:
+            parts.append((target.callee_new_gate, n.get("gate_lines"), False))
+        if target.callee_old_gate:
+            parts.append((target.callee_old_gate, a.get("gate_lines"), True))
+        return parts
+    if target.new_gate:
+        return [(target.new_gate, n.get("lines"), False)]
+    if target.old_gate:
+        return [(target.old_gate, a.get("lines"), True)]
+    return []
+
+
+def reached_text(r: Result) -> str:
+    """'reached 2 of 2 changed statements', or '' without a gate."""
+    if not r.statements_total:
+        return ""
+    return f"reached {r.statements_reached} of {r.statements_total} changed statements"
+
+
+def _tree_specs(specs: list[dict], runnable: dict, old: bool) -> list[dict]:
+    """The specs for one tree, with the edited function's changed statements to trace for each caller."""
+    out = []
+    for spec in specs:
+        t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
+        ranges = (t.callee_old_gate if old else t.callee_new_gate) if t.via and t.callee_file else []
+        out.append({**spec, "gate": {"file": t.callee_file, "ranges": ranges}} if ranges else spec)
+    return out
 
 
 def confidence_text(r: Result) -> str:
@@ -563,11 +691,13 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         deadline = float(bd["timeout_s"])
         use_self = bool(bd.get("self_diff", True))
         warm_names = warm.third_party_imports(work_root, sorted({t.file for t, _ in runnable.values()}), extra)
-        specs_a = _with_mutants(specs, runnable, int(bd.get("mutants", 8)))
+        specs_old = _tree_specs(specs, runnable, old=True)
+        specs_a = _with_mutants(specs_old, runnable, int(bd.get("mutants", 8)))
+        specs_n = _tree_specs(specs, runnable, old=False)
         with cf.ThreadPoolExecutor(3) as pool:
             fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs_a, deadline, warm_names)
-            fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs, deadline, warm_names)
-            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs, deadline, warm_names) if use_self else None
+            fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs_n, deadline, warm_names)
+            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs_old, deadline, warm_names) if use_self else None
             a, n = fa.result(), fn.result()
             b = fb.result() if fb else None
         failed = next((x[FAILED] for x in (a, n, b) if x and FAILED in x), None)
@@ -581,6 +711,7 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
                 results[t.qualname].reason += f" (the project's Django settings did not load: {setup_note})"
     for t in targets:
         results[t.qualname].via, results[t.qualname].via_file = t.via, t.via_file
+        results[t.qualname].callees = list(t.callees)
     return [results[t.qualname] for t in targets]
 
 
@@ -594,15 +725,17 @@ def format_note(results: list[Result]) -> str:
             conf = confidence_text(r)
             io = (f"Database and HTTP calls were answered by stand-ins (no rows, HTTP 200 with an empty body), so for "
                   f"{r.inputs_with_io} inputs what agreed is the calls made, not their real results. ") if r.inputs_with_io else ""
+            reach = f"; the inputs {reached_text(r)}" if r.statements_total else ""
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
-                         f"({r.inputs_completed} returned a value). " + (f"{conf}. " if conf else "") + io +
+                         f"({r.inputs_completed} returned a value{reach}). " + (f"{conf}. " if conf else "") + io +
                          "The inputs are the repo's own examples plus guesses, so this is not a proof; values it did not try can still differ.")
         elif r.status == UNTESTED:
             lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. Nothing is known about this edit from execution.")
     if len(own) > 4:
         lines.append(f"+{len(own) - 4} more functions; /legacyguard:status lists them.")
     if callers:
-        names = ", ".join(c.qualname for c in callers[:5])
+        names = ", ".join(c.qualname + (f" ({reached_text(c)} of {callee_names(c.callees)})" if c.statements_total
+                                         else " (not gated: the edit left no statements to check)") for c in callers[:5])
         lines.append(f"{len(callers)} function{'s that call' if len(callers) != 1 else ' that calls'} the edited code {'were' if len(callers) != 1 else 'was'} also run "
                      f"({names}): no difference on the inputs tried. Callers that could not be run are not listed.")
     return "\n".join(lines)
@@ -627,6 +760,8 @@ def format_wake(result: Result, finding_id: str) -> str:
     if result.only_float_noise:
         lines.append("Every difference found is in the last digits of a float (the two results agree to nine digits). That can be plain float "
                      "arithmetic, or the visible edge of a rounding change: a value on a rounding boundary can still come out a whole step different.")
+    if result.unreached_note:
+        lines.append(f"{result.unreached_note}.")
     if result.reason:
         lines.append(f"Also: {result.reason}.")
     lines.append(f"Whether the request intended this is unknown. If it did not, revising the code clears this and the check re-runs by itself. "

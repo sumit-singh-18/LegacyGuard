@@ -244,6 +244,27 @@ Baseline to beat: 2 of 7 checkable BugsInPy bugs detected without the fix's own 
 | E | Record the arguments callers pass to the edited function and reuse them as its inputs | tqdm 4's format_meter reached with total=None and a numeric unit_scale, or a stated reason why not |
 | F | Re-run the nine bugs in both modes | A reviewer-checked comparison with run 1 |
 
+**Sprint 5 design decisions (research reviewed 2026-11-14):**
+- B, inputs: a static constant pool from the code and its tests plus a dynamic pool of values the changed
+  function compares against at run time, reused with set probabilities instead of always (EvoSuite seeding:
+  constant seeding alone raised branch coverage 57% to 62% at PConstant 0.5 on affected classes, with only minor
+  mutation-score differences; Pynguin defaults: constant and dynamic seeding on, dynamic pool capped at 50). Reusing
+  objects from existing tests also helped (Rojas, Fraser, Arcuri, STVR 2016,
+  https://eprints.whiterose.ac.uk/101955/; https://pynguin.readthedocs.io/latest/api.html). Inference (our
+  heuristics, not shown by the papers): values between an edit's old and new constants; for a regex edit, sampling
+  strings from both regexes (Hypothesis from_regex, matching how the code calls them: match, search or fullmatch)
+  and keeping the ones the two treat differently. Like shadow symbolic execution, this needs an input that already
+  reaches the change, which is why Task A's gate comes first (Palikareva, Kuchta, Cadar, ICSE 2016,
+  http://srg.doc.ic.ac.uk/files/papers/shadow-icse-16.pdf).
+- D, planted bugs: mutmut's string operators (escape sequences kept, identical mutants dropped, split/rsplit only
+  with maxsplit; https://raw.githubusercontent.com/boxed/mutmut/HEAD/src/mutmut/mutation/mutators.py) and a subset
+  of MutRex's 13 regex operators (2.3% equivalent mutants over 33 regexes; Arcaini, Gargantini, Riccobene, Mutation
+  2017, https://cs.unibg.it/gargantini/research/papers/mutrex_mutation17.pdf).
+- E, caller arguments: test carving records the pre-state at the call and replays it (Elbaum et al., TSE 2009,
+  carved suites found about as many faults as the system tests). Replay is fragile: 49 of 361 calls replayed in the
+  Fuzzing Book's Python carver (https://www.fuzzingbook.org/html/Carver.html). Inference: a placeholder for values
+  that cannot be stored, keeping the rest of the call, and reporting the replay rate.
+
 ## 4. Success metrics to publish
 
 - Detection rate on BugsInPy reversals and on mutants (target: >70% for functions that can be checked).

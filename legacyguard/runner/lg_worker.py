@@ -259,18 +259,60 @@ def _span(fn):
     return code.co_filename, min(lines), max(lines)
 
 
-def _tracer(span, hits: set):
-    """Record executed lines inside the function's span only. Every other frame is left untraced, so the cost stays small."""
-    filename, first, last = span
+def _tracer(span, hits: set, gate=None, gate_hits: set | None = None):
+    """Record executed lines inside the function's span only. Every other frame is left untraced, so the cost stays small.
+
+    gate: (real file path, set of line numbers) of an edited function's changed statements, for a caller that is run
+    because it calls that function. Frames in that file record only those lines, into gate_hits."""
+    filename, first, last = span if span else ("", 0, -1)
+    gate_file, gate_lines = gate if gate else ("", frozenset())
+    real: dict = {}
+
+    def is_gate_file(name: str) -> bool:
+        if not gate_file:
+            return False
+        if name not in real:
+            try:
+                real[name] = os.path.realpath(name) == gate_file
+            except (TypeError, ValueError):
+                real[name] = False
+        return real[name]
 
     def local(frame, event, arg):
         if event == "line":
             hits.add(frame.f_lineno)
         return local
 
+    def local_both(frame, event, arg):
+        if event == "line":
+            hits.add(frame.f_lineno)
+            if frame.f_lineno in gate_lines:
+                gate_hits.add(frame.f_lineno)
+        return local_both
+
+    def local_gate(frame, event, arg):
+        if event == "line" and frame.f_lineno in gate_lines:
+            gate_hits.add(frame.f_lineno)
+        return local_gate
+
+    overlaps: dict = {}
+
+    def touches_gate(code) -> bool:
+        # Only code objects whose lines include a gate line are traced line by line: the cost stays with the edit.
+        if code not in overlaps:
+            try:
+                lines = {line for _, line in dis.findlinestarts(code) if line}
+            except Exception:  # noqa: BLE001 - when unsure, trace it
+                lines = set(gate_lines)
+            overlaps[code] = not lines.isdisjoint(gate_lines)
+        return overlaps[code]
+
     def enter(frame, event, arg):
         code = frame.f_code
-        if code.co_filename == filename and first <= code.co_firstlineno <= last:
+        own = code.co_filename == filename and first <= code.co_firstlineno <= last
+        if is_gate_file(code.co_filename) and touches_gate(code):
+            return local_both if own else local_gate
+        if own:
             return local
         return None
 
@@ -662,7 +704,8 @@ def run_function(spec, root_real):
     results = []
     span = _span(fn)
     hits: set = set()
-    trace = _tracer(span, hits) if span else None
+    gate, gate_hits = _gate_spec(spec, root_real), set()
+    trace = _tracer(span, hits, gate, gate_hits) if span or gate else None
     freeze_references(root_real)
     if STUBS["on"]:
         lg_stubs.patch_loaded()
@@ -685,11 +728,22 @@ def run_function(spec, root_real):
             continue
         results.append(_call_once(fn, item, make_self, index, trace, CALL_TIMEOUT_S if timeouts < 2 else SHORT_TIMEOUT_S))
     out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
+    if gate:
+        out["gate_lines"] = sorted(gate_hits)
     if recipe:
         out["self_recipe"] = recipe
     if spec.get("mutants"):
         out["mutation"] = _run_mutants(fn, spec, make_self, owner, results)
     return out
+
+
+def _gate_spec(spec, root_real):
+    """(real path, line numbers) for spec["gate"] = {"file": path relative to the root, "ranges": [[first, last], ...]}."""
+    g = spec.get("gate") or {}
+    if not g.get("file") or not g.get("ranges"):
+        return None
+    lines = frozenset(n for first, last in g["ranges"] for n in range(int(first), int(last) + 1))
+    return os.path.realpath(os.path.join(root_real or ".", g["file"])), lines
 
 
 def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CALL_TIMEOUT_S) -> dict:

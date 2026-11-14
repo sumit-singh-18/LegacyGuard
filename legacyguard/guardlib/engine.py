@@ -27,12 +27,37 @@ def _sym_pair(cfg, rel: str, qualname: str):
     return then, now
 
 
+def _required(params: list[dict]) -> int:
+    """Parameters a call must fill: no default, not self/cls, not *args/**kwargs."""
+    return sum(1 for p in params if p.get("default") is None and p["name"] not in ("self", "cls") and not p["name"].startswith("*"))
+
+
+def _covered(conn, file: str, qualname: str) -> bool:
+    if conn is None:
+        return False
+    try:
+        return conn.execute("SELECT 1 FROM test_cover WHERE file=? AND qualname=? LIMIT 1", (file, qualname)).fetchone() is not None
+    except Exception:  # noqa: BLE001 - an index without coverage simply ranks nothing first
+        return False
+
+
 def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> list[differ.Target]:
     """Functions that call an edited one, up to two steps away (FR-41, roadmap B7).
 
     An edit to a shared helper changes what its callers return, and the helper itself is often the one function that
-    cannot be run. Callers are resolved through imports (guardlib/callgraph.py), not matched by name; nearest first,
-    resolved edges before name-only ones, the edited file before others."""
+    cannot be run. Callers are resolved through imports (guardlib/callgraph.py), not matched by name.
+
+    Only MAX_DEPENDENTS fit, so callers likely to be callable go first (static signals only; validation run 1 lost its
+    budget to methods whose instances could not be built). The order:
+      1. nearer first (1 hop before 2), resolved edges before name-only ones;
+      2. callers the tests run (test_cover in the index), since their inputs and instances can be harvested;
+      3. plain functions before methods, which need an instance;
+      4. fewer required parameters;
+      5. the edited file before others, then by file and name.
+
+    A caller reached by several edges keeps its best-ranked one for `via` and the ranking. It is gated on the changed
+    statements of every edited function it reaches, one or two hops away: it passes only if its inputs run all of them
+    (runner/diff.py caller_gate, compare_one)."""
     from guardlib import callgraph
     from indexer import db
     if not changed:
@@ -40,29 +65,42 @@ def dependents(cfg, rel: str, changed: list[differ.Target], taken: set[str]) -> 
     conn = db.connect(cfg.root) if db.exists(cfg.root) else None
     try:
         edges = []
-        for t in changed:
-            edges += callgraph.callers(cfg.root, rel, t.qualname, conn, hops=2)
-    except Exception:  # noqa: BLE001 - no callers is a smaller check, never a failed one
-        edges = []
+        try:
+            for t in changed:
+                edges += [(e, t) for e in callgraph.callers(cfg.root, rel, t.qualname, conn, hops=2)]
+        except Exception:  # noqa: BLE001 - no callers is a smaller check, never a failed one
+            edges = []
+        names = {t.qualname for t in changed}
+        combined = symbols.sha("|".join(sorted(t.code_hash for t in changed)))
+        callers: dict = {}   # (file, qualname) -> {"best": (rank, edge), "edited": [targets], "pair": (then, now)}
+        for e, t in edges:
+            key = (e.file, e.qualname)
+            if e.qualname in taken or (e.file == rel and e.qualname in names):
+                continue
+            if key not in callers:
+                if not is_guarded_source(cfg, e.file):
+                    continue
+                pair = _sym_pair(cfg, e.file, e.qualname)
+                if pair is None:
+                    continue
+                callers[key] = {"best": None, "edited": [], "pair": pair, "covered": _covered(conn, e.file, e.qualname)}
+            c = callers[key]
+            then, now = c["pair"]
+            rank = (e.hops, e.how != "resolved", not c["covered"], now.kind == "method", _required(then.params),
+                    e.file != rel, e.file, e.qualname)
+            if c["best"] is None or rank < c["best"][0]:
+                c["best"] = (rank, e)
+            if t not in c["edited"]:
+                c["edited"].append(t)
     finally:
         if conn is not None:
             conn.close()
-    names = {t.qualname for t in changed}
-    combined = symbols.sha("|".join(sorted(t.code_hash for t in changed)))
-    out, seen = [], set()
-    for e in sorted(edges, key=lambda e: (e.hops, e.how != "resolved", e.file != rel, e.file, e.qualname)):
-        if len(out) >= MAX_DEPENDENTS or (e.file, e.qualname) in seen or e.qualname in taken or (e.file == rel and e.qualname in names):
-            continue
-        if not is_guarded_source(cfg, e.file):
-            continue
-        pair = _sym_pair(cfg, e.file, e.qualname)
-        if pair is None:
-            continue
-        then, now = pair
-        seen.add((e.file, e.qualname))
+    out = []
+    for c in sorted(callers.values(), key=lambda c: c["best"][0])[:MAX_DEPENDENTS]:
+        e, (then, now) = c["best"][1], c["pair"]
         callee = e.callee.rsplit(".", 1)[-1]
         out.append(differ.Target(e.file, e.qualname, now.kind, then.params, symbols.sha(now.node_text + "|calls|" + combined),
-                                 source=then.node_text, via=f"calls {callee}", via_file=rel))
+                                 source=then.node_text, via=f"calls {callee}", via_file=rel, **differ.caller_gate(c["edited"])))
     return out
 
 
@@ -116,8 +154,14 @@ def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
             elif f.get("via_file") == rel:
                 pair = _sym_pair(cfg, f["file"], q)
                 if pair is not None:
+                    # Still judged by the changed statements of every edited function it reaches, while they have any.
+                    wanted = set(f.get("callees") or [f["via"].split()[-1]])
+                    short = {w.rsplit(".", 1)[-1] for w in wanted}
+                    edited = [t for t in targets.values() if t.file == rel and not t.via
+                              and (t.qualname in wanted or (not f.get("callees") and t.qualname.rsplit(".", 1)[-1] in short))]
+                    gate = differ.caller_gate(edited)
                     targets[q] = differ.Target(f["file"], q, pair[1].kind, pair[0].params, symbols.sha(pair[1].node_text + "|recheck"),
-                                               via=f["via"], via_file=rel)
+                                               via=f["via"], via_file=rel, **gate)
     return sorted(targets.values(), key=lambda t: t.qualname)
 
 
@@ -128,12 +172,13 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
     edited = {r.qualname.rsplit(".", 1)[-1]: r.status for r in results if r.via}
     edited.update({r.qualname.rsplit(".", 1)[-1]: r.status for r in results if not r.via})
     for r in results:
-        via = {"via": r.via, "via_file": r.via_file} if r.via else {}
+        via = {"via": r.via, "via_file": r.via_file, **({"callees": r.callees} if r.callees else {})} if r.via else {}
         if r.via:
             # What happened to each caller is kept for the session map, whether or not it becomes a finding.
             outcome = {differ.DONE: "agree", differ.DIFFERENT: "differ", differ.BROKEN: "differ"}.get(r.status, "not_run")
             data.setdefault("callers_run", {})[f"{r.file}::{r.qualname}"] = {
                 "status": outcome, "inputs": r.inputs_compared, "via": r.via, "reason": (r.reason or "")[:160],
+                "statements": [r.statements_reached, r.statements_total],
                 "example": (f"{r.differences[0]['call']} gave {r.differences[0]['before']} before and {r.differences[0]['after']} after"
                             if r.differences else "")[:300]}
             # A caller is in the report only when it shows something the edited function's own result does not.
@@ -169,8 +214,11 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             intended = not r.declared_failures and (decl is not None or callee_decl is not None)
             if r.declared_failures:
                 evidence = "; ".join(f"{d['call']} declared {d['expected']} got {d['got']}" for d in r.declared_failures[:differ.MAX_SHOWN])
+            if r.unreached_note:
+                evidence += f". {r.unreached_note}"
             state = "waived" if waived else "intended" if intended else "open"
-            extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared, **via}
+            extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared,
+                     "statements": [r.statements_reached, r.statements_total], **via}
             if intended:
                 extra["intent"] = (decl or callee_decl)["description"]
             if r.declared_failures:
@@ -192,9 +240,12 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
             f, new = ledger.add_finding(data, kind="verified", status=ledger.VERIFIED, source="diff", subject=r.subject, file=r.file, item=r.qualname,
                                         evidence=f"{r.inputs_compared} inputs compared, {r.inputs_completed} returned a value" +
                                                  (f", {r.dropped_nondeterministic} dropped as non-deterministic" if r.dropped_nondeterministic else "") +
+                                                 (f"; {differ.reached_text(r)}" + (f" of {differ.callee_names(r.callees)}" if r.via and r.callees else "")
+                                                  if r.statements_total else "") +
                                                  (f"; {differ.confidence_text(r)}" if r.mutants_total else ""),
                                         code_hash=r.code_hash, state="recorded",
-                                        extra={"inputs_compared": r.inputs_compared, "mutants": [r.mutants_killed, r.mutants_total], **via})
+                                        extra={"inputs_compared": r.inputs_compared, "mutants": [r.mutants_killed, r.mutants_total],
+                                               "statements": [r.statements_reached, r.statements_total], **via})
             if not new:
                 f["state"] = "recorded"
         else:

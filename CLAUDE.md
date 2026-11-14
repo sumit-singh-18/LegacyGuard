@@ -17,15 +17,22 @@ key. Everything runs through Claude Code hooks, an MCP server and slash-command 
    advisory allows, guarded asks (at most 3 prompts per session), strict denies.
 4. **PostToolUse Edit|Write** (`scripts/post_edit.py`, async with `asyncRewake`): the **behavioral diff**.
    - `runner/diff.py::changed_targets`: tree-sitter symbol diff picks the changed functions, plus functions that
-     read a changed module constant. `guardlib/engine.py::dependents` adds callers found by name (1 hop, at most 6).
+     read a changed module constant. Functions whose edit is only comments, whitespace or their own docstring are
+     skipped (`same_code`; docstrings count when the file reads `__doc__` or imports ply/docopt/click).
+     `guardlib/engine.py::dependents` adds callers resolved through imports (`guardlib/callgraph.py`, up to 2 hops,
+     at most `MAX_DEPENDENTS`=8). Callers likely to be callable go first: nearer and resolved, covered by tests,
+     plain functions before methods, fewer required parameters.
    - `runner/inputs.py::build`: inputs come from the args harvested from tests (`runner/legacyguard_harvest.py`,
      a sys.setprofile pytest plugin), then literal calls in the repo (`runner/examples.py`), then a grid of
      edge values (ties, NaN, inf), then Hypothesis built from annotations and defaults.
    - `runner/lg_worker.py` runs in the **target project's interpreter**. It monkeypatches socket, sqlite3,
      open(write), subprocess and os.system to block them, and gives each call a 5 s SIGALRM. It runs old twice
      (self-diff, Diffy-style noise filter) and new once, as 3 parallel subprocesses.
-   - `compare_one`: compares the return value or the exception type and message. A "verified" status needs at
-     least one input to reach the changed lines (traced line gate).
+   - `compare_one`: compares the return value or the exception type and message. A "verified" status needs
+     every changed statement to be run by some input (traced line gate; reason e.g. "inputs reached 1 of 2 changed
+     statements; line 45 never ran"). A caller carries the changed statements of every edited function it reaches
+     (`diff.caller_gate`); the worker traces those lines in that file while running the caller (`gate_lines`), and the
+     same rule applies. `Result.statements_reached/total` go into the pass note and the ledger evidence.
    - A difference exits 2, which wakes Claude with a counterexample (`format_wake`). Findings live in
      `.legacyguard/session.json` (`guardlib/ledger.py`).
 5. **Stop** (`scripts/stop_audit.py`, `guardlib/audit.py`): audits the whole working tree against the baseline
@@ -37,13 +44,15 @@ index, status, impact, map, waive, pin, mode. All of them call `scripts/lg.py --
 
 ## Statuses
 
-`verified` (no difference on the inputs tried, and the changed lines were reached), `different`, `broken` (the
-module no longer imports), `untested` (with a reason: DB, network, file write, uncallable, timeout, nothing
-reached the changed lines, non-deterministic).
+`verified` (no difference on the inputs tried, and every changed statement was run by some input; for a caller,
+every changed statement of the edited functions it calls), `different` (for a caller whose inputs ran none of the
+changed statements, the wake text and evidence say the difference may come from elsewhere), `broken` (the module no
+longer imports), `untested` (with a reason: DB, network, file write, uncallable, timeout, not every changed statement
+reached, non-deterministic). Comment-, whitespace- and docstring-only edits produce no result at all.
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 106 tests after Sprint 4). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 125 tests after the validation-run-1 fixes to "verified"). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
