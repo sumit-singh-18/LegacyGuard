@@ -73,3 +73,14 @@ def test_cli_end_to_end(tmp_path):
                          capture_output=True, text=True, env=env, timeout=300)
     assert res.returncode == 1, res.stderr[-1500:]
     assert "::error file=shop/pricing.py" in res.stdout and "## LegacyGuard" in summary.read_text()
+
+
+def test_overrides_merge_into_config(tmp_path):
+    root = repo(tmp_path, FILES["shop/pricing.py"].lstrip("\n").replace("return round(price * (1 - rate), 2)",
+                                                                       "kept = 1 - rate\n    return round(price * kept, 2)"))
+    _, plain = ci.run(str(root), "HEAD", TARGET_PY)
+    assert any(r.mutants_total for r in plain.results)  # mutants run by default on a pass
+    cfg, out = ci.run(str(root), "HEAD", TARGET_PY, overrides={"behavioral_diff": {"mutants": 0}, "app": "shop.web:app"})
+    assert cfg.raw["app"] == "shop.web:app"
+    assert cfg.raw["behavioral_diff"]["mutants"] == 0 and cfg.raw["behavioral_diff"]["warm"] is False  # merged, not replaced
+    assert out.results and all(r.mutants_total == 0 for r in out.results)

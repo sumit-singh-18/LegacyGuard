@@ -79,10 +79,21 @@ def _baseline_at(cfg, base: str) -> Path:
     return target
 
 
-def run(root: str, base: str | None = None, python: str | None = None, index: bool = True) -> tuple:
-    """(cfg, Outcome) for the changes between base and the working tree."""
+def apply_overrides(cfg, overrides: dict | None) -> None:
+    """Merge overrides into cfg.raw; a nested mapping (behavioral_diff, ...) is merged key by key."""
+    for key, value in (overrides or {}).items():
+        if isinstance(value, dict) and isinstance(cfg.raw.get(key), dict):
+            cfg.raw[key].update(value)
+        else:
+            cfg.raw[key] = value
+
+
+def run(root: str, base: str | None = None, python: str | None = None, index: bool = True,
+        overrides: dict | None = None) -> tuple:
+    """(cfg, Outcome) for the changes between base and the working tree. overrides go on top of the loaded config."""
     root = str(Path(root).resolve())
     cfg = load_cfg(root, python)
+    apply_overrides(cfg, overrides)
     base = base or default_base(root)
     base_dir = _baseline_at(cfg, base)
     if index:

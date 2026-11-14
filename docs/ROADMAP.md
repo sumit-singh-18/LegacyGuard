@@ -219,6 +219,18 @@ separate validation phase on real open-source Python code, and the guard gets fi
 4. **Triage and fix.** Each false alarm or miss becomes a fixture test in `tests/` first, then a fix.
 5. **Publish the numbers** in section 4 in the README.
 
+**How to run.** `tools/validate.py` replays cases from a manifest (YAML or JSON; see
+`tools/validation/manifest.example.yaml`, whose entries are placeholders to fill from research). A `bug` case checks
+out the `fixed` commit and puts the `buggy` source files into the working tree (the guard should report a
+difference; only differences in the bug's `files`, taken from BugsInPy's `bug_patch.txt`, or in their callers count);
+a `change` case checks out `head` against `base` with `expect: quiet|detected`. Each case runs through
+`guardlib.ci.run` (its `overrides` add `app`, `source_roots` and mutants on). Run `.venv-dev/bin/python tools/validate.py MANIFEST --workdir DIR --out DIR`:
+repositories are cloned into `--workdir` and reused, per-repo `setup` commands run once (`$LG_VENV` is a cached venv
+folder), and `results.json` plus `results.md` go to `--out` with the detection rate, false-alarm rate, untested
+share, mutation score, median/p95 time per case and the target Python version. A case that fails (including an
+interpreter that cannot run or is older than 3.7) is recorded as `error` and the run goes on; a case where no
+function was verified, different or broken is `unchecked`. Rates count neither; both are listed separately. The harness itself is tested on local fixture repos (`tests/test_validate.py`).
+
 ## 4. Success metrics to publish
 
 - Detection rate on BugsInPy reversals and on mutants (target: >70% for functions that can be checked).

@@ -1,0 +1,84 @@
+# LegacyGuard validation manifest (roadmap section 3b). Run with:
+#   .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml --out validation-results
+#
+# EVERY ENTRY BELOW IS A PLACEHOLDER. Commit hashes, repository URLs, setup commands and app paths are
+# deliberately left as <FILL ME> values: fill them from research (the BugsInPy bug metadata for bug cases,
+# the project's history for change cases) before running. No value here was looked up or verified.
+#
+# Fields per case:
+#   name          unique case name
+#   repo          git URL or local path (relative paths resolve against this file's folder)
+#   kind          "bug" or "change"
+#   bug:          fixed, buggy (commits); expected verdict is always "detected"
+#                 files: the bug's source files. Take them from BugsInPy's bug_patch.txt. Only differences in
+#                   these files (or in callers of them) count as detecting the bug. Without files, every non-test
+#                   .py file that differs between fixed and buggy is planted and counted, with a warning.
+#                 patch (optional): path to the fix as a unified diff (BugsInPy's bug_patch.txt), reverse-applied
+#                   on the fixed checkout. Without it, `git diff buggy fixed -- files` is reverse-applied, which
+#                   equals the buggy files whole (other commits between buggy and fixed in those files revert too).
+#   change:       base, head (commits); expect: "quiet" or "detected"
+#   python        optional interpreter with the project's dependencies
+#   setup         optional shell commands, run once per repo in the clone; $LG_VENV is a cached folder
+#                 for a venv, and $LG_VENV/bin/python is used when python is not given. Install the
+#                 project's dependencies, not the project itself in editable mode (-e) where possible: an
+#                 editable install points at the clone, so the baseline side could import the new code.
+#
+# Verdicts: detected, quiet, unchecked (no function was verified, different or broken: nothing was really
+# compared, e.g. a missing dependency; left out of the rates) and error (left out of the rates).
+#   app           optional app import path for route diffing (e.g. "pkg.app:app")
+#   source_roots  optional list of source roots
+
+cases:
+  # ---- BugsInPy subjects (kind: bug) --------------------------------------------------------------
+  - name: PLACEHOLDER-bugsinpy-project-bug-1       # e.g. "<project>-<bug id>" from BugsInPy
+    repo: "<FILL ME: project git URL from BugsInPy project.info>"
+    kind: bug
+    fixed: "<FILL ME: fixed_commit_id from bug.info>"
+    buggy: "<FILL ME: buggy_commit_id from bug.info>"
+    files: ["<FILL ME: source files from bug_patch.txt>"]
+    # patch: "<FILL ME: path to this bug's bug_patch.txt>"
+    setup:
+      - python3 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q -r requirements.txt # <FILL ME: BugsInPy requirements.txt; avoid pip install -e .>'
+
+  - name: PLACEHOLDER-bugsinpy-project-bug-2
+    repo: "<FILL ME>"
+    kind: bug
+    fixed: "<FILL ME>"
+    buggy: "<FILL ME>"
+    files: ["<FILL ME: source files from bug_patch.txt>"]
+
+  # ---- Pure-Python libraries (kind: change) --------------------------------------------------------
+  - name: PLACEHOLDER-library-refactor             # a commit that only restructures code
+    repo: "<FILL ME: e.g. a boltons / humanize / more-itertools URL>"
+    kind: change
+    base: "<FILL ME: parent commit>"
+    head: "<FILL ME: refactor commit>"
+    expect: quiet
+
+  - name: PLACEHOLDER-library-behavior-change      # a commit that changes return values on purpose
+    repo: "<FILL ME>"
+    kind: change
+    base: "<FILL ME>"
+    head: "<FILL ME>"
+    expect: detected
+
+  # ---- Web apps (kind: change, with route diffing) -------------------------------------------------
+  - name: PLACEHOLDER-flask-or-fastapi-app-change
+    repo: "<FILL ME>"
+    kind: change
+    base: "<FILL ME>"
+    head: "<FILL ME>"
+    expect: "<FILL ME: quiet or detected>"
+    app: "<FILL ME: module:attribute of the app object>"
+    # source_roots: [<FILL ME>]
+    setup:
+      - python3 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q -r requirements.txt'
+
+  - name: PLACEHOLDER-django-app-change
+    repo: "<FILL ME>"
+    kind: change
+    base: "<FILL ME>"
+    head: "<FILL ME>"
+    expect: "<FILL ME: quiet or detected>"
