@@ -231,6 +231,19 @@ share, mutation score, median/p95 time per case and the target Python version. A
 interpreter that cannot run or is older than 3.7) is recorded as `error` and the run goes on; a case where no
 function was verified, different or broken is `unchecked`. Rates count neither; both are listed separately. The harness itself is tested on local fixture repos (`tests/test_validate.py`).
 
+## 3c. Sprint 5: from validation run 1 (docs/validation/2026-11-bugsinpy.md)
+
+Baseline to beat: 2 of 7 checkable BugsInPy bugs detected without the fix's own tests, 2 unchecked.
+
+| Task | What | Acceptance |
+|---|---|---|
+| A | Gate callers on the callee's changed lines; gate every changed statement, not any; skip comment/whitespace-only changes; skip callers that cannot be called | No result is "verified" unless an input reached every changed statement it claims; tqdm 4 and youtube-dl 5 (no fix tests) become unchecked/untested instead of quiet; existing tests still pass |
+| B | Inputs from tests and from the edit: arguments passed through local variables, objects for parameters built from constructor calls in tests, edit literals and regex character classes spliced into examples | youtube-dl 10 and thefuck 7 get inputs that distinguish the versions; youtube-dl 1 and 3 detected without the fix tests |
+| C | Harness: "without fix tests" mode on a synthetic base commit (headline number), and the source of each deciding input | Both numbers reported per run |
+| D | Planted bugs for strings and regexes | js_to_json-style changes get a confidence score |
+| E | Record the arguments callers pass to the edited function and reuse them as its inputs | tqdm 4's format_meter reached with total=None and a numeric unit_scale, or a stated reason why not |
+| F | Re-run the nine bugs in both modes | A reviewer-checked comparison with run 1 |
+
 ## 4. Success metrics to publish
 
 - Detection rate on BugsInPy reversals and on mutants (target: >70% for functions that can be checked).
