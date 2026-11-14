@@ -229,7 +229,25 @@ repositories are cloned into `--workdir` and reused, per-repo `setup` commands r
 folder), and `results.json` plus `results.md` go to `--out` with the detection rate, false-alarm rate, untested
 share, mutation score, median/p95 time per case and the target Python version. A case that fails (including an
 interpreter that cannot run or is older than 3.7) is recorded as `error` and the run goes on; a case where no
-function was verified, different or broken is `unchecked`. Rates count neither; both are listed separately. The harness itself is tested on local fixture repos (`tests/test_validate.py`).
+function was verified, different or broken is `unchecked`. Rates count neither; both are listed separately.
+`--fix-tests with|without|both` (default `both`) sets what the baseline of a bug case holds of the fix commit's own
+tests. `with` uses the fixed commit as is. `without` builds a synthetic base commit with `git commit-tree` (parent:
+the fixed commit; tree: the fixed tree with every test file that differs between buggy and fixed restored to its
+buggy version or removed), checks it out and plants the bug on top, so neither OLD nor NEW has the fix's regression
+test and no test-integrity breaks appear. "Without fix tests" is the headline detection rate: that test does not
+exist until the bug is found. With `both`, stdout and `results.md` show the two modes side by side, `results.json`
+has `metrics` (the headline mode), `metrics_by_mode` and one record per case and mode (`fix_tests`,
+`synthetic_base`, `fix_tests_restored`). Change cases run once and count in both modes. Test files are
+`checks.is_test_path`, anything under a `test`/`tests`/`unittests` folder, `conftest.py`, files named like tests,
+and non-`.py` files under `testing`/`test_data`/`testdata`/`fixtures` (a `.py` there, such as `numpy/testing`, is
+source), never the bug's own files. Every detected case records `deciding_input`. Its `call`, `args` and `source`
+(tests, examples, generated, declared) are the counterexample **shown first**, not the only one: the guard sorts
+differences tests, then examples first. `sources` lists every source that produced a difference in a credited
+function. `independent_sources` drops a source whose differing inputs only repeat a tests/examples call, because the
+grid and Hypothesis reuse example values. Each function's record keeps `difference_sources`, `independent_sources`
+and up to 50 `differing_inputs`. Per mode, `deciding_sources` counts true detections (expected detected) by source.
+It splits them into tests/examples only, also other sources, and other sources only (independent sources), and
+keeps the shown-first count as `first_shown`. The harness itself is tested on local fixture repos (`tests/test_validate.py`).
 
 ## 3c. Sprint 5: from validation run 1 (docs/validation/2026-11-bugsinpy.md)
 

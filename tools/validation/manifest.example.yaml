@@ -1,5 +1,16 @@
 # LegacyGuard validation manifest (roadmap section 3b). Run with:
-#   .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml --out validation-results
+#   .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml --out validation-results [--fix-tests both]
+#
+# --fix-tests with|without|both (default both) applies to bug cases. "with": the fixed commit is the baseline, so
+# the regression test the fix added is there and its literals become inputs. "without" (the headline number): a
+# synthetic base commit (git commit-tree, parent = fixed) whose tree is the fixed tree with every test file that
+# differs between buggy and fixed put back to its buggy version or removed; the bug is planted on top, so neither
+# side has the fix's tests and no test-integrity noise appears. Test files are guardlib.checks.is_test_path, anything
+# under a test/tests/unittests folder, conftest.py, files named like tests, and non-.py files under
+# testing/test_data/testdata/fixtures, except the bug's own files. Change cases run once and count in both modes.
+# Each detected case records deciding_input. Its call and source are the counterexample shown first, which the guard
+# picks from tests, then examples. "sources" lists every source with a differing input, and "independent_sources"
+# drops sources that only repeat a tests/examples call.
 #
 # EVERY ENTRY BELOW IS A PLACEHOLDER. Commit hashes, repository URLs, setup commands and app paths are
 # deliberately left as <FILL ME> values: fill them from research (the BugsInPy bug metadata for bug cases,
