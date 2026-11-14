@@ -178,8 +178,11 @@ def _walk_literals(tree: ast.AST) -> list:
 
 
 def _parse(text: str):
+    import warnings
     try:
-        return ast.parse(text)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # old project code: invalid escapes and the like are not ours to report
+            return ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return None
 
@@ -259,7 +262,6 @@ class _Context:
                     if a.name != "*":
                         self.names[a.asname or a.name] = f"{mod}:{a.name}"
         self.module_env: dict = {}
-        self.fixtures: dict = {}
 
     def class_ref(self, func) -> str | None:
         """'module:Class' for a call target that names an imported class (capitalized, by convention), else None."""
@@ -311,6 +313,10 @@ def _resolve(node, env: dict, ctx: _Context, depth: int = 0):
         if any(i is _NO for i in items):
             return _NO
         return items if isinstance(node, ast.List) else tuple(items)
+    if isinstance(node, ast.JoinedStr):
+        return _fstring(node, env, ctx, depth)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        return _format_call(node, env, ctx, depth)
     if isinstance(node, ast.Call):
         ref = ctx.class_ref(node.func)
         if ref is None or any(isinstance(a, ast.Starred) for a in node.args) or any(k.arg is None for k in node.keywords):
@@ -321,6 +327,71 @@ def _resolve(node, env: dict, ctx: _Context, depth: int = 0):
             return _NO
         return lg_codec.Construct(ref, args, kwargs)
     return _NO
+
+
+# str.format and f-strings whose parts are known (thefuck 1 builds its output as '...{}...'.format(broken, suggested)).
+# Only plain fields are filled: no attribute or index lookups in a field, no widths that would build a huge string.
+_FORMAT_ARG = (str, int, float, bool, type(None))
+_WIDE = re.compile(r"\d{4,}")
+
+
+def _safe_spec(spec: str) -> bool:
+    return "{" not in spec and not _WIDE.search(spec)
+
+
+def _format_call(node: ast.Call, env: dict, ctx: _Context, depth: int):
+    import string
+    template = _resolve(node.func.value, env, ctx, depth + 1)
+    if not isinstance(template, str) or any(isinstance(a, ast.Starred) for a in node.args) or any(k.arg is None for k in node.keywords):
+        return _NO
+    try:
+        for _, field, spec, _ in string.Formatter().parse(template):
+            if field is None:
+                continue
+            if not (field == "" or field.isdigit() or field.isidentifier()) or not _safe_spec(spec or ""):
+                return _NO
+    except ValueError:
+        return _NO
+    args = [_resolve(a, env, ctx, depth + 1) for a in node.args]
+    kwargs = {k.arg: _resolve(k.value, env, ctx, depth + 1) for k in node.keywords}
+    if not all(isinstance(v, _FORMAT_ARG) for v in [*args, *kwargs.values()]):
+        return _NO
+    try:
+        out = template.format(*args, **kwargs)
+    except (IndexError, KeyError, ValueError, TypeError):
+        return _NO
+    return out if len(out) <= MAX_CALL_TEXT else _NO
+
+
+def _fstring(node: ast.JoinedStr, env: dict, ctx: _Context, depth: int):
+    out = []
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            out.append(part.value)
+            continue
+        if not isinstance(part, ast.FormattedValue):
+            return _NO
+        value = _resolve(part.value, env, ctx, depth + 1)
+        if not isinstance(value, _FORMAT_ARG):
+            return _NO
+        spec = ""
+        if part.format_spec is not None:
+            spec = _resolve(part.format_spec, env, ctx, depth + 1)
+            if not isinstance(spec, str) or not _safe_spec(spec):
+                return _NO
+        if part.conversion == ord("r"):
+            value = repr(value)
+        elif part.conversion == ord("s"):
+            value = str(value)
+        elif part.conversion == ord("a"):
+            value = ascii(value)
+        try:
+            out.append(format(value, spec))
+        except (ValueError, TypeError):
+            return _NO
+        if sum(map(len, out)) > MAX_CALL_TEXT:
+            return _NO
+    return "".join(out)
 
 
 def _target_names(target) -> list[str]:
@@ -419,6 +490,87 @@ def _is_fixture(fn) -> bool:
     return False
 
 
+def _fixture_name(fn) -> str:
+    """The name a fixture is requested by: @pytest.fixture(name="x") or the function's own name."""
+    for dec in fn.decorator_list:
+        if isinstance(dec, ast.Call) and _callee(dec.func) == "fixture":
+            for k in dec.keywords:
+                if k.arg == "name" and isinstance(k.value, ast.Constant) and isinstance(k.value.value, str):
+                    return k.value.value
+    return fn.name
+
+
+def _fixture_defs(tree: ast.AST) -> dict:
+    return {_fixture_name(n): n for n in getattr(tree, "body", [])
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_fixture(n)}
+
+
+def _fixture_result(fn, env: dict, ctx: _Context):
+    """What a fixture returns or yields, following its straight-line code before that statement."""
+    stmts = [s for s in fn.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
+    for i, st in enumerate(stmts):
+        if isinstance(st, ast.Return):
+            value = st.value
+        elif isinstance(st, ast.Expr) and isinstance(st.value, ast.Yield):
+            value = st.value.value
+        else:
+            continue
+        if value is None:
+            return _NO
+        envs = _run_block(stmts[:i], [env], ctx, lambda node, envs: None) if i else [env]
+        return _resolve(value, envs[0], ctx) if envs else _NO
+    return _NO
+
+
+MAX_CONFTESTS = 8
+MAX_FIXTURE_EVALS = 2000  # fixture evaluations per scanned file
+
+
+def _row_key(row: dict) -> str:
+    """The parametrize values of one row, as a cache key for the fixtures evaluated under it."""
+    return repr(sorted((k, type(v).__name__, repr(v)) for k, v in row.items()))
+_CONFTESTS: dict[str, tuple[tuple, dict]] = {}
+
+
+def _conftests(root: str, rel: str) -> list[dict]:
+    """The fixtures of each conftest.py from the root down to the file's folder, farthest first."""
+    folders = rel.split("/")[:-1]
+    out = []
+    for depth in range(len(folders) + 1):
+        conf = "/".join([*folders[:depth], "conftest.py"])
+        if conf == rel:
+            continue
+        path = Path(root) / conf
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        key = str(path)
+        stamp = (st.st_mtime_ns, st.st_size)
+        cached = _CONFTESTS.get(key)
+        if cached is None or cached[0] != stamp:
+            fixtures: dict = {}
+            tree = None
+            if st.st_size <= MAX_FILE_BYTES:
+                try:
+                    tree = _parse(path.read_text(errors="replace"))
+                except OSError:
+                    tree = None
+            if tree is not None:
+                try:
+                    ctx = _Context(tree, conf)
+                    ctx.module_env = (_run_block(getattr(tree, "body", []), [{}], ctx, lambda node, envs: None) or [{}])[0]
+                    fixtures = {n: (fn, ctx) for n, fn in _fixture_defs(tree).items()}
+                except RecursionError:
+                    fixtures = {}
+            if len(_CONFTESTS) > 256:
+                _CONFTESTS.clear()
+            _CONFTESTS[key] = (stamp, fixtures)
+            cached = _CONFTESTS[key]
+        out.append(cached[1])
+    return out[-MAX_CONFTESTS:]
+
+
 def _param_rows(fn, ctx: _Context) -> list[dict]:
     """One dict per case of the test's @pytest.mark.parametrize decorators (stacked ones are combined)."""
     rows: list[dict] = [{}]
@@ -465,7 +617,8 @@ class _Scan:
     """Every call to one of `names` in a file, resolved: (callee, positional values, keyword values). Also the objects
     (Construct recipes) bound to a name anywhere in the file's tests, for parameters of that name elsewhere."""
 
-    def __init__(self, tree: ast.AST, rel: str, names: set[str]):
+    def __init__(self, tree: ast.AST, rel: str, names: set[str], root: str | None = None, deadline: float | None = None):
+        import time
         self.calls: list[tuple[str, list, dict]] = []
         self.bindings: list[tuple[str, object]] = []
         self._seen: set[str] = set()
@@ -475,23 +628,64 @@ class _Scan:
         body = getattr(tree, "body", [])
         ctx.module_env = (_run_block(body, [{}], ctx, self._on_call(names)) or [{}])[0]
         self._note_bindings(ctx.module_env)
-        for node in body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_fixture(node):
-                stmts = [s for s in node.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
-                if len(stmts) == 1 and isinstance(stmts[0], ast.Return) and stmts[0].value is not None:
-                    value = _resolve(stmts[0].value, ctx.module_env, ctx)
-                    if value is not _NO:
-                        ctx.fixtures[node.name] = value
+        # Fixtures visible to this file's tests: conftest.py files from the root down, then the file's own, nearer ones
+        # overriding farther ones as pytest does. Each is evaluated with the context of the file that defines it.
+        self.fixtures: dict[str, tuple[ast.AST, _Context]] = {}
+        if root is not None:
+            for conftest in _conftests(root, rel):
+                self.fixtures.update(conftest)
+        self.fixtures.update({n: (fn, ctx) for n, fn in _fixture_defs(tree).items()})
+        # Each fixture is evaluated at most once per set of parametrize values, and at most MAX_FIXTURE_EVALS times
+        # per file: fixtures that depend on several others would otherwise be re-evaluated exponentially often.
+        self._fixture_memo: dict[tuple, object] = {}
+        self._fixture_evals = 0
+        self._deadline = deadline
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            if deadline is not None and time.monotonic() > deadline:
+                break  # what was found so far is kept
             args = [a.arg for a in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]]
             base = {k: v for k, v in ctx.module_env.items() if k not in args}
-            base.update({a: ctx.fixtures[a] for a in args if a in ctx.fixtures})
-            envs = [{**base, **row} for row in _param_rows(node, ctx)]
+            envs = []
+            for row in _param_rows(node, ctx):
+                env = dict(base)
+                row_key = _row_key(row)
+                for a in args:
+                    if a not in row:
+                        value = self._fixture_value(a, row, row_key)
+                        if value is not _NO:
+                            env[a] = value
+                envs.append({**env, **row})
             for env in envs:
                 self._note_bindings(env)
             _run_block(node.body, envs, ctx, self._on_call(names))
+
+    def _fixture_value(self, name: str, row: dict, row_key: str, stack: tuple = ()):
+        """A fixture's value for one parametrize row. A parametrized argument overrides the fixture of the same name,
+        also where another fixture depends on it."""
+        import time
+        if name in row:
+            return row[name]
+        entry = self.fixtures.get(name)
+        if entry is None or name in stack or len(stack) > 6:
+            return _NO
+        memo_key = (name, row_key)
+        if memo_key in self._fixture_memo:
+            return self._fixture_memo[memo_key]
+        if self._fixture_evals >= MAX_FIXTURE_EVALS or (self._deadline is not None and time.monotonic() > self._deadline):
+            return _NO
+        self._fixture_evals += 1
+        fn, ctx = entry
+        args = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs]]
+        env = {k: v for k, v in ctx.module_env.items() if k not in args}
+        for a in args:
+            value = self._fixture_value(a, row, row_key, (*stack, name))
+            if value is not _NO:
+                env[a] = value
+        value = _fixture_result(fn, env, ctx)
+        self._fixture_memo[memo_key] = value
+        return value
 
     def _note_bindings(self, env: dict) -> None:
         for k, v in env.items():
@@ -524,7 +718,7 @@ def _as_call(pos: list, kw: dict, params: list[str]) -> list | None:
     return out or None
 
 
-def _scan_file(root: str, rel: str, names: set[str]) -> _Scan | None:
+def _scan_file(root: str, rel: str, names: set[str], deadline: float | None = None) -> _Scan | None:
     path = Path(root) / rel
     try:
         if path.stat().st_size > MAX_FILE_BYTES:
@@ -535,7 +729,7 @@ def _scan_file(root: str, rel: str, names: set[str]) -> _Scan | None:
     if tree is None:
         return None
     try:
-        return _Scan(tree, rel, names)
+        return _Scan(tree, rel, names, root, deadline)
     except RecursionError:
         return None
 
@@ -627,13 +821,15 @@ def param_objects(root: str, own_file: str, name: str, params: list[dict], files
     seen: set[str] = set()
     import time
     per_param = _test_files_with(root, {p: [name, cls or name] for p, (_, cls) in wanted.items()}, deadline)
-    candidates = list(dict.fromkeys([*files, *[f for p in wanted for f in per_param[p]]]))
+    # The tests of this very function first: their objects are the ones it is meant to take (task 6.2).
+    candidates = list(dict.fromkeys([*_own_tests(root, own_file, name, deadline), *files,
+                                     *[f for p in wanted for f in per_param[p]]]))
     for rel in candidates:
         if deadline is not None and time.monotonic() > deadline:
             break  # what was found so far is kept; the check must not wait on a large repo
         if rel == own_file:
             continue
-        scan = _scan_file(root, rel, {name})
+        scan = _scan_file(root, rel, {name}, deadline)
         if scan is None:
             continue
         found: list[tuple[str, object]] = []
@@ -668,8 +864,111 @@ def _mentions(tree: ast.AST, name: str) -> list[ast.AST]:
     return hits
 
 
-def calling_files(conn, name: str, own_file: str) -> list[str]:
-    """Files the index says call this name, tests first. Name matches can over-match; that only adds unhelpful values."""
+# ---- which files to take examples from (Sprint 6, task 6.2) ----
+#
+# A common name (`match`, `get_new_command`) is called in many files, most of them about other functions of that name.
+# The files that import the function from its own module are the ones about it, so they come first, before call count.
+
+def _own_modules(own_file: str) -> set[str]:
+    """Dotted names the function's module may be imported as: 'src.pkg.mod', 'pkg.mod' and 'mod' for src/pkg/mod.py."""
+    if not own_file.endswith(".py"):
+        return set()
+    parts = own_file[:-3].split("/")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return {".".join(parts[i:]) for i in range(len(parts))}
+
+
+def _dotted(node) -> str | None:
+    chain: list[str] = []
+    while isinstance(node, ast.Attribute):
+        chain.insert(0, node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *chain])
+
+
+def _imports_own(tree: ast.AST, rel: str, name: str, own: set[str]) -> bool:
+    """True when the file imports `name` from its own module (`from pkg.mod import name [as x]`, relative imports
+    included), or imports the module and reads `mod.name` from it."""
+    pkg = rel[:-3].split("/")[:-1] if rel.endswith(".py") else []
+    holders: set[str] = set()  # names or dotted chains bound to the function's module
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:
+                if node.level - 1 > len(pkg):
+                    continue
+                mod = ".".join(pkg[:len(pkg) - (node.level - 1)] + ([node.module] if node.module else []))
+            else:
+                mod = node.module or ""
+            for a in node.names:
+                if mod in own and a.name == name:
+                    return True
+                if (f"{mod}.{a.name}" if mod else a.name) in own:
+                    holders.add(a.asname or a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name in own:
+                    holders.add(a.asname or a.name)
+    if not holders:
+        return False
+    return any(isinstance(n, ast.Attribute) and n.attr == name and _dotted(n.value) in holders for n in ast.walk(tree))
+
+
+def _file_imports_own(root: str, rel: str, name: str, own_file: str, own: set[str] | None = None) -> bool:
+    own = own if own is not None else _own_modules(own_file)
+    if not own or rel == own_file:
+        return False
+    path = Path(root) / rel
+    try:
+        if path.stat().st_size > MAX_FILE_BYTES:
+            return False
+        text = path.read_text(errors="replace")
+    except OSError:
+        return False
+    leaf = min(own, key=len)
+    if name not in text or leaf not in text:  # cheap filter before parsing
+        return False
+    tree = _parse(text)
+    if tree is None:
+        return False
+    try:
+        return _imports_own(tree, rel, name, own)
+    except RecursionError:
+        return False
+
+
+def _own_tests(root: str, own_file: str, name: str, deadline: float | None = None) -> list[str]:
+    """Up to MAX_FILES test files that import the function from its own module, from the cached walk of test files."""
+    import time
+    own = _own_modules(own_file)
+    if not own:
+        return []
+    out = []
+    for scanned, rel in enumerate(_test_files(root, deadline)):
+        if scanned >= MAX_SCAN or len(out) >= MAX_FILES or (deadline is not None and time.monotonic() > deadline):
+            break
+        if _file_imports_own(root, rel, name, own_file, own):
+            out.append(rel)
+    return out
+
+
+def _root_of(conn) -> str | None:
+    """The project root of an index connection (the index lives at <root>/.legacyguard/index.db)."""
+    try:
+        for row in conn.execute("PRAGMA database_list").fetchall():
+            if row[1] == "main" and row[2]:
+                path = Path(row[2])
+                return str(path.parent.parent) if path.parent.name == ".legacyguard" else None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def calling_files(conn, name: str, own_file: str, root: str | None = None) -> list[str]:
+    """Files the index says call this name: those that import it from its own module first, then tests, each by call
+    count. Name matches can over-match; that only adds unhelpful values."""
     if conn is None:
         return []
     try:
@@ -678,10 +977,15 @@ def calling_files(conn, name: str, own_file: str) -> list[str]:
         return []
     files = [(r[0], r[1]) for r in rows if r[0] != own_file]
     files.sort(key=lambda fr: (0 if "test" in fr[0].lower() else 1, -fr[1], fr[0]))
+    root = root or _root_of(conn)
+    own = _own_modules(own_file) if root else set()
+    if own:
+        importers = {f for f, _ in files[:MAX_SCAN] if _file_imports_own(root, f, name, own_file, own)}
+        files.sort(key=lambda fr: 0 if fr[0] in importers else 1)  # stable: the order within each group is kept
     return [f for f, _ in files[:MAX_FILES]]
 
 
-def collect(root: str, own_text: str, name: str, params: list[str], files: list[str]) -> dict:
+def collect(root: str, own_text: str, name: str, params: list[str], files: list[str], deadline: float | None = None) -> dict:
     """{"pool": example values, "calls": whole example calls}. Own text first, then callers."""
     pool: list = []
     calls: list = []
@@ -701,8 +1005,11 @@ def collect(root: str, own_text: str, name: str, params: list[str], files: list[
     for line in own_text.splitlines():
         if "#" in line:
             pool += _from_text(line.split("#", 1)[1])
+    import time
     for rel in files:
-        scan = _scan_file(root, rel, {name})
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        scan = _scan_file(root, rel, {name}, deadline)
         if scan is None:
             continue
         tree = scan.tree
@@ -727,21 +1034,37 @@ MAX_SCAN = 400
 _SKIP_DIRS = {".git", ".legacyguard", ".venv", "venv", "env", "node_modules", "__pycache__", "site-packages", "build", "dist"}
 
 
-def files_naming(root: str, name: str) -> list[str]:
-    """Without an index: up to MAX_FILES Python files that mention the name, tests first. Bounded, so it stays fast."""
+def files_naming(root: str, name: str, own_file: str | None = None) -> list[str]:
+    """Without an index: up to MAX_FILES Python files that mention the name, tests first. Bounded, so it stays fast.
+
+    Given the function's own file, the files that import it from its own module come first (test files found by the
+    walk of test files too, past the bound), then tests by the number of `name(` calls, and the own file is left out."""
     hits: list[str] = []
+    counts: dict[str, int] = {}
     scanned = 0
     for path in sorted(Path(root).rglob("*.py")):
         if scanned >= MAX_SCAN or any(part in _SKIP_DIRS for part in path.relative_to(root).parts):
             continue
         scanned += 1
         try:
-            if path.stat().st_size <= MAX_FILE_BYTES and name in path.read_text(errors="replace"):
-                hits.append(path.relative_to(root).as_posix())
+            if path.stat().st_size <= MAX_FILE_BYTES:
+                text = path.read_text(errors="replace")
+                if name in text:
+                    rel = path.relative_to(root).as_posix()
+                    hits.append(rel)
+                    counts[rel] = text.count(name + "(")
         except OSError:
             continue
-    hits.sort(key=lambda r: (0 if "test" in r.lower() else 1, r))
-    return hits[:MAX_FILES]
+    if not own_file:
+        hits.sort(key=lambda r: (0 if "test" in r.lower() else 1, r))
+        return hits[:MAX_FILES]
+    hits = [h for h in hits if h != own_file]
+    hits.sort(key=lambda r: (0 if "test" in r.lower() else 1, -counts.get(r, 0), r))
+    own = _own_modules(own_file)
+    # Test files come from _own_tests; the other files that mention the name are checked here.
+    callers = [h for h in hits if "test" not in h.lower() and _file_imports_own(root, h, name, own_file, own)]
+    first = list(dict.fromkeys([*_own_tests(root, own_file, name), *callers]))
+    return list(dict.fromkeys([*first, *hits]))[:MAX_FILES]
 
 
 def constructor_calls(root: str, own_file: str, class_name: str, params: list[str], files: list[str]) -> list:
