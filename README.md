@@ -166,6 +166,21 @@ claude plugin uninstall legacyguard@turnback-lab
 claude plugin marketplace remove turnback-lab
 ```
 
+## How well it works (measured on real bugs)
+
+Nine real bugs from [BugsInPy](https://github.com/soarsmu/BugsInPy) in youtube-dl, tqdm and thefuck were put
+back into their fixed code, and the guard was asked whether the code still behaves the same
+([write-up](docs/validation/2026-11-run2.md)):
+
+| | Caught |
+|---|---|
+| Without the regression test the fix added (the realistic case) | 4 of the 9 bugs (4 of the 5 it could check) |
+| With that test present | 6 of the 9 bugs (6 of the 6 it could check) |
+| False alarms | none |
+
+Where it could not check a bug, it says so instead of reporting "no difference". These numbers come from a
+small sample and will change as more projects are added.
+
 ## What it does not do
 
 - **Python only.** It cannot check front-end or other languages.

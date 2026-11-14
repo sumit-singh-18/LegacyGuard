@@ -1,0 +1,5988 @@
+{
+  "manifest": "/Users/sumit/Documents/LegacyGuard/repo/tools/validation/manifest.yaml",
+  "workdir": "/private/tmp/claude-501/lg-validation",
+  "generated": "2026-11-14T09:51:26",
+  "fix_tests": "both",
+  "headline_mode": "without",
+  "metrics": {
+    "cases": 9,
+    "ran": 9,
+    "checked": 5,
+    "errors": 0,
+    "unchecked": 4,
+    "error_cases": [],
+    "unchecked_cases": [
+      "youtube-dl-5",
+      "tqdm-4",
+      "thefuck-1",
+      "thefuck-7"
+    ],
+    "matched": 4,
+    "detection": {
+      "detected": 4,
+      "total": 5,
+      "rate": 0.8
+    },
+    "false_alarm": {
+      "alarms": 0,
+      "total": 0,
+      "rate": null
+    },
+    "untested": {
+      "functions": 41,
+      "total": 52,
+      "share": 0.788
+    },
+    "mutation": {
+      "killed": 4,
+      "total": 8,
+      "score": 0.5
+    },
+    "seconds": {
+      "median": 3.662,
+      "p95": 8.127
+    },
+    "deciding_sources": {
+      "cases_by_source": {
+        "edit": 3,
+        "generated": 2
+      },
+      "tests_or_examples_only": 0,
+      "also_other_sources": 0,
+      "other_sources_only": 4,
+      "no_input": 0,
+      "first_shown": {
+        "edit": 3,
+        "generated": 1
+      }
+    }
+  },
+  "metrics_by_mode": {
+    "without": {
+      "cases": 9,
+      "ran": 9,
+      "checked": 5,
+      "errors": 0,
+      "unchecked": 4,
+      "error_cases": [],
+      "unchecked_cases": [
+        "youtube-dl-5",
+        "tqdm-4",
+        "thefuck-1",
+        "thefuck-7"
+      ],
+      "matched": 4,
+      "detection": {
+        "detected": 4,
+        "total": 5,
+        "rate": 0.8
+      },
+      "false_alarm": {
+        "alarms": 0,
+        "total": 0,
+        "rate": null
+      },
+      "untested": {
+        "functions": 41,
+        "total": 52,
+        "share": 0.788
+      },
+      "mutation": {
+        "killed": 4,
+        "total": 8,
+        "score": 0.5
+      },
+      "seconds": {
+        "median": 3.662,
+        "p95": 8.127
+      },
+      "deciding_sources": {
+        "cases_by_source": {
+          "edit": 3,
+          "generated": 2
+        },
+        "tests_or_examples_only": 0,
+        "also_other_sources": 0,
+        "other_sources_only": 4,
+        "no_input": 0,
+        "first_shown": {
+          "edit": 3,
+          "generated": 1
+        }
+      }
+    },
+    "with": {
+      "cases": 9,
+      "ran": 9,
+      "checked": 6,
+      "errors": 0,
+      "unchecked": 3,
+      "error_cases": [],
+      "unchecked_cases": [
+        "tqdm-4",
+        "thefuck-1",
+        "thefuck-7"
+      ],
+      "matched": 6,
+      "detection": {
+        "detected": 6,
+        "total": 6,
+        "rate": 1.0
+      },
+      "false_alarm": {
+        "alarms": 0,
+        "total": 0,
+        "rate": null
+      },
+      "untested": {
+        "functions": 40,
+        "total": 52,
+        "share": 0.769
+      },
+      "mutation": {
+        "killed": 0,
+        "total": 0,
+        "score": null
+      },
+      "seconds": {
+        "median": 3.281,
+        "p95": 12.507
+      },
+      "deciding_sources": {
+        "cases_by_source": {
+          "carved": 2,
+          "edit": 3,
+          "examples": 5,
+          "generated": 2
+        },
+        "tests_or_examples_only": 1,
+        "also_other_sources": 4,
+        "other_sources_only": 1,
+        "no_input": 0,
+        "first_shown": {
+          "carved": 2,
+          "edit": 1,
+          "examples": 3
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "youtube-dl-1",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "3b8a09929ab8cdc60821682f7c95e6732940695f",
+      "fix_tests_restored": [
+        "test/test_utils.py"
+      ],
+      "deciding_input": null,
+      "verdict": "quiet",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 3.662,
+      "prep_seconds": 0.469,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "_match_one",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 40,
+          "mutants_killed": 4,
+          "mutants_total": 8,
+          "carved": {
+            "captured": 40,
+            "added": 40,
+            "replayed": 40,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          }
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_str",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _match_one",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_filter_func",
+          "status": "untested",
+          "reason": "none of the 197 inputs tried reached the changed lines of _match_one, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 197,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls match_str",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "_match_one",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 40,
+          "mutants_killed": 4,
+          "mutants_total": 8,
+          "carved": {
+            "captured": 40,
+            "added": 40,
+            "replayed": 40,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          }
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_str",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _match_one",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_filter_func",
+          "status": "untested",
+          "reason": "none of the 197 inputs tried reached the changed lines of _match_one, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 197,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls match_str",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 4,
+      "mutants_total": 8,
+      "mutation_score": 0.5,
+      "wall_seconds": 4.218
+    },
+    {
+      "name": "youtube-dl-1",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::_match_one",
+        "source": "carved",
+        "call": "_match_one(filter_part='is_live', dct={'is_live': False})",
+        "args": [
+          {
+            "kind": "pos",
+            "name": "filter_part",
+            "value": {
+              "t": "v",
+              "v": "is_live"
+            }
+          },
+          {
+            "kind": "pos",
+            "name": "dct",
+            "value": {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "v",
+                    "v": "is_live"
+                  },
+                  {
+                    "t": "v",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "sources": [
+          "carved",
+          "examples"
+        ],
+        "independent_sources": [
+          "carved",
+          "examples"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 3.281,
+      "prep_seconds": 0.21,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "_match_one",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 40,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 40,
+            "added": 40,
+            "replayed": 40,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "_match_one(filter_part='is_live', dct={'is_live': False})",
+            "before": "False",
+            "after": "True",
+            "source": "carved",
+            "args": [
+              {
+                "kind": "pos",
+                "name": "filter_part",
+                "value": {
+                  "t": "v",
+                  "v": "is_live"
+                }
+              },
+              {
+                "kind": "pos",
+                "name": "dct",
+                "value": {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "v",
+                        "v": "is_live"
+                      },
+                      {
+                        "t": "v",
+                        "v": false
+                      }
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "carved"
+          ],
+          "independent_sources": [
+            "carved"
+          ],
+          "differing_inputs": [
+            {
+              "source": "carved",
+              "call": "_match_one(filter_part='is_live', dct={'is_live': False})",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "_match_one(filter_part='!is_live', dct={'is_live': False})",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_str",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 32,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _match_one",
+          "via_file": "youtube_dl/utils.py",
+          "counterexample": {
+            "call": "match_str(filter_str='is_live', dct={'is_live': False})",
+            "before": "False",
+            "after": "True",
+            "source": "examples",
+            "args": [
+              {
+                "name": "filter_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "is_live"
+                }
+              },
+              {
+                "name": "dct",
+                "kind": "pos",
+                "value": {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "v",
+                        "v": "is_live"
+                      },
+                      {
+                        "t": "v",
+                        "v": false
+                      }
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples"
+          ],
+          "independent_sources": [
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "match_str(filter_str='is_live', dct={'is_live': False})",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "match_str(filter_str='!is_live', dct={'is_live': False})",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_filter_func",
+          "status": "untested",
+          "reason": "none of the 197 inputs tried reached the changed lines of _match_one, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 197,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls match_str",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "_match_one",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 40,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 40,
+            "added": 40,
+            "replayed": 40,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "_match_one(filter_part='is_live', dct={'is_live': False})",
+            "before": "False",
+            "after": "True",
+            "source": "carved",
+            "args": [
+              {
+                "kind": "pos",
+                "name": "filter_part",
+                "value": {
+                  "t": "v",
+                  "v": "is_live"
+                }
+              },
+              {
+                "kind": "pos",
+                "name": "dct",
+                "value": {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "v",
+                        "v": "is_live"
+                      },
+                      {
+                        "t": "v",
+                        "v": false
+                      }
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "carved"
+          ],
+          "independent_sources": [
+            "carved"
+          ],
+          "differing_inputs": [
+            {
+              "source": "carved",
+              "call": "_match_one(filter_part='is_live', dct={'is_live': False})",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "_match_one(filter_part='!is_live', dct={'is_live': False})",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_str",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 32,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _match_one",
+          "via_file": "youtube_dl/utils.py",
+          "counterexample": {
+            "call": "match_str(filter_str='is_live', dct={'is_live': False})",
+            "before": "False",
+            "after": "True",
+            "source": "examples",
+            "args": [
+              {
+                "name": "filter_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "is_live"
+                }
+              },
+              {
+                "name": "dct",
+                "kind": "pos",
+                "value": {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "v",
+                        "v": "is_live"
+                      },
+                      {
+                        "t": "v",
+                        "v": false
+                      }
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples"
+          ],
+          "independent_sources": [
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "match_str(filter_str='is_live', dct={'is_live': False})",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "match_str(filter_str='!is_live', dct={'is_live': False})",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "match_filter_func",
+          "status": "untested",
+          "reason": "none of the 197 inputs tried reached the changed lines of _match_one, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 197,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls match_str",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 3.577
+    },
+    {
+      "name": "youtube-dl-3",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "f33c0e63c3af6a9f02c7953921596381564cc3c9",
+      "fix_tests_restored": [
+        "test/test_utils.py"
+      ],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::unescapeHTML",
+        "source": "edit",
+        "call": "unescapeHTML(s='&&#47;')",
+        "args": [
+          {
+            "name": "s",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": "&&#47;"
+            }
+          }
+        ],
+        "sources": [
+          "edit"
+        ],
+        "independent_sources": [
+          "edit"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 8.046,
+      "prep_seconds": 0.338,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unescapeHTML",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 149,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 33,
+            "added": 18,
+            "replayed": 18,
+            "already": 15,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "unescapeHTML(s='&&#47;')",
+            "before": "'&/'",
+            "after": "'&&#47;'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "s",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "&&#47;"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit"
+          ],
+          "independent_sources": [
+            "edit"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#47;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#x2F;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&eacute;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&period;&apos;')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "clean_html",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 83,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "get_elements_by_attribute",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 82,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "HistoryTopicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/atvat.py",
+          "qualname": "ATVAtIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/baidu.py",
+          "qualname": "BaiduVideoIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bbc.py",
+          "qualname": "BBCIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bild.py",
+          "qualname": "BildIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/brightcove.py",
+          "qualname": "BrightcoveLegacyIE._extract_brightcove_urls",
+          "status": "untested",
+          "reason": "none of the 75 inputs tried reached the changed lines of unescapeHTML, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 75,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unescapeHTML",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 149,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 33,
+            "added": 18,
+            "replayed": 18,
+            "already": 15,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "unescapeHTML(s='&&#47;')",
+            "before": "'&/'",
+            "after": "'&&#47;'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "s",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "&&#47;"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit"
+          ],
+          "independent_sources": [
+            "edit"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#47;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#x2F;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&eacute;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&period;&apos;')",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "clean_html",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 83,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "get_elements_by_attribute",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 82,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "HistoryTopicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/atvat.py",
+          "qualname": "ATVAtIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/baidu.py",
+          "qualname": "BaiduVideoIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bbc.py",
+          "qualname": "BBCIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bild.py",
+          "qualname": "BildIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/brightcove.py",
+          "qualname": "BrightcoveLegacyIE._extract_brightcove_urls",
+          "status": "untested",
+          "reason": "none of the 75 inputs tried reached the changed lines of unescapeHTML, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 75,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 8.466
+    },
+    {
+      "name": "youtube-dl-3",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::unescapeHTML",
+        "source": "examples",
+        "call": "unescapeHTML(s='&a&quot;')",
+        "args": [
+          {
+            "name": "s",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": "&a&quot;"
+            }
+          }
+        ],
+        "sources": [
+          "edit",
+          "examples"
+        ],
+        "independent_sources": [
+          "edit",
+          "examples"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 8.004,
+      "prep_seconds": 0.179,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unescapeHTML",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 149,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 33,
+            "added": 18,
+            "replayed": 18,
+            "already": 15,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "unescapeHTML(s='&a&quot;')",
+            "before": "'&a\"'",
+            "after": "'&a&quot;'",
+            "source": "examples",
+            "args": [
+              {
+                "name": "s",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "&a&quot;"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit",
+            "examples"
+          ],
+          "independent_sources": [
+            "edit",
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "unescapeHTML(s='&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#47;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#x2F;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&eacute;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&a&quot;&')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&([^;]+;)&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&a&quot;&([^;]+;)')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&([^&;]+;)&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&a&quot;&([^&;]+;)')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "clean_html",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 83,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "get_elements_by_attribute",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 82,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "HistoryTopicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/atvat.py",
+          "qualname": "ATVAtIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/baidu.py",
+          "qualname": "BaiduVideoIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bbc.py",
+          "qualname": "BBCIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bild.py",
+          "qualname": "BildIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/brightcove.py",
+          "qualname": "BrightcoveLegacyIE._extract_brightcove_urls",
+          "status": "untested",
+          "reason": "none of the 75 inputs tried reached the changed lines of unescapeHTML, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 75,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unescapeHTML",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 149,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 33,
+            "added": 18,
+            "replayed": 18,
+            "already": 15,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "unescapeHTML(s='&a&quot;')",
+            "before": "'&a\"'",
+            "after": "'&a&quot;'",
+            "source": "examples",
+            "args": [
+              {
+                "name": "s",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "&a&quot;"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit",
+            "examples"
+          ],
+          "independent_sources": [
+            "edit",
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "unescapeHTML(s='&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#47;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&#x2F;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&eacute;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&a&quot;&')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&([^;]+;)&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&a&quot;&([^;]+;)')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&([^&;]+;)&a&quot;')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "unescapeHTML(s='&a&quot;&([^&;]+;)')",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "clean_html",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 83,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "get_elements_by_attribute",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 82,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "HistoryTopicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/atvat.py",
+          "qualname": "ATVAtIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/baidu.py",
+          "qualname": "BaiduVideoIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bbc.py",
+          "qualname": "BBCIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/bild.py",
+          "qualname": "BildIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/brightcove.py",
+          "qualname": "BrightcoveLegacyIE._extract_brightcove_urls",
+          "status": "untested",
+          "reason": "none of the 75 inputs tried reached the changed lines of unescapeHTML, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 75,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unescapeHTML",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 8.261
+    },
+    {
+      "name": "youtube-dl-5",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "94d61eac861bec5fe1875844f81d834f18fde2d9",
+      "fix_tests_restored": [
+        "test/test_utils.py"
+      ],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 6.258,
+      "prep_seconds": 0.368,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unified_timestamp",
+          "status": "untested",
+          "reason": "inputs reached 2 of 3 changed statements; line 1118 never ran",
+          "inputs_compared": 94,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "youtube_dl/extractor/flipagram.py",
+          "qualname": "FlipagramIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/polskieradio.py",
+          "qualname": "PolskieRadioIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._json_ld",
+          "status": "untested",
+          "reason": "none of the 20 inputs tried reached the changed lines of unified_timestamp, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/theplatform.py",
+          "qualname": "ThePlatformIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._search_json_ld",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _json_ld",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "AENetworksIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/nationalgeographic.py",
+          "qualname": "NationalGeographicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/syfy.py",
+          "qualname": "SyfyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unified_timestamp",
+          "status": "untested",
+          "reason": "inputs reached 2 of 3 changed statements; line 1118 never ran",
+          "inputs_compared": 94,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        },
+        {
+          "file": "youtube_dl/extractor/flipagram.py",
+          "qualname": "FlipagramIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/polskieradio.py",
+          "qualname": "PolskieRadioIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._json_ld",
+          "status": "untested",
+          "reason": "none of the 20 inputs tried reached the changed lines of unified_timestamp, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/theplatform.py",
+          "qualname": "ThePlatformIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._search_json_ld",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _json_ld",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "AENetworksIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/nationalgeographic.py",
+          "qualname": "NationalGeographicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/syfy.py",
+          "qualname": "SyfyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 6.703
+    },
+    {
+      "name": "youtube-dl-5",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::unified_timestamp",
+        "source": "examples",
+        "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+        "args": [
+          {
+            "name": "date_str",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": "May 16, 2016 11:15 PM"
+            }
+          }
+        ],
+        "sources": [
+          "examples"
+        ],
+        "independent_sources": [
+          "examples"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 6.228,
+      "prep_seconds": 0.164,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unified_timestamp",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 96,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+            "before": "1463440500",
+            "after": "raises AttributeError: 'tuple' object has no attribute 'timetuple'",
+            "source": "examples",
+            "args": [
+              {
+                "name": "date_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "May 16, 2016 11:15 PM"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples"
+          ],
+          "independent_sources": [
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/extractor/flipagram.py",
+          "qualname": "FlipagramIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/polskieradio.py",
+          "qualname": "PolskieRadioIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._json_ld",
+          "status": "untested",
+          "reason": "none of the 20 inputs tried reached the changed lines of unified_timestamp, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/theplatform.py",
+          "qualname": "ThePlatformIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._search_json_ld",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _json_ld",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "AENetworksIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/nationalgeographic.py",
+          "qualname": "NationalGeographicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/syfy.py",
+          "qualname": "SyfyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "unified_timestamp",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 96,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+            "before": "1463440500",
+            "after": "raises AttributeError: 'tuple' object has no attribute 'timetuple'",
+            "source": "examples",
+            "args": [
+              {
+                "name": "date_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "May 16, 2016 11:15 PM"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples"
+          ],
+          "independent_sources": [
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "unified_timestamp(date_str='May 16, 2016 11:15 PM')",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/flipagram.py",
+          "qualname": "FlipagramIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/polskieradio.py",
+          "qualname": "PolskieRadioIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._json_ld",
+          "status": "untested",
+          "reason": "none of the 20 inputs tried reached the changed lines of unified_timestamp, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/theplatform.py",
+          "qualname": "ThePlatformIE._extract_mvpd_auth",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls unified_timestamp",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/common.py",
+          "qualname": "InfoExtractor._search_json_ld",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _json_ld",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/aenetworks.py",
+          "qualname": "AENetworksIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/nationalgeographic.py",
+          "qualname": "NationalGeographicIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/syfy.py",
+          "qualname": "SyfyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls _extract_mvpd_auth",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 6.47
+    },
+    {
+      "name": "youtube-dl-10",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "458c62e5f77ad99b23c78ce096e74b6c3921664f",
+      "fix_tests_restored": [
+        "test/test_utils.py"
+      ],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::js_to_json",
+        "source": "edit",
+        "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+        "args": [
+          {
+            "name": "code",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": "\"{abc_def:'1\\'\\\\2\\\\\\'3\"4'}"
+            }
+          }
+        ],
+        "sources": [
+          "edit"
+        ],
+        "independent_sources": [
+          "edit"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 6.605,
+      "prep_seconds": 0.363,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "js_to_json",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 193,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+            "before": "'\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}'",
+            "after": "'\"{\"abc_def\":\"1\\'\\\\\\\\2\\\\\\\\\\'3\\\\\"4\"}'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "code",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "\"{abc_def:'1\\'\\\\2\\\\\\'3\"4'}"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit"
+          ],
+          "independent_sources": [
+            "edit"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{\"abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='*[^\"\\\\\\\\]{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{*[^\"\\\\\\\\]abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\u00c9\ud86f\udf43\u00cd\\x91\\U000a5ca5\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3RR(\u00f9\u00c9;0\u00c5xb\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\\U00095ef8\\x03}\\U000877a2\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3RR(\u00f9\u00c9;0\u00c5xb\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\\U00095ef8\\x03}\\U000877a2\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3UR(\u00f9\u00c9;0\u00c5xb\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\\U00095ef8\\x03}\\U000877a2\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3UR(\u00f9\u00c9;0\u00c5\u00a3b\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='DI\\'\\\\\"\\\\\"\u00f3<\\x95D\\\\nL\\\\\\\\\u00fb5\\U00053755\\\\u\\U0007a26c0\\\\\"\\U000538eaU\\\\\"\\\\n\\\\\\\\\\\\\"\\x18\u00dd\ud83d\ude0d\\\\nE\\\\\"\u00c6\\U0003ff3d\\\\nq\\x03\\x03\\x040\\x04V\"\\\\\"\\U0007cbcc\u00e5=\\\\\"7\\\\u/O\u00ea\u00e1\\U000b92b9\u023e\\x07\\r\u00b9\\\\\\'\ud874\udc7d\u00b1\\U0003ab45Z\\'$\\'\\x06\\x14')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='DI\\'\\\\\"\\\\\"\u00f3<\\x95D\\\\nL\\\\\\\\\u00fb5\\U00053755\\\\u\\U0007a26c0\\\\\"\\U000538eaU\\\\\"\\\\n\\\\\\\\\\\\\"\\x18\u00dd\ud83d\ude0d\\\\nE\\\\\"\u00c6\\U0003ff3d\\\\nq\\x03\\x03\\x04\ud83d\ude0d\\x04V\"\\\\\"\\U0007cbcc\u00e5=\\\\\"7\\\\u/O\u00ea\u00e1\\U000b92b9\u023e\\x07\\r\u00b9\\\\\\'\ud874\udc7d\u00b1\\U0003ab45Z\\'$\\'\\x06\\x14')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/extractor/krasview.py",
+          "qualname": "KrasViewIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/muenchentv.py",
+          "qualname": "MuenchenTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/patreon.py",
+          "qualname": "PatreonIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/pornhd.py",
+          "qualname": "PornHdIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/sbs.py",
+          "qualname": "SBSIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/srmediathek.py",
+          "qualname": "SRMediathekIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/tass.py",
+          "qualname": "TassIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "js_to_json",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 193,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+            "before": "'\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}'",
+            "after": "'\"{\"abc_def\":\"1\\'\\\\\\\\2\\\\\\\\\\'3\\\\\"4\"}'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "code",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "\"{abc_def:'1\\'\\\\2\\\\\\'3\"4'}"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit"
+          ],
+          "independent_sources": [
+            "edit"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{\"abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='*[^\"\\\\\\\\]{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{*[^\"\\\\\\\\]abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\u00c9\ud86f\udf43\u00cd\\x91\\U000a5ca5\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3RR(\u00f9\u00c9;0\u00c5xb\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\\U00095ef8\\x03}\\U000877a2\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3RR(\u00f9\u00c9;0\u00c5xb\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\\U00095ef8\\x03}\\U000877a2\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3UR(\u00f9\u00c9;0\u00c5xb\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\\U00095ef8\\x03}\\U000877a2\"\\\\\"\ud83c\udffb\\U000b867d\u00faU\\\\\\\\\\x93\\x8e\\x87\u00fd\\xa0(\\x93\u00bf\\\\\"\\\\\\'\\U000c3e83\u00a3UR(\u00f9\u00c9;0\u00c5\u00a3b\"\\U00095ef8\\x03}\\U000877a2')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='DI\\'\\\\\"\\\\\"\u00f3<\\x95D\\\\nL\\\\\\\\\u00fb5\\U00053755\\\\u\\U0007a26c0\\\\\"\\U000538eaU\\\\\"\\\\n\\\\\\\\\\\\\"\\x18\u00dd\ud83d\ude0d\\\\nE\\\\\"\u00c6\\U0003ff3d\\\\nq\\x03\\x03\\x040\\x04V\"\\\\\"\\U0007cbcc\u00e5=\\\\\"7\\\\u/O\u00ea\u00e1\\U000b92b9\u023e\\x07\\r\u00b9\\\\\\'\ud874\udc7d\u00b1\\U0003ab45Z\\'$\\'\\x06\\x14')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='DI\\'\\\\\"\\\\\"\u00f3<\\x95D\\\\nL\\\\\\\\\u00fb5\\U00053755\\\\u\\U0007a26c0\\\\\"\\U000538eaU\\\\\"\\\\n\\\\\\\\\\\\\"\\x18\u00dd\ud83d\ude0d\\\\nE\\\\\"\u00c6\\U0003ff3d\\\\nq\\x03\\x03\\x04\ud83d\ude0d\\x04V\"\\\\\"\\U0007cbcc\u00e5=\\\\\"7\\\\u/O\u00ea\u00e1\\U000b92b9\u023e\\x07\\r\u00b9\\\\\\'\ud874\udc7d\u00b1\\U0003ab45Z\\'$\\'\\x06\\x14')",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/krasview.py",
+          "qualname": "KrasViewIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/muenchentv.py",
+          "qualname": "MuenchenTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/patreon.py",
+          "qualname": "PatreonIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/pornhd.py",
+          "qualname": "PornHdIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/sbs.py",
+          "qualname": "SBSIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/srmediathek.py",
+          "qualname": "SRMediathekIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/tass.py",
+          "qualname": "TassIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 7.03
+    },
+    {
+      "name": "youtube-dl-10",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::js_to_json",
+        "source": "edit",
+        "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+        "args": [
+          {
+            "name": "code",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": "\"{abc_def:'1\\'\\\\2\\\\\\'3\"4'}"
+            }
+          }
+        ],
+        "sources": [
+          "edit"
+        ],
+        "independent_sources": [
+          "edit"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 12.507,
+      "prep_seconds": 0.161,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "js_to_json",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 189,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+            "before": "'\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}'",
+            "after": "'\"{\"abc_def\":\"1\\'\\\\\\\\2\\\\\\\\\\'3\\\\\"4\"}'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "code",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "\"{abc_def:'1\\'\\\\2\\\\\\'3\"4'}"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit"
+          ],
+          "independent_sources": [
+            "edit"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{\"abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='*[^\"\\\\\\\\]{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{*[^\"\\\\\\\\]abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/extractor/krasview.py",
+          "qualname": "KrasViewIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/muenchentv.py",
+          "qualname": "MuenchenTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/patreon.py",
+          "qualname": "PatreonIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/pornhd.py",
+          "qualname": "PornHdIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/sbs.py",
+          "qualname": "SBSIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/srmediathek.py",
+          "qualname": "SRMediathekIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/tass.py",
+          "qualname": "TassIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "js_to_json",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 189,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+            "before": "'\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}'",
+            "after": "'\"{\"abc_def\":\"1\\'\\\\\\\\2\\\\\\\\\\'3\\\\\"4\"}'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "code",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": "\"{abc_def:'1\\'\\\\2\\\\\\'3\"4'}"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit"
+          ],
+          "independent_sources": [
+            "edit"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "js_to_json(code='\"{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{\"abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='*[^\"\\\\\\\\]{abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "js_to_json(code='{*[^\"\\\\\\\\]abc_def:\\'1\\\\\\'\\\\\\\\2\\\\\\\\\\\\\\'3\"4\\'}')",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/extractor/krasview.py",
+          "qualname": "KrasViewIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/muenchentv.py",
+          "qualname": "MuenchenTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/patreon.py",
+          "qualname": "PatreonIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/pornhd.py",
+          "qualname": "PornHdIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/sbs.py",
+          "qualname": "SBSIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/srmediathek.py",
+          "qualname": "SRMediathekIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/tass.py",
+          "qualname": "TassIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls js_to_json",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 12.727
+    },
+    {
+      "name": "youtube-dl-11",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "febb443cf57bf5f016cc9eeac05d402957321e8a",
+      "fix_tests_restored": [
+        "test/test_utils.py"
+      ],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::str_to_int",
+        "source": "generated",
+        "call": "str_to_int(int_str=0)",
+        "args": [
+          {
+            "name": "int_str",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": 0
+            }
+          }
+        ],
+        "sources": [
+          "generated"
+        ],
+        "independent_sources": [
+          "generated"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 8.127,
+      "prep_seconds": 0.433,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "str_to_int",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 128,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 8,
+            "added": 8,
+            "replayed": 8,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "str_to_int(int_str=0)",
+            "before": "0",
+            "after": "raises TypeError: expected string or bytes-like object",
+            "source": "generated",
+            "args": [
+              {
+                "name": "int_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 0
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "generated"
+          ],
+          "independent_sources": [
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=7)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=22)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=37)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=92)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=82)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=75)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=34)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=93)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=63)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=84)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=14)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=65)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=83)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-21)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-38)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-99)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-96)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-32)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-49)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-88)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-55)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-79)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.125)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.675)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.005)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123455)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"0.00\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"2.97\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"3.06\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"1.78\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"7.35\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"0.005\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"1.005\"))",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "parse_count",
+          "status": "untested",
+          "reason": "inputs reached 1 of 2 changed statements of str_to_int; line 3523 never ran",
+          "inputs_compared": 86,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/adobetv.py",
+          "qualname": "AdobeTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/appleconnect.py",
+          "qualname": "AppleConnectIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/camdemy.py",
+          "qualname": "CamdemyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cloudy.py",
+          "qualname": "CloudyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cracked.py",
+          "qualname": "CrackedIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/drtuber.py",
+          "qualname": "DrTuberIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/eporner.py",
+          "qualname": "EpornerIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "str_to_int",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 128,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 8,
+            "added": 8,
+            "replayed": 8,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "str_to_int(int_str=0)",
+            "before": "0",
+            "after": "raises TypeError: expected string or bytes-like object",
+            "source": "generated",
+            "args": [
+              {
+                "name": "int_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 0
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "generated"
+          ],
+          "independent_sources": [
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=7)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=22)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=37)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=92)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=82)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=75)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=34)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=93)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=63)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=84)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=14)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=65)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=83)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-21)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-38)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-99)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-96)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-32)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-49)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-88)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-55)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-79)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.125)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.675)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.005)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123455)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"0.00\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"2.97\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"3.06\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"1.78\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"7.35\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"0.005\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"1.005\"))",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "parse_count",
+          "status": "untested",
+          "reason": "inputs reached 1 of 2 changed statements of str_to_int; line 3523 never ran",
+          "inputs_compared": 86,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/adobetv.py",
+          "qualname": "AdobeTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/appleconnect.py",
+          "qualname": "AppleConnectIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/camdemy.py",
+          "qualname": "CamdemyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cloudy.py",
+          "qualname": "CloudyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cracked.py",
+          "qualname": "CrackedIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/drtuber.py",
+          "qualname": "DrTuberIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/eporner.py",
+          "qualname": "EpornerIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 8.646
+    },
+    {
+      "name": "youtube-dl-11",
+      "kind": "bug",
+      "repo": "https://github.com/ytdl-org/youtube-dl",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": {
+        "function": "youtube_dl/utils.py::str_to_int",
+        "source": "examples",
+        "call": "str_to_int(int_str=523)",
+        "args": [
+          {
+            "name": "int_str",
+            "kind": "pos",
+            "value": {
+              "t": "v",
+              "v": 523
+            }
+          }
+        ],
+        "sources": [
+          "examples",
+          "generated"
+        ],
+        "independent_sources": [
+          "examples",
+          "generated"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 8.162,
+      "prep_seconds": 0.148,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "youtube_dl/utils.py"
+      ],
+      "changed_files": [
+        "youtube_dl/utils.py"
+      ],
+      "functions": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "str_to_int",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 130,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 8,
+            "added": 8,
+            "replayed": 8,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "str_to_int(int_str=523)",
+            "before": "523",
+            "after": "raises TypeError: expected string or bytes-like object",
+            "source": "examples",
+            "args": [
+              {
+                "name": "int_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 523
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples",
+            "generated"
+          ],
+          "independent_sources": [
+            "examples",
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "str_to_int(int_str=523)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=7)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=22)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=37)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=92)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=82)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=75)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=34)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=93)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=63)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=84)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=14)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=65)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=83)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=523)",
+              "repeats_example": true
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=524)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=522)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-21)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-38)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-99)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-96)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-32)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-49)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=524)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-88)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-55)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-79)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.125)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.675)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.005)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123455)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"0.00\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"2.97\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"3.06\"))",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "parse_count",
+          "status": "untested",
+          "reason": "inputs reached 1 of 2 changed statements of str_to_int; line 3523 never ran",
+          "inputs_compared": 86,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/adobetv.py",
+          "qualname": "AdobeTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/appleconnect.py",
+          "qualname": "AppleConnectIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/camdemy.py",
+          "qualname": "CamdemyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cloudy.py",
+          "qualname": "CloudyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cracked.py",
+          "qualname": "CrackedIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/drtuber.py",
+          "qualname": "DrTuberIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/eporner.py",
+          "qualname": "EpornerIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "str_to_int",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 130,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 8,
+            "added": 8,
+            "replayed": 8,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "str_to_int(int_str=523)",
+            "before": "523",
+            "after": "raises TypeError: expected string or bytes-like object",
+            "source": "examples",
+            "args": [
+              {
+                "name": "int_str",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 523
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples",
+            "generated"
+          ],
+          "independent_sources": [
+            "examples",
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "str_to_int(int_str=523)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=7)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=22)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=37)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=92)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=82)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=75)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=34)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=93)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=63)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=84)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=14)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=65)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=83)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=523)",
+              "repeats_example": true
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=524)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=522)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-21)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-62)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-38)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-98)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-99)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-96)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-32)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-49)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=524)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-88)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-55)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-79)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=-100)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=0.125)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=2.675)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=1.005)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123455)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123457)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=123456.5)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"0.00\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"2.97\"))",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "str_to_int(int_str=Decimal(\"3.06\"))",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "youtube_dl/utils.py",
+          "qualname": "parse_count",
+          "status": "untested",
+          "reason": "inputs reached 1 of 2 changed statements of str_to_int; line 3523 never ran",
+          "inputs_compared": 86,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/adobetv.py",
+          "qualname": "AdobeTVIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/appleconnect.py",
+          "qualname": "AppleConnectIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/camdemy.py",
+          "qualname": "CamdemyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cloudy.py",
+          "qualname": "CloudyIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/cracked.py",
+          "qualname": "CrackedIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/drtuber.py",
+          "qualname": "DrTuberIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        },
+        {
+          "file": "youtube_dl/extractor/eporner.py",
+          "qualname": "EpornerIE._real_extract",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls str_to_int",
+          "via_file": "youtube_dl/utils.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 8.399
+    },
+    {
+      "name": "tqdm-4",
+      "kind": "bug",
+      "repo": "https://github.com/tqdm/tqdm",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "12480b24c8a75e3fc2b0031ac71b8c22ecd0ad54",
+      "fix_tests_restored": [
+        "tqdm/tests/tests_tqdm.py"
+      ],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.916,
+      "prep_seconds": 0.247,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "tqdm/_tqdm.py"
+      ],
+      "changed_files": [
+        "tqdm/_tqdm.py"
+      ],
+      "functions": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.format_meter",
+          "status": "untested",
+          "reason": "none of the 42 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 42,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 4,
+            "added": 4,
+            "replayed": 4,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__repr__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.__iter__",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.update",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.display",
+          "status": "untested",
+          "reason": "none of the 143 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 143,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls __repr__",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.format_meter",
+          "status": "untested",
+          "reason": "none of the 42 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 42,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 4,
+            "added": 4,
+            "replayed": 4,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__repr__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.__iter__",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.update",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.display",
+          "status": "untested",
+          "reason": "none of the 143 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 143,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls __repr__",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 2.194
+    },
+    {
+      "name": "tqdm-4",
+      "kind": "bug",
+      "repo": "https://github.com/tqdm/tqdm",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.791,
+      "prep_seconds": 0.147,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "tqdm/_tqdm.py"
+      ],
+      "changed_files": [
+        "tqdm/_tqdm.py"
+      ],
+      "functions": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.format_meter",
+          "status": "untested",
+          "reason": "none of the 42 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 42,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 4,
+            "added": 4,
+            "replayed": 4,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__repr__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.__iter__",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.update",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.display",
+          "status": "untested",
+          "reason": "none of the 143 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 143,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls __repr__",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.format_meter",
+          "status": "untested",
+          "reason": "none of the 42 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 42,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 4,
+            "added": 4,
+            "replayed": 4,
+            "already": 0,
+            "unstored": 0,
+            "note": ""
+          }
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__repr__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.__iter__",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm_gui.py",
+          "qualname": "tqdm_gui.update",
+          "status": "untested",
+          "reason": "inputs could not be set up (could not build a tqdm_gui to call the method on (from type hints: ModuleNotFoundError: No module named 'matplotlib'; tq)",
+          "inputs_compared": 0,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.display",
+          "status": "untested",
+          "reason": "none of the 143 inputs tried reached the changed lines of format_meter, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 143,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls __repr__",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 1.969
+    },
+    {
+      "name": "tqdm-9",
+      "kind": "bug",
+      "repo": "https://github.com/tqdm/tqdm",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "28369b73f340db19b52896140b4193e49187915c",
+      "fix_tests_restored": [
+        "tqdm/tests/tests_tqdm.py"
+      ],
+      "deciding_input": {
+        "function": "tqdm/_tqdm.py::format_sizeof",
+        "source": "edit",
+        "call": "format_sizeof(num=99.95)",
+        "args": [
+          {
+            "name": "num",
+            "kind": "pos",
+            "value": {
+              "t": "float",
+              "v": "99.95"
+            }
+          }
+        ],
+        "sources": [
+          "edit",
+          "generated"
+        ],
+        "independent_sources": [
+          "edit",
+          "generated"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.124,
+      "prep_seconds": 0.256,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "tqdm/_tqdm.py"
+      ],
+      "changed_files": [
+        "tqdm/_tqdm.py"
+      ],
+      "functions": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_sizeof",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 114,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 4,
+            "added": 3,
+            "replayed": 3,
+            "already": 1,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "format_sizeof(num=99.95)",
+            "before": "'100'",
+            "after": "'100.0'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "num",
+                "kind": "pos",
+                "value": {
+                  "t": "float",
+                  "v": "99.95"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit",
+            "generated"
+          ],
+          "independent_sources": [
+            "edit",
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.995)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.997499999999999)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=999.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='E')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='G')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=9.995000000000001, suffix='dgdcgbbd')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__len__",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "__len__()",
+            "before": "3",
+            "after": "raises TypeError: object of type 'NoneType' has no len()",
+            "source": "generated",
+            "args": []
+          },
+          "difference_sources": [
+            "generated"
+          ],
+          "independent_sources": [
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_meter",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 23,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_sizeof",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__init__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 150,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__iter__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.close",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.update",
+          "status": "untested",
+          "reason": "none of the 151 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 151,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_sizeof",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 114,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 4,
+            "added": 3,
+            "replayed": 3,
+            "already": 1,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "format_sizeof(num=99.95)",
+            "before": "'100'",
+            "after": "'100.0'",
+            "source": "edit",
+            "args": [
+              {
+                "name": "num",
+                "kind": "pos",
+                "value": {
+                  "t": "float",
+                  "v": "99.95"
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "edit",
+            "generated"
+          ],
+          "independent_sources": [
+            "edit",
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.995)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.997499999999999)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=999.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='E')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='G')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=9.995000000000001, suffix='dgdcgbbd')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__len__",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "__len__()",
+            "before": "3",
+            "after": "raises TypeError: object of type 'NoneType' has no len()",
+            "source": "generated",
+            "args": []
+          },
+          "difference_sources": [
+            "generated"
+          ],
+          "independent_sources": [
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_meter",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 23,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_sizeof",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__init__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 150,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__iter__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.close",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.update",
+          "status": "untested",
+          "reason": "none of the 151 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 151,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 1.41
+    },
+    {
+      "name": "tqdm-9",
+      "kind": "bug",
+      "repo": "https://github.com/tqdm/tqdm",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": {
+        "function": "tqdm/_tqdm.py::format_sizeof",
+        "source": "carved",
+        "call": "format_sizeof(num=9999, suffix='')",
+        "args": [
+          {
+            "kind": "pos",
+            "name": "num",
+            "value": {
+              "t": "v",
+              "v": 9999
+            }
+          },
+          {
+            "kind": "pos",
+            "name": "suffix",
+            "value": {
+              "t": "v",
+              "v": ""
+            }
+          }
+        ],
+        "sources": [
+          "carved",
+          "edit",
+          "examples",
+          "generated"
+        ],
+        "independent_sources": [
+          "carved",
+          "edit",
+          "examples",
+          "generated"
+        ]
+      },
+      "verdict": "detected",
+      "match": true,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.091,
+      "prep_seconds": 0.147,
+      "python": "/private/tmp/claude-501/venv310/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "tqdm/_tqdm.py"
+      ],
+      "changed_files": [
+        "tqdm/_tqdm.py"
+      ],
+      "functions": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_sizeof",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 133,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 23,
+            "added": 22,
+            "replayed": 22,
+            "already": 1,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "format_sizeof(num=9999, suffix='')",
+            "before": "'10.0K'",
+            "after": "'10.00K'",
+            "source": "carved",
+            "args": [
+              {
+                "kind": "pos",
+                "name": "num",
+                "value": {
+                  "t": "v",
+                  "v": 9999
+                }
+              },
+              {
+                "kind": "pos",
+                "name": "suffix",
+                "value": {
+                  "t": "v",
+                  "v": ""
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "carved",
+            "edit",
+            "generated"
+          ],
+          "independent_sources": [
+            "carved",
+            "edit",
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=9999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=99999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999999999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.995)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.997499999999999)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=999.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='E')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='G')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=9.995000000000001, suffix='dgdcgbbd')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__len__",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "__len__()",
+            "before": "3",
+            "after": "raises TypeError: object of type 'NoneType' has no len()",
+            "source": "generated",
+            "args": []
+          },
+          "difference_sources": [
+            "generated"
+          ],
+          "independent_sources": [
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_meter",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 45,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_sizeof",
+          "via_file": "tqdm/_tqdm.py",
+          "counterexample": {
+            "call": "format_meter(n=1, total=9999, elapsed=1, unit_scale=True)",
+            "before": "'  0%|          | 1.00/10.0K [00:01<2:46:38, 1.00it/s]'",
+            "after": "'  0%|          | 1.00/10.00K [00:01<2:46:38, 1.00it/s]'",
+            "source": "examples",
+            "args": [
+              {
+                "name": "n",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 1
+                }
+              },
+              {
+                "name": "total",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 9999
+                }
+              },
+              {
+                "name": "elapsed",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 1
+                }
+              },
+              {
+                "name": "unit_scale",
+                "kind": "kw",
+                "value": {
+                  "t": "v",
+                  "v": true
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples"
+          ],
+          "independent_sources": [
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=9999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=99999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999999999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__init__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 150,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__iter__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.close",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.update",
+          "status": "untested",
+          "reason": "none of the 151 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 151,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "different": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_sizeof",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 133,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "carved": {
+            "captured": 23,
+            "added": 22,
+            "replayed": 22,
+            "already": 1,
+            "unstored": 0,
+            "note": ""
+          },
+          "counterexample": {
+            "call": "format_sizeof(num=9999, suffix='')",
+            "before": "'10.0K'",
+            "after": "'10.00K'",
+            "source": "carved",
+            "args": [
+              {
+                "kind": "pos",
+                "name": "num",
+                "value": {
+                  "t": "v",
+                  "v": 9999
+                }
+              },
+              {
+                "kind": "pos",
+                "name": "suffix",
+                "value": {
+                  "t": "v",
+                  "v": ""
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "carved",
+            "edit",
+            "generated"
+          ],
+          "independent_sources": [
+            "carved",
+            "edit",
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=9999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=99999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "carved",
+              "call": "format_sizeof(num=999999999999999, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.995)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=99.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.95)",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=999.975)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "edit",
+              "call": "format_sizeof(num=9.997499999999999)",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=999.95, suffix='')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='E')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=99.95, suffix='G')",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "format_sizeof(num=9.995000000000001, suffix='dgdcgbbd')",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__len__",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "counterexample": {
+            "call": "__len__()",
+            "before": "3",
+            "after": "raises TypeError: object of type 'NoneType' has no len()",
+            "source": "generated",
+            "args": []
+          },
+          "difference_sources": [
+            "generated"
+          ],
+          "independent_sources": [
+            "generated"
+          ],
+          "differing_inputs": [
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            },
+            {
+              "source": "generated",
+              "call": "__len__()",
+              "repeats_example": false
+            }
+          ]
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "format_meter",
+          "status": "different",
+          "reason": "",
+          "inputs_compared": 45,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_sizeof",
+          "via_file": "tqdm/_tqdm.py",
+          "counterexample": {
+            "call": "format_meter(n=1, total=9999, elapsed=1, unit_scale=True)",
+            "before": "'  0%|          | 1.00/10.0K [00:01<2:46:38, 1.00it/s]'",
+            "after": "'  0%|          | 1.00/10.00K [00:01<2:46:38, 1.00it/s]'",
+            "source": "examples",
+            "args": [
+              {
+                "name": "n",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 1
+                }
+              },
+              {
+                "name": "total",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 9999
+                }
+              },
+              {
+                "name": "elapsed",
+                "kind": "pos",
+                "value": {
+                  "t": "v",
+                  "v": 1
+                }
+              },
+              {
+                "name": "unit_scale",
+                "kind": "kw",
+                "value": {
+                  "t": "v",
+                  "v": true
+                }
+              }
+            ]
+          },
+          "difference_sources": [
+            "examples"
+          ],
+          "independent_sources": [
+            "examples"
+          ],
+          "differing_inputs": [
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=9999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=99999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            },
+            {
+              "source": "examples",
+              "call": "format_meter(n=1, total=999999999999999, elapsed=1, unit_scale=True)",
+              "repeats_example": false
+            }
+          ]
+        }
+      ],
+      "other_different": [],
+      "verified": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__init__",
+          "status": "verified",
+          "reason": "",
+          "inputs_compared": 150,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "untested": [
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.__iter__",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.close",
+          "status": "untested",
+          "reason": "none of the 4 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 4,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        },
+        {
+          "file": "tqdm/_tqdm.py",
+          "qualname": "tqdm.update",
+          "status": "untested",
+          "reason": "none of the 151 inputs tried reached the changed lines of format_sizeof, so the edit itself was not exercised (reached 0 of 3 changed statements)",
+          "inputs_compared": 151,
+          "mutants_killed": 0,
+          "mutants_total": 0,
+          "via": "calls format_meter",
+          "via_file": "tqdm/_tqdm.py"
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 1.265
+    },
+    {
+      "name": "thefuck-1",
+      "kind": "bug",
+      "repo": "https://github.com/nvbn/thefuck",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "0034ecf49d9b9cfbf3138c743f802987b222dfc2",
+      "fix_tests_restored": [
+        "tests/rules/test_pip_unknown_command.py"
+      ],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.924,
+      "prep_seconds": 0.282,
+      "python": "/private/tmp/claude-501/lg-validation/envs/thefuck-1848729c/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "thefuck/rules/pip_unknown_command.py"
+      ],
+      "changed_files": [
+        "thefuck/rules/pip_unknown_command.py"
+      ],
+      "functions": [
+        {
+          "file": "thefuck/rules/pip_unknown_command.py",
+          "qualname": "get_new_command",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "thefuck/rules/pip_unknown_command.py",
+          "qualname": "get_new_command",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 2.253
+    },
+    {
+      "name": "thefuck-1",
+      "kind": "bug",
+      "repo": "https://github.com/nvbn/thefuck",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 1.768,
+      "prep_seconds": 0.142,
+      "python": "/private/tmp/claude-501/lg-validation/envs/thefuck-1848729c/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "thefuck/rules/pip_unknown_command.py"
+      ],
+      "changed_files": [
+        "thefuck/rules/pip_unknown_command.py"
+      ],
+      "functions": [
+        {
+          "file": "thefuck/rules/pip_unknown_command.py",
+          "qualname": "get_new_command",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "thefuck/rules/pip_unknown_command.py",
+          "qualname": "get_new_command",
+          "status": "untested",
+          "reason": "no input ran to completion",
+          "inputs_compared": 20,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 1.96
+    },
+    {
+      "name": "thefuck-7",
+      "kind": "bug",
+      "repo": "https://github.com/nvbn/thefuck",
+      "expect": "detected",
+      "fix_tests": "without",
+      "synthetic_base": "973f294ae317b1a324a468001fb6224b98339f49",
+      "fix_tests_restored": [
+        "tests/rules/test_php_s.py"
+      ],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 0.729,
+      "prep_seconds": 0.268,
+      "python": "/private/tmp/claude-501/lg-validation/envs/thefuck-1848729c/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "thefuck/rules/php_s.py"
+      ],
+      "changed_files": [
+        "thefuck/rules/php_s.py"
+      ],
+      "functions": [
+        {
+          "file": "thefuck/rules/php_s.py",
+          "qualname": "match",
+          "status": "untested",
+          "reason": "none of the 43 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 43,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "thefuck/rules/php_s.py",
+          "qualname": "match",
+          "status": "untested",
+          "reason": "none of the 43 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 43,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 1.043
+    },
+    {
+      "name": "thefuck-7",
+      "kind": "bug",
+      "repo": "https://github.com/nvbn/thefuck",
+      "expect": "detected",
+      "fix_tests": "with",
+      "synthetic_base": null,
+      "fix_tests_restored": [],
+      "deciding_input": null,
+      "verdict": "unchecked",
+      "match": false,
+      "error": "",
+      "warnings": [],
+      "seconds": 0.7,
+      "prep_seconds": 0.133,
+      "python": "/private/tmp/claude-501/lg-validation/envs/thefuck-1848729c/bin/python",
+      "python_version": "3.10.22",
+      "files": [
+        "thefuck/rules/php_s.py"
+      ],
+      "changed_files": [
+        "thefuck/rules/php_s.py"
+      ],
+      "functions": [
+        {
+          "file": "thefuck/rules/php_s.py",
+          "qualname": "match",
+          "status": "untested",
+          "reason": "none of the 43 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 43,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "different": [],
+      "other_different": [],
+      "verified": [],
+      "untested": [
+        {
+          "file": "thefuck/rules/php_s.py",
+          "qualname": "match",
+          "status": "untested",
+          "reason": "none of the 43 inputs tried reached the changed lines, so the edit itself was not exercised (reached 0 of 1 changed statements)",
+          "inputs_compared": 43,
+          "mutants_killed": 0,
+          "mutants_total": 0
+        }
+      ],
+      "contract_breaks": 0,
+      "mutants_killed": 0,
+      "mutants_total": 0,
+      "mutation_score": null,
+      "wall_seconds": 0.881
+    }
+  ]
+}

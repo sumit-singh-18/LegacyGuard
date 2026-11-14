@@ -253,6 +253,8 @@ keeps the shown-first count as `first_shown`. The harness itself is tested on lo
 
 Baseline to beat: 2 of 7 checkable BugsInPy bugs detected without the fix's own tests, 2 unchecked.
 
+**Done (2026-11-14), every task passed review. Result (docs/validation/2026-11-run2.md): 4 of 9 bugs detected without the fix's tests (4 of 5 checkable), 6 of 9 with them, no false alarms; seven earlier "verified" results are now honestly untested.**
+
 | Task | What | Acceptance |
 |---|---|---|
 | A | Gate callers on the callee's changed lines; gate every changed statement, not any; skip comment/whitespace-only changes; skip callers that cannot be called | No result is "verified" unless an input reached every changed statement it claims; tqdm 4 and youtube-dl 5 (no fix tests) become unchecked/untested instead of quiet; existing tests still pass |
