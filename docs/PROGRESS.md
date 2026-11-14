@@ -62,6 +62,8 @@ until the reviewer passes it. Newest entries at the bottom.
   Wiring for 6.2 in diff.py committed 343c7c0 (230 tests on both Pythons).
 - Task 6.5 (skip uncallable callers): review REVISE (memory blamed the wrong side; an open difference could
   be cut; static signal looked only in tests; skipped callers hidden on wakes); fixed plus session map and
-  Stop report; in round 2 review.
+  Stop report; PASS in round 2. Merged afb8af4 (246 tests on Python 3.12 and 3.10).
 - Sprint 6 phase 2 started: 6.3 + 6.4 (object splices; guard-condition inputs and a date pool) and 6.6
   (guarded slowdown result).
+- Tasks 6.3 + 6.4 implemented (the three fixtures thefuck 7, tqdm 4, youtube-dl 5 detected without fix tests);
+  sent to review. Task 6.6 still being built.
