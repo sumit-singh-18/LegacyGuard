@@ -310,7 +310,7 @@ def test_only_guessed_inputs_failing_on_the_baseline_is_not_remembered(tmp_path,
     old = {"status": "ran", "results": [_raise(), _raise(), _raise()], "lines": None}
     new = {"status": "ran", "results": [_raise("other"), _raise("other"), _raise("other")], "lines": None}
     r = diff.compare_one(t, items, old, old, {**new, "results": [{"outcome": "timeout"}] * 3}, True)
-    assert r.status == diff.SLOWDOWN and not r.baseline_unrunnable  # Task 6.6: a new-only hang is a slowdown
+    assert r.status == diff.UNTESTED and "no input ran to completion" in r.reason and not r.baseline_unrunnable
     data = ledger.fresh("s")
     root = write_tree(tmp_path / "p", {"c.py": "def c(x):\n    return x\n"})
     engine.record(make_cfg(root), data, [r])
