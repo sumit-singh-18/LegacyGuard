@@ -10,6 +10,7 @@ import builtins
 import datetime as _dt
 import dis
 import enum
+import errno
 import importlib
 import inspect
 import io
@@ -18,6 +19,7 @@ import itertools
 import json
 import os
 import random
+import shutil
 import signal
 import socket
 import sqlite3
@@ -84,23 +86,35 @@ def install_blocks() -> None:
     db = _blocker("database")
     sqlite3.connect = db
     sqlite3.dbapi2.connect = db
-    real_open = builtins.open
+    real_open = _REAL_FS["open"]
     file_block = _blocker("file write")
 
     class GuardedOpen:
         """open() with writes into the repo refused. A callable object, not a function: Python 3.10's pathlib keeps
         io.open as a class attribute (_NormalAccessor.open), and a plain function stored there would be bound as a
-        method, receiving the accessor as `file` and the path as `mode`."""
+        method, receiving the accessor as `file` and the path as `mode`.
+
+        During setup (import, building inputs) a write to a cache-like path goes to the run's shadow folder instead
+        (see _redirect); a read of a path written that way reads the shadow copy."""
 
         def __call__(self, file, mode="r", *args, **kwargs):
-            if (isinstance(mode, str) and any(c in mode for c in "wax+") and str(file) not in (os.devnull,)
+            writing = isinstance(mode, str) and any(c in mode for c in "wax+")
+            if (writing and str(file) not in (os.devnull,)
                     and not GUARD_WRITES.get("allowed") and not _is_scratch(file)):
-                file_block()
+                shadow = _redirect(file, mode=mode)
+                if shadow is None:
+                    file_block()
+                fh = real_open(shadow[1], mode, *args, **kwargs)
+                SHADOW[shadow[0]] = shadow[1]
+                return fh
+            if not writing and SHADOW:
+                file = _shadow_of(file) or file
             return real_open(file, mode, *args, **kwargs)
 
     guarded_open = GuardedOpen()
     builtins.open = guarded_open
     io.open = guarded_open
+    _install_os_redirects()
     proc = _blocker("subprocess")
     subprocess.Popen.__init__ = proc  # patch the method: libraries subclass Popen at import time
     subprocess.run = proc
@@ -136,7 +150,10 @@ def _audit(event, args):
             kind = "file write"
     elif event in _PATH_EVENTS:
         # Every path the operation touches must be scratch: renaming a temp file over a repo file is a repo write.
-        paths = [a for a in args[:2] if isinstance(a, (str, bytes, int, os.PathLike))]
+        # The first argument is a path or a file descriptor; a second one counts only when it is a path (os.mkdir,
+        # os.chmod and os.truncate pass a mode or a length there, which made every mkdir refused, even in the temp folder).
+        paths = [a for a in args[:1] if isinstance(a, (str, bytes, int, os.PathLike))]
+        paths += [a for a in args[1:2] if isinstance(a, (str, bytes, os.PathLike))]
         if not paths or any(isinstance(p, int) or not _is_scratch(p) for p in paths):
             kind = "file write"
     elif event in _ALWAYS:
@@ -175,7 +192,7 @@ def _is_local_socket(address) -> bool:
 
 GUARD_WRITES = {"allowed": False}
 STUBS = {"on": False}  # databases and HTTP clients answered by lg_stubs instead of blocked (roadmap C1)
-SCRATCH = {"temp": "", "protect": []}
+SCRATCH = {"temp": "", "protect": [], "dir": "", "owned": False}
 
 
 def _is_scratch(file) -> bool:
@@ -196,6 +213,197 @@ def _is_scratch(file) -> bool:
     return real.startswith(SCRATCH["temp"]) and not any(real.startswith(p) for p in SCRATCH["protect"])
 
 
+# ---- writes during setup (Task 6.8a) ----
+# Importing a module or building an input may write a cache: a pickled table next to the module, a folder under
+# ~/.cache, a lookup file. Refusing those left the whole module untested. While SETUP is on (module import, Django
+# setup, building self and the arguments) such a write is not refused but redirected: the file goes to
+# <run scratch>/shadow/<its real absolute path>, and later reads of that path in the same run read the shadow copy.
+# The real file is never created or changed. Only cache-like paths are redirected (a path part containing "cache",
+# or a .pickle/.pkl/.cache file); any other write outside the temp folder is still refused, and during the compared
+# call itself nothing is redirected. Each run has its own scratch folder, deleted after the run; a warm server's
+# children each get a fresh one on top of the server's (read-only to them), so nothing written in one run is seen by
+# another.
+_REAL_FS = {"open": builtins.open, "os_open": os.open, "mkdir": os.mkdir, "replace": os.replace, "rename": os.rename,
+         "remove": os.remove, "unlink": os.unlink}
+SETUP = {"on": False}
+SHADOW: dict = {}  # real path -> shadow path, for files and folders written during setup in this process
+CACHE_SUFFIXES = (".pickle", ".pkl", ".cache")
+
+
+class setup_phase:
+    """Context manager: target code runs here to import or to build inputs, not as the compared call."""
+
+    def __enter__(self):
+        self.prev = SETUP["on"]
+        SETUP["on"] = True
+
+    def __exit__(self, *exc):
+        SETUP["on"] = self.prev
+        return False
+
+
+def _real_str(file):
+    if isinstance(file, int):
+        return None
+    try:
+        real = os.path.realpath(os.fspath(file))
+    except (TypeError, ValueError):
+        return None
+    return os.fsdecode(real) if isinstance(real, bytes) else real
+
+
+def _cache_like(real: str) -> bool:
+    """A path that looks like a cache, judged below the project (or home) folder that holds it, so a project that
+    itself lives in a folder named "cache" does not make all its files cache-like."""
+    base = ""
+    for p in SCRATCH["protect"] + [os.path.join(os.path.realpath(os.path.expanduser("~")), "")]:
+        if (real + os.sep).startswith(p) and len(p) > len(base):
+            base = p
+    rel = real[len(base):].lower()
+    return any("cache" in part for part in rel.split(os.sep)) or rel.endswith(CACHE_SUFFIXES)
+
+
+def _shadow_of(file):
+    """The shadow copy of a path written during setup, or None."""
+    real = _real_str(file)
+    return SHADOW.get(real) if real else None
+
+
+def _make_dirs(path: str) -> None:
+    if os.path.isdir(path):
+        return
+    _make_dirs(os.path.dirname(path))
+    try:
+        _REAL_FS["mkdir"](path)
+    except FileExistsError:
+        pass
+
+
+def _redirect(file, mode: str = "", flags: int = 0):
+    """(real path, shadow path) for a write during setup to a cache-like path outside the temp folder, or None when
+    the write must be refused. Raises what the real call would for a missing folder or an exclusive create of an
+    existing file. Append and update modes start from the current content (the shadow copy or the real file)."""
+    if not SETUP["on"] or not SCRATCH["dir"] or isinstance(file, int):
+        return None
+    real = _real_str(file)
+    if not real or not _cache_like(real):
+        return None
+    target = os.path.join(SCRATCH["dir"], "shadow", real.lstrip(os.sep))
+    folder, parent = os.path.dirname(target), os.path.dirname(real)
+    if not os.path.isdir(folder):
+        if not (parent in SHADOW or os.path.isdir(parent)):
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", os.fspath(file))
+        _make_dirs(folder)
+    current = SHADOW.get(real) or (real if os.path.isfile(real) else None)
+    exclusive = "x" in mode or (flags & os.O_CREAT and flags & os.O_EXCL)
+    if exclusive and current:
+        raise FileExistsError(errno.EEXIST, "File exists", os.fspath(file))
+    keeps = ("a" in mode or "+" in mode) and "w" not in mode if mode else not flags & os.O_TRUNC
+    if keeps and current and current != target and os.path.isfile(current):
+        with _REAL_FS["open"](current, "rb") as src, _REAL_FS["open"](target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    return real, target
+
+
+def _install_os_redirects() -> None:
+    """os.open, os.mkdir (so os.makedirs), os.replace/rename and os.remove/unlink follow the same redirect. Anything
+    else that writes is still seen, and refused, by the audit hook."""
+
+    def guarded_os_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is None and not isinstance(path, int):
+            if flags & _WRITE_FLAGS and not GUARD_WRITES["allowed"] and not _is_scratch(path):
+                shadow = _redirect(path, flags=flags)
+                if shadow is not None:
+                    fd = _REAL_FS["os_open"](shadow[1], flags, mode)
+                    SHADOW[shadow[0]] = shadow[1]
+                    return fd
+            elif SHADOW and not flags & _WRITE_FLAGS:
+                path = _shadow_of(path) or path
+        return _REAL_FS["os_open"](path, flags, mode, dir_fd=dir_fd)
+
+    def guarded_mkdir(path, mode=0o777, *, dir_fd=None):
+        if dir_fd is None and SETUP["on"] and not GUARD_WRITES["allowed"] and not _is_scratch(path):
+            real = _real_str(path)
+            if real and _cache_like(real) and SCRATCH["dir"]:
+                if os.path.exists(real):
+                    raise FileExistsError(errno.EEXIST, "File exists", os.fspath(path))
+                if real in SHADOW:
+                    return None  # already made in this run; os.makedirs(exist_ok=True) cannot see it, so do not fail it
+                parent = os.path.dirname(real)
+                if not (parent in SHADOW or os.path.isdir(parent)):
+                    raise FileNotFoundError(errno.ENOENT, "No such file or directory", os.fspath(path))
+                target = os.path.join(SCRATCH["dir"], "shadow", real.lstrip(os.sep))
+                _make_dirs(target)
+                SHADOW[real] = target
+                return None
+        return _REAL_FS["mkdir"](path, mode, dir_fd=dir_fd)
+
+    def mover(name):
+        real_fn = _REAL_FS[name]
+
+        def move(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+            if (src_dir_fd is None and dst_dir_fd is None and SETUP["on"] and not GUARD_WRITES["allowed"]
+                    and not _is_scratch(dst)):
+                source = src if _is_scratch(src) else _shadow_of(src)
+                shadow = _redirect(dst, mode="w") if source else None
+                if shadow is not None:
+                    if _is_scratch(src) or source.startswith(SCRATCH["dir"] + os.sep):
+                        real_fn(source, shadow[1])
+                    else:  # a warm server's copy, shared by every check: copy it, never move it
+                        with _REAL_FS["open"](source, "rb") as fh, _REAL_FS["open"](shadow[1], "wb") as out:
+                            shutil.copyfileobj(fh, out)
+                    SHADOW.pop(_real_str(src), None)
+                    SHADOW[shadow[0]] = shadow[1]
+                    return None
+            return real_fn(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+        return move
+
+    def remover(name):
+        real_fn = _REAL_FS[name]
+
+        def remove(path, *, dir_fd=None):
+            if dir_fd is None and SHADOW and SETUP["on"] and not GUARD_WRITES["allowed"] and not _is_scratch(path):
+                real = _real_str(path)
+                shadow = SHADOW.get(real) if real else None
+                if shadow is not None:
+                    SHADOW.pop(real)
+                    if shadow.startswith(SCRATCH["dir"] + os.sep):  # a copy from a warm server's layer stays for the others
+                        real_fn(shadow)
+                    return None
+            return real_fn(path, dir_fd=dir_fd)
+        return remove
+
+    os.open = guarded_os_open
+    os.mkdir = guarded_mkdir
+    os.replace, os.rename = mover("replace"), mover("rename")
+    os.remove, os.unlink = remover("remove"), remover("unlink")
+
+
+def use_scratch(path: str | None = None) -> str:
+    """Make path (or a fresh folder in the temp folder) the place where this run's redirected writes go."""
+    allowed = GUARD_WRITES["allowed"]
+    GUARD_WRITES["allowed"] = True
+    try:
+        if path:
+            _make_dirs(path)
+            SCRATCH["owned"] = False
+        else:
+            path = tempfile.mkdtemp(prefix="lg-scratch-")
+            SCRATCH["owned"] = True
+    finally:
+        GUARD_WRITES["allowed"] = allowed
+    SCRATCH["dir"] = os.path.realpath(path)
+    return SCRATCH["dir"]
+
+
+def drop_scratch() -> None:
+    """Delete the scratch folder if this process made it (a runner-made one is deleted by the runner)."""
+    if SCRATCH.get("owned") and SCRATCH["dir"]:
+        GUARD_WRITES["allowed"] = True
+        shutil.rmtree(SCRATCH["dir"], ignore_errors=True)
+        SCRATCH["owned"] = False
+
+
 def _alarm(signum, frame):
     raise CallTimeout()
 
@@ -214,7 +422,8 @@ def _with_timeout(fn, seconds: float = CALL_TIMEOUT_S):
 def _resolve(module, qualname):
     """(callable or None, needs_instance class or None, reason)."""
     try:
-        mod = importlib.import_module(module)
+        with setup_phase():
+            mod = importlib.import_module(module)
     except Exception:  # noqa: BLE001
         # The package's start-up can fail after this module has loaded: humanize/__init__.py imports every
         # submodule and then a _version file that exists only in an installed copy. A module that is in
@@ -696,7 +905,8 @@ def _http_caller(app_ref: str):
     """A callable(method, path, json=None, params=None) that sends one request to the app in process and returns
     {status, content_type, body}: Flask's test client, or Starlette/FastAPI's TestClient (roadmap C3)."""
     mod, _, attr = app_ref.partition(":")
-    app = getattr(importlib.import_module(mod), attr or "app")
+    with setup_phase():
+        app = getattr(importlib.import_module(mod), attr or "app")
     if hasattr(app, "test_client"):  # Flask
         client = app.test_client()
 
@@ -768,7 +978,8 @@ def run_function(spec, root_real):
     make_self, recipe, no_self = None, "", ""
     if owner is not None and not all(i.get("has_self") for i in spec["inputs"]):
         try:
-            make_self, recipe, no_self = _instance_maker(owner, spec)
+            with setup_phase():
+                make_self, recipe, no_self = _instance_maker(owner, spec)
         except GuardBlocked as exc:
             no_self = f"building a {owner.__name__} was blocked: {exc}"
     fn_deadline = time.monotonic() + FUNCTION_BUDGET_S
@@ -926,7 +1137,8 @@ def run_capture(spec, root_real) -> dict:
     make_self = None
     if owner is not None and not all(i.get("has_self") for i in spec["inputs"]):
         try:
-            make_self, _, _ = _instance_maker(owner, spec)
+            with setup_phase():
+                make_self, _, _ = _instance_maker(owner, spec)
         except GuardBlocked:
             make_self = None
     trace = _capture_tracer(wanted, state)
@@ -971,13 +1183,15 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
     reset_determinism()
     lg_stubs.reset()
     try:
-        pos, kw, watched = _build_args(item, make_self, index)
+        with setup_phase():
+            pos, kw, watched = _build_args(item, make_self, index)
     except BaseException as exc:  # noqa: BLE001
         return {"outcome": "setup_failed", "detail": f"{type(exc).__name__}: {exc}"}
     self_before = _self_before(fn, watched)
     try:
         sys.settrace(trace)
         _IN_CALL["active"] = True
+        setup_was, SETUP["on"] = SETUP["on"], False  # the compared call: nothing is redirected, every write is refused
         frozen_datetime_module(True)
         try:
             began = time.monotonic()
@@ -987,6 +1201,7 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
                 LAST_CALL["seconds"] = round(time.monotonic() - began, 4)
         finally:
             frozen_datetime_module(False)
+            SETUP["on"] = setup_was
             _IN_CALL["active"] = False
             sys.settrace(None)
         outcome = {"outcome": "return", "value": lg_codec.canon(value)}
@@ -1077,8 +1292,9 @@ def setup_django(request) -> str | None:
         return None
     try:
         os.environ["DJANGO_SETTINGS_MODULE"] = django_settings
-        import django
-        django.setup()
+        with setup_phase():
+            import django
+            django.setup()
         return None
     except BaseException as exc:  # noqa: BLE001
         return f"{django_settings}: {type(exc).__name__}: {exc}"[:400]
@@ -1089,6 +1305,7 @@ def prepare(request, with_django: bool = True) -> tuple[str, str | None]:
     GUARD_WRITES["allowed"] = True
     # Before the blocks go in: on Python 3.9 finding the temp folder writes a probe file through open().
     SCRATCH["temp"] = os.path.realpath(tempfile.gettempdir()) + os.sep
+    use_scratch(request.get("scratch"))
     GUARD_WRITES["allowed"] = False
     install_blocks()
     if request.get("io", "stub") == "stub":
@@ -1141,8 +1358,11 @@ def write_result(out: dict, result_path: str) -> None:
 def main(request_path, result_path):
     with open(request_path) as fh:
         request = json.load(fh)
-    root_real, setup_error = prepare(request)
-    write_result(execute(request, root_real, setup_error), result_path)
+    try:
+        root_real, setup_error = prepare(request)
+        write_result(execute(request, root_real, setup_error), result_path)
+    finally:
+        drop_scratch()
 
 
 if __name__ == "__main__":

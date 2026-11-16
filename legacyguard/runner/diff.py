@@ -242,7 +242,9 @@ def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[di
     bd = cfg.behavioral_diff
     with tempfile.TemporaryDirectory(prefix="lgrun") as tmp:
         req, res = Path(tmp) / "req.json", Path(tmp) / "res.json"
+        # scratch: where writes during import and input setup are redirected for this run; deleted with tmp.
         request = {"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
+                   "scratch": str(Path(tmp) / "scratch"),
                    "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True)),
                    "io": str(bd.get("io", "stub")),
                    "warm": warm_names or []}

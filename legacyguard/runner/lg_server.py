@@ -41,7 +41,8 @@ def _warm(names: list[str]) -> None:
         STATE["warm"].add(name)
         W.GUARD_WRITES["allowed"] = False
         try:
-            __import__(name)
+            with W.setup_phase():  # cache writes at import go to the server's own scratch folder, under every child's
+                __import__(name)
         except BaseException:  # noqa: BLE001
             pass
         finally:
@@ -59,6 +60,9 @@ def _run(msg: dict) -> dict:
     if pid == 0:  # the child: one check, then exit without returning into the server loop
         try:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            # A fresh scratch folder per check: what this check writes during setup is not seen by the next one.
+            # Files the server wrote while warming stay readable (their SHADOW entries are inherited), never changed.
+            W.use_scratch(request.get("scratch"))
             setup_error = STATE["setup_error"]
             if STATE["mode"] == "work" and request.get("django_settings"):
                 W.GUARD_WRITES["allowed"] = False
@@ -67,6 +71,7 @@ def _run(msg: dict) -> dict:
             out = W.execute(request, STATE["root_real"], setup_error)
             W.write_result(out, msg["result"])
         finally:
+            W.drop_scratch()
             os._exit(0)
     deadline = time.monotonic() + float(msg.get("timeout", 60))
     while True:
@@ -92,7 +97,8 @@ def serve(sock_path: str, init_path: str, mode: str) -> None:
     server.listen(8)
     server.settimeout(IDLE_S)
     STATE["mode"] = mode
-    STATE["root_real"], STATE["setup_error"] = W.prepare(init, with_django=(mode == "baseline"))
+    # The server's own scratch folder (the init request's belongs to the first check and is deleted after it).
+    STATE["root_real"], STATE["setup_error"] = W.prepare({**init, "scratch": None}, with_django=(mode == "baseline"))
     W.GUARD_WRITES["allowed"] = True  # the server's own bookkeeping; children turn the blocks back on
     _warm(list(init.get("warm") or []))
     while True:
@@ -125,6 +131,7 @@ def serve(sock_path: str, init_path: str, mode: str) -> None:
         os.unlink(sock_path)
     except OSError:
         pass
+    W.drop_scratch()
 
 
 if __name__ == "__main__":
