@@ -1,0 +1,141 @@
+# Held-out BugsInPy set (docs/validation/holdout-set.md): 10 bugs plus the PySnooper 3 control.
+# Chosen 2026-11-14 and NEVER used to tune the guard: do not change the guard or this manifest's scoring because of
+# what these cases show. Its detection rate is reported apart from the tuning set's and is the number for the README.
+#
+# Hashes: BugsInPy bug.info (checked against holdout-set.md). Patches: BugsInPy bug_patch.txt, in patches/.
+# Environment (holdout-set.md): Python 3.10 for every case; setuptools<82 for httpie 3 (pkg_resources);
+# MarkupSafe==2.0.1 for cookiecutter 2. One venv per project, from /opt/homebrew/bin/python3.10, with the project's
+# runtime dependencies only (never the project itself, never -e: the guard imports the checkout), pinned to the versions
+# resolved on 2026-11-15 (transitive ones included) so run 3 can be repeated. httpie: setuptools 81 (<82, pkg_resources).
+#
+# Run 3, both sets, both fix-test modes:
+#   .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml tools/validation/holdout.yaml \
+#       --fix-tests both --workdir /private/tmp/claude-501/lg-validation --out /private/tmp/claude-501/lg-validation/out-run3
+# Readiness only (no guard run): add --check-setup.
+set: holdout
+cases:
+  - name: tornado-5
+    note: "PeriodicCallback._update_next (state when the clock goes backwards); reached by PeriodicCallback(None, 10000), set _next_timeout, _update_next(998)"
+    direct_call_only: true
+    repo: https://github.com/tornadoweb/tornado
+    kind: bug
+    buggy: 2d4053daa56c609d642b214399e046671d4a593e
+    fixed: 886643965b5cb782503d8d7b374b7a794ec2077b
+    files: [tornado/ioloop.py]
+    patch: patches/tornado-5.patch
+    setup: &tornado_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+
+  - name: tornado-14
+    note: "IOLoop.initialize (make_current check inverted); reached by IOLoop(make_current=True)"
+    repo: https://github.com/tornadoweb/tornado
+    kind: bug
+    buggy: 81ee310adcd905fbdf7c98d9fb6ef0c5a46026c2
+    fixed: 1d02ed606f1c52636462633d009bdcbaac644331
+    files: [tornado/ioloop.py]
+    patch: patches/tornado-14.patch
+    setup: *tornado_setup
+
+  - name: black-17
+    note: "decode_bytes, lib2to3_parse (empty input); reached by decode_bytes(b''), format_str('', line_length=88)"
+    repo: https://github.com/psf/black
+    kind: bug
+    buggy: bbc09a4f013f2a584f143f3f5e3f76f6082367d4
+    fixed: 7fc6ce990669464f5172b63fafa3724f5f308be3
+    files: [black.py]
+    patch: patches/black-17.patch
+    setup: &black_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q "click==8.1.7" "attrs==23.2.0" "appdirs==1.4.4"'
+
+  - name: black-19
+    note: "EmptyLineTracker._maybe_empty_lines (decorator after a comment); reached by format_str(src, line_length=88)"
+    repo: https://github.com/psf/black
+    kind: bug
+    buggy: 337a4199f90ca48a19cf26511e0cec330b13bd4e
+    fixed: 29e97d1d4a7717f1bd0ca35cacf2f2ce6d815b0c
+    files: [black.py]
+    patch: patches/black-19.patch
+    setup: *black_setup
+
+  - name: httpie-5
+    note: "httpie/cli.py KeyValueType (escaped separators); reached by KeyValueType(*seps)('bob\\:==foo')"
+    repo: https://github.com/jakubroztocil/httpie
+    kind: bug
+    buggy: 16df8848e81eefac830f407e4b985f42b52970da
+    fixed: 90af1f742230831792d74d303d1e7ce56c96d4bd
+    files: [httpie/cli.py]
+    patch: patches/httpie-5.patch
+    setup: &httpie_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q "setuptools==81.0.0" "requests==2.32.3" "Pygments==2.18.0" "certifi==2026.10.23" "charset-normalizer==3.5.2" "idna==3.20" "urllib3==2.8.0"'
+
+  - name: httpie-3
+    note: "httpie/sessions.py Session.update_headers (None values); reached by Session(path).update_headers({...: None}). Needs setuptools<82 for pkg_resources."
+    direct_call_only: true
+    repo: https://github.com/jakubroztocil/httpie
+    kind: bug
+    buggy: 8c33e5e3d31d3cd6476c4d9bc963a4c529f883d2
+    fixed: 589887939507ff26d36ec74bd2c045819cfa3d56
+    files: [httpie/sessions.py]
+    patch: patches/httpie-3.patch
+    setup: *httpie_setup
+
+  - name: cookiecutter-2
+    note: "cookiecutter/hooks.py find_hook, run_hook (list instead of one path); reached by find_hook('pre_gen_project', hooks_dir). Needs MarkupSafe==2.0.1."
+    repo: https://github.com/cookiecutter/cookiecutter
+    kind: bug
+    buggy: d7e7b28811e474e14d1bed747115e47dcdd15ba3
+    fixed: 90434ff4ea4477941444f1e83313beb414838535
+    files: [cookiecutter/hooks.py]
+    patch: patches/cookiecutter-2.patch
+    setup:
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q "MarkupSafe==2.0.1" "Jinja2==2.11.3" "binaryornot==0.4.4" "click==7.1.2" "poyo==0.5.0" "jinja2-time==0.2.0" "python-slugify==4.0.1" "requests==2.32.3" "arrow==1.4.0" "certifi==2026.10.23" "chardet==7.7.0" "charset-normalizer==3.5.2" "idna==3.20" "python-dateutil==3.0.0" "six==1.17.0" "text-unidecode==1.3" "tzdata==2026.6" "urllib3==2.8.0"'
+
+  - name: luigi-20
+    note: "luigi/task.py Task.to_str_params (insignificant params); reached by a Task subclass with significant=False, .to_str_params()"
+    repo: https://github.com/spotify/luigi
+    kind: bug
+    buggy: b958140c2ec838e590a5be02dbac7414d5d0bf17
+    fixed: c3d685e2b03369aab6f4d86ed1c95169c1c2c217
+    files: [luigi/task.py]
+    patch: patches/luigi-20.patch
+    setup: &luigi_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q "tornado==6.4.1" "python-daemon==3.0.1" "python-dateutil==2.9.0.post0" "cached_property==1.5.2" "pyparsing==3.1.2" "docutils==0.23" "lockfile==0.12.2" "six==1.17.0"'
+
+  - name: luigi-33
+    note: "luigi/task.py Task.get_param_values (positional filter); reached by Cls.get_param_values(Cls.get_params(), args, {})"
+    repo: https://github.com/spotify/luigi
+    kind: bug
+    buggy: a7c0662eab78fd226fd7ef6b4461d7199336cbb1
+    fixed: fccb631a14e1d52138d39f06004be14ca8f3337d
+    files: [luigi/task.py]
+    patch: patches/luigi-33.patch
+    setup: *luigi_setup
+
+  - name: luigi-22
+    note: "luigi/scheduler.py Worker.__init__ default last_active (then prune stops raising TypeError); reached by Worker(123).prune(cfg). The fixed default time.time() is evaluated at import, so the case is scored on outcome type only."
+    score: outcome_type
+    repo: https://github.com/spotify/luigi
+    kind: bug
+    buggy: 9c4c47ae449593c55fb67ce51115d0be1fecb163
+    fixed: 2db9768958c9665c2bb78f040054a25534205fc4
+    files: [luigi/scheduler.py]
+    patch: patches/luigi-22.patch
+    setup: *luigi_setup
+
+  - name: pysnooper-3
+    set: control
+    expect: unchecked
+    note: "Control, never counted: get_write_function's bug only shows through a file write, which the guard blocks by design, so the expected verdict is unchecked."
+    repo: https://github.com/cool-RR/PySnooper
+    kind: bug
+    buggy: 6e3d797be3fa0a746fb5b1b7c7fea78eb926c208
+    fixed: 15555ed760000b049aff8fecc79d29339c1224c3
+    files: [pysnooper/pysnooper.py]
+    patch: patches/PySnooper-3.patch
+    setup:
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q "decorator==5.1.1" "future==1.0.0" "six==1.16.0"'

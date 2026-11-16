@@ -19,7 +19,14 @@ time. It writes results.json and
 results.md to --out and prints the metrics. A failing case is recorded as "error" and the run goes on.
 
 Usage:
-    python tools/validate.py MANIFEST.yaml [--workdir DIR] [--out DIR] [--only NAME ...] [--fix-tests with|without|both]
+    python tools/validate.py MANIFEST.yaml [MANIFEST2.yaml ...] [--workdir DIR] [--out DIR] [--only NAME ...]
+                             [--fix-tests with|without|both] [--check-setup]
+
+Several manifests run as one (case names must be unique). A manifest's top-level `set` (tuning, holdout, control) is
+the default for its cases: the report gives each set's detection rate apart, and a control case is reported on its own
+line and never counted. Per case: `score: outcome_type` credits only differences where one side raises and the other
+returns; `env` names a venv of its own; `direct_call_only` and `note` are shown in the report. --check-setup gets the
+cases ready and imports the bug's modules (in the OS sandbox) without running the guard.
 
 Repositories are cloned (or, for a local path, cloned from that path) into --workdir and reused between cases.
 `setup` commands run once per repository with cwd at the clone and LG_VENV set to a cached folder for a venv;
@@ -58,29 +65,48 @@ TEST_DATA_DIRS = {"testing", "test_data", "testdata", "fixtures"}   # non-.py fi
 FIX_TEST_SOURCES = ("tests", "examples")  # where a fix's regression test literal can reach the guard
 MAX_DIFFERING = 50
 SETUP_TIMEOUT = 1800
+# Case sets. "tuning": the bugs the guard was developed against. "holdout": never used to tune it; its rate is the one to
+# publish. "control": a case with a known expected verdict that is reported on its own line and never counted in any rate.
+TUNING, HOLDOUT, CONTROL = "tuning", "holdout", "control"
+SETS = (TUNING, HOLDOUT, CONTROL)
+SET_LABEL = {TUNING: "Tuning set", HOLDOUT: "Held-out set", CONTROL: "Control"}
+OUTCOME_TYPE = "outcome_type"   # case `score:` value: credit only differences where one side raises and the other returns
 
 
 # ---------------------------------------------------------------- manifest
 
 def load_manifest(path: Path) -> list[dict]:
-    """The cases of a YAML or JSON manifest: a list, or a mapping with a `cases` list."""
+    """The cases of a YAML or JSON manifest: a list, or a mapping with a `cases` list and an optional `set`
+    (the default set of its cases: "tuning", "holdout" or "control"; a case's own `set` wins)."""
     text = path.read_text()
     if path.suffix.lower() == ".json":
         data = json.loads(text)
     else:
         import yaml
         data = yaml.safe_load(text)
+    default_set = TUNING
     if isinstance(data, dict):
+        default_set = str(data.get("set") or TUNING)
         data = data.get("cases")
     if not isinstance(data, list):
         raise ValueError(f"{path}: expected a list of cases or a mapping with 'cases'")
-    return [c for c in data if isinstance(c, dict)]
+    cases = [dict(c) for c in data if isinstance(c, dict)]
+    for c in cases:
+        c.setdefault("set", default_set)
+        if c["set"] not in SETS:
+            raise ValueError(f"{path}: case {c.get('name')!r} has set {c['set']!r}; expected one of {', '.join(SETS)}")
+    return cases
 
 
 def expected(case: dict) -> str:
-    if case.get("kind") == "bug":
-        return DETECTED
+    """A bug case expects "detected" unless it says otherwise (a control case can expect "unchecked")."""
     exp = str(case.get("expect") or "").strip().lower()
+    if case.get("kind") == "bug":
+        if not exp:
+            return DETECTED
+        if exp not in (DETECTED, QUIET, UNCHECKED):
+            raise ValueError("a bug case's expect must be detected, quiet or unchecked")
+        return exp
     if exp not in (DETECTED, QUIET):
         raise ValueError("a change case needs expect: quiet or detected")
     return exp
@@ -148,7 +174,9 @@ def ensure_setup(case: dict, clone: Path, workdir: Path) -> str | None:
     if not setup:
         return None
     commands = setup if isinstance(setup, list) else [setup]
-    env_dir = workdir / "envs" / clone.name
+    # `env` names a venv of its own, for cases of one repository that need different dependency versions.
+    env_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(case.get("env") or "")).strip("-")
+    env_dir = workdir / "envs" / (f"{clone.name}-{env_name}" if env_name else clone.name)
     marker = env_dir.with_name(env_dir.name + ".setup-done")
     key = hashlib.sha1("\n".join(map(str, commands)).encode()).hexdigest()
     if not (marker.exists() and marker.read_text() == key):
@@ -355,9 +383,19 @@ def _function(r) -> dict:
         out["independent_sources"] = sorted({d.get("source") or "unknown" for d in r.differences
                                              if d.get("source") in FIX_TEST_SOURCES or d.get("call") not in fix_calls})
         out["differing_inputs"] = [{"source": d.get("source") or "unknown", "call": d.get("call"),
-                                    "repeats_example": d.get("source") not in FIX_TEST_SOURCES and d.get("call") in fix_calls}
+                                    "repeats_example": d.get("source") not in FIX_TEST_SOURCES and d.get("call") in fix_calls,
+                                    "outcome_change": outcome_changed(d)}
                                    for d in r.differences[:MAX_DIFFERING]]
     return out
+
+
+def _raises(shown) -> bool:
+    return str(shown or "").lstrip().startswith("raises ")
+
+
+def outcome_changed(d: dict) -> bool:
+    """Whether one side raised and the other returned (for `score: outcome_type`, e.g. a value read from the clock)."""
+    return _raises(d.get("before")) != _raises(d.get("after"))
 
 
 def deciding_input(different: list[dict]) -> dict | None:
@@ -380,13 +418,26 @@ def deciding_input(different: list[dict]) -> dict | None:
     return None
 
 
-def classify(kind: str, functions: list[dict], bug_files: list[str]) -> dict:
+def classify(kind: str, functions: list[dict], bug_files: list[str], score: str | None = None) -> dict:
     """Verdict and the function lists behind it.
 
     For a bug case only functions in the bug's files, or callers of them (via), count: a difference elsewhere goes
     to other_different. The verdict is "unchecked" when no counted function was verified, slowdown, different or broken
     (nothing was really compared), so it is not mistaken for quiet.
+
+    score "outcome_type" credits a different function only when some differing input raised on one side and returned on
+    the other; a function whose differences are all in values goes to value_only_different (compared, not credited).
+    For a case whose fixed code reads a value that differs between runs (luigi 22: a default evaluated at import).
     """
+    if score == OUTCOME_TYPE:
+        base = classify(kind, functions, bug_files)
+        credited = [f for f in base["different"] if f["status"] == diff.BROKEN
+                    or any(d.get("outcome_change") for d in f.get("differing_inputs") or [])]
+        value_only = [f for f in base["different"] if f not in credited]
+        verdict = DETECTED if credited else QUIET if base["verdict"] != UNCHECKED else UNCHECKED
+        return {**base, "verdict": verdict, "different": credited, "value_only_different": value_only}
+    if score not in (None, ""):
+        raise ValueError(f"unknown score {score!r} (only {OUTCOME_TYPE!r})")
     if kind == "bug":
         files = set(bug_files)
         relevant = [f for f in functions if f["file"] in files or f.get("via_file") in files]
@@ -408,6 +459,9 @@ def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WIT
     if fix_tests not in (WITH, WITHOUT):
         raise ValueError(f"fix_tests must be {WITH} or {WITHOUT}")
     rec = {"name": case.get("name") or "?", "kind": case.get("kind"), "repo": case.get("repo"), "expect": None,
+           "set": case.get("set") or TUNING, "score": case.get("score") or None,
+           "direct_call_only": bool(case.get("direct_call_only")), "note": str(case.get("note") or ""),
+           "value_only_different": [],
            "fix_tests": fix_tests if case.get("kind") == "bug" else None, "synthetic_base": None,
            "fix_tests_restored": [], "deciding_input": None,
            "verdict": ERROR, "match": False, "error": "", "warnings": [], "seconds": 0.0, "prep_seconds": 0.0,
@@ -472,7 +526,7 @@ def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WIT
         if kind == "change":
             rec["files"] = list(out.files)
         rec["functions"] = [_function(r) for r in out.results]
-        rec.update(classify(kind, rec["functions"], rec["files"]))
+        rec.update(classify(kind, rec["functions"], rec["files"], case.get("score")))
         rec["verified"] = [f for f in rec["functions"] if f["status"] == diff.DONE]
         rec["untested"] = [f for f in rec["functions"] if f["status"] == diff.UNTESTED]
         rec["contract_breaks"] = len(out.breaks)
@@ -581,11 +635,35 @@ def _sources_text(ds: dict) -> str:
 
 
 def metrics_by_mode(records: list[dict], modes: list[str]) -> dict:
+    """Per mode: the metrics over every counted case (controls never count), then `by_set` with the same metrics
+    for each set present (tuning, holdout), and `controls`: each control case's verdict against its expectation."""
     out = {}
     for mode in modes:
         rs = in_mode(records, mode)
-        out[mode] = {**metrics(rs), "deciding_sources": deciding_sources(rs)}
+        counted = [r for r in rs if r.get("set", TUNING) != CONTROL]
+        sets = [s for s in (TUNING, HOLDOUT) if any(r.get("set", TUNING) == s for r in counted)]
+        out[mode] = {**metrics(counted), "deciding_sources": deciding_sources(counted),
+                     "by_set": {s: {**metrics([r for r in counted if r.get("set", TUNING) == s]),
+                                    "deciding_sources": deciding_sources([r for r in counted if r.get("set", TUNING) == s])}
+                                for s in sets},
+                     "controls": [{"name": r["name"], "verdict": r["verdict"], "expect": r["expect"], "match": r["match"],
+                                   "error": r.get("error") or ""} for r in rs if r.get("set") == CONTROL]}
     return out
+
+
+def _set_lines(m: dict) -> list[str]:
+    """One line per set when there is more than one, and one per control case; nothing extra for a single set."""
+    lines = []
+    if len(m.get("by_set") or {}) > 1:
+        for s, sm in m["by_set"].items():
+            d = sm["detection"]
+            lines.append(f"{SET_LABEL[s]}: detection rate {_pct(d['rate'])} ({d['detected']} of {d['total']} checked), "
+                         f"{sm['unchecked']} unchecked, {sm['errors']} errors"
+                         + (" (the number to publish)" if s == HOLDOUT else ""))
+    for c in m.get("controls") or []:
+        lines.append(f"Control (never counted in any rate): {c['name']}: {c['verdict']}, expected {c['expect']}"
+                     + (" (as expected)" if c["match"] else " (NOT as expected)") + (f"; {c['error']}" if c["error"] else ""))
+    return lines
 
 
 def _pct(rate) -> str:
@@ -611,6 +689,7 @@ def metrics_text(m: dict) -> str:
         lines.append(f"Slowdowns (not counted as detections): {', '.join(m['slowdown_cases'])}")
     if m.get("deciding_sources") and _sources_text(m["deciding_sources"]) != "-":
         lines.append("Inputs that differed in detected cases: " + _sources_text(m["deciding_sources"]))
+    lines += _set_lines(m)
     return "\n".join(lines)
 
 
@@ -623,6 +702,11 @@ def summary_text(by_mode: dict) -> str:
     head = (f"Detection rate without fix tests (headline): {_pct(d[WITHOUT]['rate'])} ({d[WITHOUT]['detected']} of "
             f"{d[WITHOUT]['total']}); with fix tests: {_pct(d[WITH]['rate'])} ({d[WITH]['detected']} of {d[WITH]['total']})")
     parts = [head]
+    if all(HOLDOUT in (by_mode[mode].get("by_set") or {}) for mode in modes):
+        h = {mode: by_mode[mode]["by_set"][HOLDOUT]["detection"] for mode in modes}
+        parts.insert(0, f"Held-out set (the number to publish): without fix tests {_pct(h[WITHOUT]['rate'])} "
+                        f"({h[WITHOUT]['detected']} of {h[WITHOUT]['total']}); with fix tests {_pct(h[WITH]['rate'])} "
+                        f"({h[WITH]['detected']} of {h[WITH]['total']})")
     for mode in modes:
         parts += ["", f"== {MODE_LABEL[mode].capitalize()}" + (" (headline)" if mode == WITHOUT else ""), metrics_text(by_mode[mode])]
     return "\n".join(parts)
@@ -638,6 +722,15 @@ def comparison_table(by_mode: dict) -> list[str]:
             ("Mutation score", lambda m: f"{_pct(m['mutation']['score'])} ({m['mutation']['killed']} of {m['mutation']['total']})"),
             ("Time per case (median / p95 s)", lambda m: f"{m['seconds']['median']} / {m['seconds']['p95']}"),
             ("Detected cases by input source", lambda m: _sources_text(m.get("deciding_sources", {})))]
+    present = [s for s in (HOLDOUT, TUNING) if all(s in (by_mode[x].get("by_set") or {}) for x in modes)]
+    if len(present) > 1:
+        def set_rate(s):
+            return lambda m: (f"{_pct(m['by_set'][s]['detection']['rate'])} ({m['by_set'][s]['detection']['detected']} of "
+                              f"{m['by_set'][s]['detection']['total']}; {m['by_set'][s]['unchecked']} unchecked)")
+        rows[1:1] = [(f"Detection rate, {SET_LABEL[s].lower()}" + (" (publish)" if s == HOLDOUT else ""), set_rate(s)) for s in present]
+    if any(by_mode[x].get("controls") for x in modes):
+        rows.append(("Control (not counted)", lambda m: "; ".join(f"{c['name']}: {c['verdict']} (expected {c['expect']})"
+                                                                  for c in m.get("controls") or []) or "-"))
     header = ["| Metric | " + " | ".join(("**" + MODE_LABEL[x] + " (headline)**") if x == WITHOUT else MODE_LABEL[x] for x in modes) + " |",
               "|---|" + "---|" * len(modes)]
     return header + [f"| {label} | " + " | ".join(_cell(fn(by_mode[x])) for x in modes) + " |" for label, fn in rows]
@@ -675,22 +768,35 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
               "The input shown per case is the counterexample listed first, which the guard picks from tests, then examples; "
               "\"all\" lists every source that produced a differing input; \"independent\" leaves out sources whose differing "
               "inputs only repeat a tests/examples call (the grid and Hypothesis reuse example values).", "",
-              "## Cases", "", "| Case | Kind | Fix tests | Expected | Verdict | Match | Input shown (sources) | Different | Verified | Untested | Mutants | Python | Seconds |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "## Cases", "", "| Case | Set | Kind | Fix tests | Expected | Verdict | Match | Input shown (sources) | Different | Verified | Untested | Mutants | Python | Seconds |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in records:
         mut = f"{r['mutants_killed']}/{r['mutants_total']}" if r["mutants_total"] else "-"
         di = r.get("deciding_input") or {}
         src = f"{di.get('source') or 'none'}: `{_cell(di['call'])}`" if di.get("call") else (di.get("source") or "-")
         if di.get("sources"):
             src += f" (all: {', '.join(di['sources'])}; independent: {', '.join(di.get('independent_sources') or []) or '-'})"
-        lines.append(f"| {_cell(r['name'])} | {r['kind']} | {_mode_cell(r)} | {r['expect'] or '-'} | {r['verdict']} | {'yes' if r['match'] else 'no'} | "
+        lines.append(f"| {_cell(r['name'])} | {r.get('set', TUNING)} | {r['kind']} | {_mode_cell(r)} | {r['expect'] or '-'} | {r['verdict']} | {'yes' if r['match'] else 'no'} | "
                      f"{src} | {len(r['different'])} | {len(r['verified'])} | {len(r['untested'])} | {mut} | {r.get('python_version') or '-'} | {r['seconds']} |")
     lines.append("")
     for r in records:
         if not (r["different"] or r["other_different"] or r["untested"] or r["error"] or r["warnings"] or r["verdict"] == UNCHECKED
-                or r.get("fix_tests_restored") or r.get("slowdowns")):
+                or r.get("fix_tests_restored") or r.get("slowdowns") or r.get("value_only_different") or r.get("note")
+                or r.get("direct_call_only") or r.get("score")):
             continue
         lines += [f"### {r['name']}" + (f" ({MODE_LABEL[r['fix_tests']]})" if r.get("fix_tests") else ""), ""]
+        if r.get("set") == CONTROL:
+            lines.append(f"- Control case: never counted in any rate; expected {r['expect']}.")
+        if r.get("direct_call_only"):
+            lines.append("- Direct call only: the project's own test for this bug cannot run on this Python, but the module "
+                         "the guard calls imports; the guard calls functions directly, so the case stands.")
+        if r.get("score"):
+            lines.append(f"- Scored on {r['score'].replace('_', ' ')}: only a difference where one side raises and the other "
+                         "returns is credited.")
+        if r.get("note"):
+            lines.append(f"- Note: {_cell(r['note'])}")
+        lines += [_diff_line("Different in values only (not credited under this case's scoring)", f)
+                  for f in r.get("value_only_different") or []]
         if r.get("synthetic_base"):
             restored = ", ".join(f"`{f}`" for f in r["fix_tests_restored"]) or "none"
             lines.append(f"- Synthetic base `{r['synthetic_base'][:12]}`; test files put back to the buggy version: {restored}")
@@ -717,21 +823,129 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
     return "\n".join(lines)
 
 
-def run(manifest: Path, workdir: Path, out_dir: Path, only: list[str] | None = None, echo=print,
-        fix_tests: str = BOTH) -> dict:
-    """Run the cases. results.json: "metrics" is the headline mode's (without fix tests when it ran),
-    "metrics_by_mode" has each mode's, and "cases" one record per case and mode (field fix_tests)."""
-    modes = modes_for(fix_tests)
-    cases = load_manifest(manifest)
-    if only:
-        cases = [c for c in cases if c.get("name") in only]
+# ---------------------------------------------------------------- setup check (no guard run)
+
+IMPORT_TIMEOUT = 120
+
+
+def import_check(clone: Path, python: str, modules: list[str]) -> tuple[bool, str]:
+    """(ok, detail) for importing modules with the case's interpreter, inside the OS sandbox the worker uses (no
+    network, no writes outside the temp folder, the clone read-only). Imports run module top-level code only."""
+    from runner import os_sandbox
+    paths = sorted({diff.module_for(m, str(clone))[1] for m in modules if m.endswith(".py")})
+    names = [diff.module_for(m, str(clone))[0] if m.endswith(".py") else m for m in modules]
+    code = ("import importlib, sys\n"
+            f"root = {str(clone)!r}\n"
+            f"for rel in {paths!r} or ['']:\n"
+            "    sys.path.insert(0, root + ('/' + rel if rel else ''))\n"
+            f"for name in {names!r}:\n"
+            "    importlib.import_module(name)\n"
+            "print('ok')\n")
+    cmd = os_sandbox.wrap([python, "-B", "-I", "-c", code], python, writable=[tempfile.gettempdir()], readonly=[str(clone)])
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+    try:
+        res = subprocess.run(cmd, cwd=tempfile.gettempdir(), env=env, capture_output=True, text=True, timeout=IMPORT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, f"import timed out after {IMPORT_TIMEOUT} s"
+    if res.returncode == 0 and res.stdout.strip().endswith("ok"):
+        return True, f"imported {', '.join(names)} ({os_sandbox.describe()})"
+    last = [l for l in (res.stderr or res.stdout).strip().splitlines() if l.strip()][-1:] or [f"exit code {res.returncode}"]
+    return False, last[0][:300]
+
+
+def check_case(case: dict, workdir: Path, manifest_dir: Path) -> dict:
+    """Get a bug case ready without running the guard: clone, both commits present, the synthetic base for "without
+    fix tests", the bug planted, the venv set up, the interpreter checked, and the bug's modules imported on the fixed
+    and on the buggy tree (inside the OS sandbox). `imports` in the case overrides the modules (default: the bug's
+    files)."""
+    rec = {"name": case.get("name") or "?", "set": case.get("set") or TUNING, "ready": False, "python": None,
+           "python_version": None, "imports": {}, "warnings": [], "error": "", "fix_tests_restored": []}
+    start = time.monotonic()
+    try:
+        if case.get("kind") != "bug":
+            raise ValueError("the setup check covers bug cases only")
+        expected(case)
+        clone = ensure_clone(resolve_repo(str(case["repo"]), manifest_dir), workdir)
+        reset_clone(clone, str(case["fixed"]))
+        fixed = _git(clone, "rev-parse", "--verify", f"{case['fixed']}^{{commit}}")
+        buggy = _git(clone, "rev-parse", "--verify", f"{case['buggy']}^{{commit}}")
+        files = case.get("files")
+        files = [files] if isinstance(files, str) else files
+        patch = None
+        if case.get("patch"):
+            patch_path = Path(str(case["patch"])).expanduser()
+            patch = (patch_path if patch_path.is_absolute() else manifest_dir / patch_path).read_text()
+        keep = list(files or []) + (_patch_files(patch) if patch else [])
+        _, rec["fix_tests_restored"] = synthetic_base(clone, fixed, buggy, keep)
+        python = resolve_python(case, clone, ensure_setup(case, clone, workdir))
+        rec["python"], rec["python_version"] = preflight(clone, python)
+        modules = case.get("imports") or keep or _source_files_between(clone, fixed, buggy)
+        modules = [modules] if isinstance(modules, str) else list(dict.fromkeys(modules))
+        if not modules:
+            raise RuntimeError("no module to import: give files, patch or imports")
+        ok_fixed, rec["imports"]["fixed"] = import_check(clone, rec["python"], modules)
+        bug_files, rec["warnings"] = plant_bug(clone, fixed, buggy, files, patch)
+        ok_buggy, rec["imports"]["buggy"] = import_check(clone, rec["python"], modules)
+        reset_clone(clone, fixed)
+        rec["files"] = bug_files
+        rec["ready"] = ok_fixed and ok_buggy
+    except Exception as exc:  # noqa: BLE001 - one case never stops the check
+        rec["error"] = f"{type(exc).__name__}: {exc}"
+    rec["seconds"] = round(time.monotonic() - start, 3)
+    return rec
+
+
+def check_setup(manifests, workdir: Path, out_dir: Path | None = None, only: list[str] | None = None, echo=print) -> list[dict]:
+    """check_case for every bug case; writes setup-check.json to out_dir when given. Runs no guard."""
     workdir.mkdir(parents=True, exist_ok=True)
     records = []
-    for i, case in enumerate(cases, 1):
+    for case, case_dir in load_cases(manifests, only):
+        if case.get("kind") != "bug":
+            continue
+        rec = check_case(case, workdir, case_dir)
+        status = "ready" if rec["ready"] else "NOT ready"
+        echo(f"{rec['name']} ({rec['set']}): {status}; Python {rec['python_version'] or '-'}; "
+             f"fixed: {rec['imports'].get('fixed', '-')}; buggy: {rec['imports'].get('buggy', '-')}"
+             + (f"; error: {rec['error']}" if rec["error"] else "") + f" [{rec['seconds']} s]")
+        for w in rec["warnings"]:
+            echo(f"    warning: {w}")
+        records.append(rec)
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "setup-check.json").write_text(json.dumps(records, indent=2, default=str))
+    echo(f"{sum(r['ready'] for r in records)} of {len(records)} cases ready")
+    return records
+
+
+def load_cases(manifests, only: list[str] | None = None) -> list[tuple[dict, Path]]:
+    """(case, folder its relative paths resolve against) for every case of one or more manifests, in order."""
+    paths = [manifests] if isinstance(manifests, (str, Path)) else list(manifests)
+    out, seen = [], set()
+    for path in map(Path, paths):
+        for case in load_manifest(path):
+            name = case.get("name")
+            if name in seen:
+                raise ValueError(f"case name {name!r} appears more than once across the manifests")
+            seen.add(name)
+            out.append((case, path.parent))
+    return [(c, d) for c, d in out if not only or c.get("name") in only]
+
+
+def run(manifest, workdir: Path, out_dir: Path, only: list[str] | None = None, echo=print,
+        fix_tests: str = BOTH) -> dict:
+    """Run the cases of one manifest or a list of them (for example the tuning and the held-out set). results.json:
+    "metrics" is the headline mode's (without fix tests when it ran), "metrics_by_mode" has each mode's (with
+    "by_set" and "controls"), and "cases" one record per case and mode (fields fix_tests and set)."""
+    modes = modes_for(fix_tests)
+    cases = load_cases(manifest, only)
+    workdir.mkdir(parents=True, exist_ok=True)
+    records = []
+    for i, (case, case_dir) in enumerate(cases, 1):
         for mode in (modes if case.get("kind") == "bug" else modes[:1]):
             tag = f" [{MODE_LABEL[mode]}]" if case.get("kind") == "bug" else ""
-            echo(f"[{i}/{len(cases)}] {case.get('name')}{tag} ...")
-            rec = run_case(case, workdir, manifest.parent, mode)
+            group = f" ({case['set']})" if case.get("set", TUNING) != TUNING else ""
+            echo(f"[{i}/{len(cases)}] {case.get('name')}{group}{tag} ...")
+            rec = run_case(case, workdir, case_dir, mode)
             srcs = (rec.get("deciding_input") or {}).get("sources")
             echo(f"    {rec['verdict']}" + (f" (expected {rec['expect']})" if rec["expect"] else "")
                  + (f": {rec['error']}" if rec["error"] else f" in {rec['seconds']} s")
@@ -741,11 +955,12 @@ def run(manifest: Path, workdir: Path, out_dir: Path, only: list[str] | None = N
             records.append(rec)
     by_mode = metrics_by_mode(records, modes)
     out_dir.mkdir(parents=True, exist_ok=True)
-    result = {"manifest": str(manifest), "workdir": str(workdir), "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    shown = [str(p) for p in ([manifest] if isinstance(manifest, (str, Path)) else manifest)]
+    result = {"manifest": shown[0] if len(shown) == 1 else shown, "workdir": str(workdir), "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
               "fix_tests": fix_tests, "headline_mode": modes[0], "metrics": by_mode[modes[0]],
               "metrics_by_mode": by_mode, "cases": records}
     (out_dir / "results.json").write_text(json.dumps(result, indent=2, default=str))
-    (out_dir / "results.md").write_text(markdown(records, by_mode, str(manifest)))
+    (out_dir / "results.md").write_text(markdown(records, by_mode, ", ".join(shown)))
     echo("")
     echo(summary_text(by_mode))
     echo(f"Wrote {out_dir / 'results.json'} and {out_dir / 'results.md'}")
@@ -754,7 +969,7 @@ def run(manifest: Path, workdir: Path, out_dir: Path, only: list[str] | None = N
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="validate", description="Run LegacyGuard on the cases of a manifest and measure it.")
-    p.add_argument("manifest", type=Path)
+    p.add_argument("manifest", type=Path, nargs="+", help="one or more manifests (e.g. the tuning and the held-out set)")
     p.add_argument("--workdir", type=Path, default=Path(tempfile.gettempdir()) / "legacyguard-validate",
                    help="where repositories are cloned and venvs cached (reused between runs)")
     p.add_argument("--out", type=Path, default=Path("validation-results"))
@@ -762,9 +977,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fix-tests", choices=(WITH, WITHOUT, BOTH), default=BOTH,
                    help="bug cases with the fix commit's own tests in the baseline, without them (a synthetic base "
                         "commit; the headline), or both (default)")
+    p.add_argument("--check-setup", action="store_true",
+                   help="only get the cases ready (clone, check out, venv, import the bug's modules in the OS sandbox); "
+                        "runs no guard; writes setup-check.json to --out")
     a = p.parse_args(argv)
+    manifests = [m.resolve() for m in a.manifest]
     try:
-        run(a.manifest.resolve(), a.workdir.resolve(), a.out.resolve(), a.only, fix_tests=a.fix_tests)
+        if a.check_setup:
+            records = check_setup(manifests, a.workdir.resolve(), a.out.resolve(), a.only)
+            return 0 if all(r["ready"] for r in records) else 1
+        run(manifests if len(manifests) > 1 else manifests[0], a.workdir.resolve(), a.out.resolve(), a.only, fix_tests=a.fix_tests)
     except (OSError, ValueError) as exc:
         print(f"validate: {exc}", file=sys.stderr)
         return 2

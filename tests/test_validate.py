@@ -156,7 +156,7 @@ def test_harness_on_local_fixtures(tmp_path, capsys):
     md = (out / "results.md").read_text()
     assert "Detection rate: 100.0% (3 of 3" in md and "False-alarm rate: 50.0% (1 of 2" in md
     assert "Unchecked (nothing compared, left out of the rates): bug-credit-only-bug-files, missing-dependency" in md
-    assert "| bad-commit | change | - | quiet | error | no |" in md and "Error: RuntimeError" in md
+    assert "| bad-commit | tuning | change | - | quiet | error | no |" in md and "Error: RuntimeError" in md
     assert data["fix_tests"] == "with" and list(data["metrics_by_mode"]) == ["with"]
     assert bug["fix_tests"] == "with" and bug["synthetic_base"] is None and by["refactor"]["fix_tests"] is None
     assert bug["deciding_input"]["source"] == "examples" and "'2-4'" in bug["deciding_input"]["call"]  # the docstring
@@ -285,10 +285,10 @@ def test_fix_tests_modes(tmp_path, capsys):
 
     md = (out / "results.md").read_text()
     assert "| Metric | **without fix tests (headline)** | with fix tests |" in md
-    assert (f"| ws | bug | with | detected | detected | yes | examples: `norm_key(text='{FIX_LITERAL}')` "
+    assert (f"| ws | tuning | bug | with | detected | detected | yes | examples: `norm_key(text='{FIX_LITERAL}')` "
             "(all: examples, generated; independent: examples) |") in md
     assert "### Without fix tests (headline)" in md and "### With fix tests" in md
-    assert "| ws | bug | without |" in md and "| ws | bug | with |" in md
+    assert "| ws | tuning | bug | without |" in md and "| ws | tuning | bug | with |" in md
     assert "test files put back to the buggy version: `tests/data/sample.txt`, `tests/test_core.py`, `tests/test_extra.py`" in md
 
     # One mode only.
@@ -383,3 +383,75 @@ def test_metrics_math():
     assert m["untested"] == {"functions": 2, "total": 5, "share": 0.4}
     assert m["seconds"] == {"median": 2.5, "p95": 4.0} and m["mutation"]["score"] == 0.5
     assert validate._p95([float(i) for i in range(1, 21)]) == 19.0
+
+
+def test_sets_control_and_outcome_type_scoring(tmp_path, capsys):
+    """Two manifests in one run: each set's detection rate apart, the control on its own line and never counted,
+    and `score: outcome_type` crediting only raises-vs-returns differences."""
+    c, d = make_repo(tmp_path), make_dep_repo(tmp_path)
+    py = {"python": TARGET_PY}
+    tuning = tmp_path / "tuning.json"
+    tuning.write_text(json.dumps({"cases": [
+        {"name": "t-off-by-one", "repo": "src-repo", "kind": "bug", "fixed": c["fixed"], "buggy": c["buggy"], "files": ["rng/core.py"], **py}]}))
+    holdout = tmp_path / "holdout.json"
+    holdout.write_text(json.dumps({"set": "holdout", "cases": [
+        # [2, 3, 4] vs [2, 3]: a value difference only, so not credited under outcome_type scoring
+        {"name": "h-value-only", "repo": "src-repo", "kind": "bug", "fixed": c["fixed"], "buggy": c["buggy"],
+         "files": ["rng/core.py"], "score": "outcome_type", **py},
+        # parse_range('2-4') returns on the fixed side and raises on the buggy side (':' separator)
+        {"name": "h-raises", "repo": "src-repo", "kind": "bug", "fixed": c["refactor"], "buggy": c["changed"],
+         "files": ["rng/core.py"], "score": "outcome_type", "direct_call_only": True, **py},
+        {"name": "control", "set": "control", "repo": "dep-repo", "kind": "bug", "fixed": d["fixed"], "buggy": d["buggy"],
+         "expect": "unchecked", "note": "expected unchecked by design", **py},
+    ]}))
+    out = tmp_path / "out"
+    assert validate.main([str(tuning), str(holdout), "--workdir", str(tmp_path / "work"), "--out", str(out), "--fix-tests", "with"]) == 0
+    printed = capsys.readouterr().out
+    data = json.loads((out / "results.json").read_text())
+    by = {r["name"]: r for r in data["cases"]}
+    assert by["t-off-by-one"]["set"] == "tuning" and by["h-raises"]["set"] == "holdout" and by["control"]["set"] == "control"
+    assert by["h-value-only"]["verdict"] == "quiet" and not by["h-value-only"]["different"]
+    assert [f["qualname"] for f in by["h-value-only"]["value_only_different"]] == ["parse_range"]
+    assert by["h-raises"]["verdict"] == "detected" and by["h-raises"]["match"]
+    assert by["control"]["verdict"] == "unchecked" and by["control"]["match"]
+
+    m = data["metrics_by_mode"]["with"]
+    assert m["cases"] == 3  # the control is never counted
+    assert m["by_set"]["tuning"]["detection"] == {"detected": 1, "total": 1, "rate": 1.0}
+    assert m["by_set"]["holdout"]["detection"] == {"detected": 1, "total": 2, "rate": 0.5}
+    assert m["controls"] == [{"name": "control", "verdict": "unchecked", "expect": "unchecked", "match": True, "error": ""}]
+    assert "Held-out set: detection rate 50.0% (1 of 2 checked)" in printed
+    assert "Control (never counted in any rate): control: unchecked, expected unchecked (as expected)" in printed
+    md = (out / "results.md").read_text()
+    assert "| h-raises | holdout | bug | with |" in md and "Direct call only" in md
+    assert "Different in values only (not credited under this case's scoring): `rng/core.py::parse_range`" in md
+    assert "Note: expected unchecked by design" in md
+
+
+def test_duplicate_case_names_across_manifests(tmp_path):
+    one, two = tmp_path / "a.json", tmp_path / "b.json"
+    for p in (one, two):
+        p.write_text(json.dumps({"cases": [{"name": "same", "repo": "x", "kind": "bug", "fixed": "a", "buggy": "b"}]}))
+    assert validate.main([str(one), str(two), "--workdir", str(tmp_path / "w"), "--out", str(tmp_path / "o")]) == 2
+
+
+def test_check_setup_runs_no_guard(tmp_path, capsys):
+    c, d = make_repo(tmp_path), make_dep_repo(tmp_path)
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps({"set": "holdout", "cases": [
+        {"name": "ok", "repo": "src-repo", "kind": "bug", "fixed": c["fixed"], "buggy": c["buggy"], "files": ["rng/core.py"], "python": TARGET_PY},
+        {"name": "missing-dep", "repo": "dep-repo", "kind": "bug", "fixed": d["fixed"], "buggy": d["buggy"], "python": TARGET_PY},
+        {"name": "bad-hash", "repo": "src-repo", "kind": "bug", "fixed": "deadbeef" * 5, "buggy": c["buggy"], "python": TARGET_PY},
+    ]}))
+    out, work = tmp_path / "out", tmp_path / "work"
+    assert validate.main([str(manifest), "--check-setup", "--workdir", str(work), "--out", str(out)]) == 1  # not all ready
+    recs = {r["name"]: r for r in json.loads((out / "setup-check.json").read_text())}
+    assert recs["ok"]["ready"] and recs["ok"]["imports"]["fixed"].startswith("imported rng.core")
+    assert recs["ok"]["imports"]["buggy"].startswith("imported rng.core") and recs["ok"]["python_version"]
+    assert not recs["missing-dep"]["ready"] and "lg_missing_dependency_xyz" in recs["missing-dep"]["imports"]["fixed"]
+    assert not recs["bad-hash"]["ready"] and "deadbeef" in recs["bad-hash"]["error"]
+    assert not (out / "results.json").exists()  # no guard run, no results
+    for clone in (work / "repos").iterdir():  # the clone is left clean, at the fixed commit, with no guard state
+        assert not (clone / ".legacyguard").exists()
+        assert git(clone, "status", "--porcelain") == ""
+    assert "1 of 3 cases ready" in capsys.readouterr().out
