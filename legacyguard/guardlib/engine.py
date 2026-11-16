@@ -396,9 +396,13 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                 evidence = "; ".join(f"{d['call']} declared {d['expected']} got {d['got']}" for d in r.declared_failures[:differ.MAX_SHOWN])
             if r.unreached_note:
                 evidence += f". {r.unreached_note}"
+            if r.placeholder_note:
+                evidence += f". {r.placeholder_note}"
             state = "waived" if waived else "intended" if intended else "open"
             extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared,
                      "statements": [r.statements_reached, r.statements_total], **via}
+            if r.self_placeholder and r.placeholder_note:
+                extra["placeholder_self"] = r.self_placeholder
             if r.carved_captured or r.carved_unstored:
                 extra["carved"] = {"captured": r.carved_captured, "added": r.carved_added, "replayed": r.carved_replayed,
                                    "already": r.carved_already, "unstored": r.carved_unstored}
@@ -426,7 +430,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                                                  (f"; {differ.reached_text(r)}" + (f" of {differ.callee_names(r.callees)}" if r.via and r.callees else "")
                                                   if r.statements_total else "") +
                                                  (f"; {differ.confidence_text(r)}" if r.mutants_total else "") +
-                                                 (f"; {differ.carved_text(r)}" if differ.carved_text(r) else ""),
+                                                 (f"; {differ.carved_text(r)}" if differ.carved_text(r) else "") +
+                                                 (f"; {differ.placeholder_text(r)}" if r.placeholder_inputs else ""),
                                         code_hash=r.code_hash, state="recorded",
                                         extra={"inputs_compared": r.inputs_compared, "mutants": [r.mutants_killed, r.mutants_total],
                                                "statements": [r.statements_reached, r.statements_total], **via})

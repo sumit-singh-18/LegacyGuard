@@ -667,7 +667,270 @@ def _instance_maker(owner, spec):
         raise
     except BaseException as exc:  # noqa: BLE001
         tried.append(f"{owner.__name__}(): {type(exc).__name__}: {str(exc)[:80]}")
+    # Last resorts (Task 6.8c). Each is a weaker stand-in for a real instance; the maker carries .weak = True when
+    # its instance is a placeholder, and the run reports "self_weak" so the comparison labels the result.
+    carved = _carved_selves(spec)
+    if carved:
+        return (lambda i: lg_codec.decode(carved[i % len(carved)])), f"{len(carved)} instance(s) recorded from real calls", ""
+    made, why = _last_resort(owner, spec)
+    if made is not None:
+        return made
+    tried += why
     return None, "", f"could not build a {owner.__name__} to call the method on ({'; '.join(tried)})"
+
+
+# (class, harvested __init__ types) -> (maker tuple or None, [reasons]). The search runs once per class per worker
+# process, whatever number of its methods are checked; a "none worked" outcome is kept too.
+_LAST_RESORT: dict = {}
+
+
+def _last_resort(owner, spec):
+    """Placeholder constructor arguments, else an instance made without the constructor (see below), cached."""
+    key = (owner, json.dumps(spec.get("self_types") or {}, sort_keys=True))
+    if key in _LAST_RESORT:
+        return _LAST_RESORT[key]
+    why = []
+    try:
+        made, reason = _placeholder_maker(owner, spec)
+    except GuardBlocked:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - a bug in the search must not lose the reason found so far
+        made, reason = None, f"placeholder arguments: {type(exc).__name__}: {str(exc)[:80]}"
+    if made is None:
+        why.append(reason)
+        # Policy: when __init__ rejects every placeholder, the instance is still made without it. Methods that do not
+        # depend on what __init__ computes are then checked (weak, labelled as on a placeholder); a method that reads
+        # an attribute only __init__ would have computed raises on both sides, which counts as an invalid guess, so
+        # it stays untested with the reason naming the placeholder.
+        made, reason = _bypass_maker(owner)
+        if made is None:
+            why.append(reason)
+    _LAST_RESORT[key] = (made, why)
+    return made, why
+
+
+# ---- last-resort self (Task 6.8c) ----
+# A class whose constructor needs arguments, with no type hints and no literal constructor call in the repo. In order:
+# an instance recorded from a real call (tests or callers, carried by inputs that have their own `self`); placeholder
+# constructor arguments; an instance made without its constructor. The last two are guesses: the inputs run on them are
+# weak, and the result says the instance was a placeholder. Every choice depends only on the class, so all three runs
+# (old twice, new once) pick the same one unless the edit changed the constructor; the comparison checks that.
+# The search is bounded by counts, never by total elapsed time, so a loaded machine does not change which recipe the
+# old and new runs pick. The per-attempt limit only guards against a hang: an attempt that runs past it fails, and
+# after PLACEHOLDER_TIMEOUTS such attempts the search stops (a slow constructor would make every attempt slow).
+PLACEHOLDER_ATTEMPTS = 24    # constructor calls tried at most
+PLACEHOLDER_CALL_S = 0.5     # for one of them
+PLACEHOLDER_TIMEOUTS = 2
+
+
+def _ph_callable(*args, **kwargs):
+    """A placeholder for a parameter that must be callable: accepts anything, returns None."""
+    return None
+
+
+# Plain values tried for an untyped required parameter, by index; "h" is the value from its annotation, if any.
+_PH_SHOW = ["None", "0", "1", "''", "'x'", "[]", "{}", "<object>", "<function>", "True"]
+
+
+def _ph_value(k, hint=None):
+    if k == "h":
+        return _sample(hint, 0, 0)
+    return [None, 0, 1, "", "x", [], {}, types.SimpleNamespace(), _ph_callable, True][k]
+
+
+_PH_CALLABLE_NAMES = ("func", "fn", "f", "callback", "cb", "handler", "hook", "factory", "predicate", "getter", "setter",
+                      "action", "loader", "wrapped", "callable")
+_PH_MAPPING = ("config", "conf", "settings", "options", "opts", "params", "kwargs", "mapping", "meta", "attrs", "headers",
+               "environ", "env", "context", "ctx", "dict", "data")
+_PH_SEQUENCE = ("list", "items", "seq", "args", "array", "values", "rows")
+_PH_TEXT = ("path", "file", "dir", "name", "url", "text", "prefix", "suffix", "label", "title", "root", "folder", "pattern")
+_PH_NUMBER = ("count", "size", "num", "index", "idx", "limit", "port", "timeout", "width", "height", "depth", "level",
+              "max", "min", "len", "offset", "length", "retries")
+_PH_BY_TYPE = {"None": [0], "int": [2, 1], "float": [2, 1], "str": [4, 3], "bool": [9], "bytes": [4], "list": [5], "tuple": [5],
+               "set": [5], "dict": [6]}
+
+
+def _ph_order(name: str, hint, seen: dict | None) -> list:
+    """The placeholder values to try for one required parameter, best guess first: the value its annotation gives,
+    the types real calls passed (harvested from tests), then what its name suggests, then the rest of the pool."""
+    prefs: list = []
+    if hint is not inspect.Parameter.empty:
+        try:
+            _sample(hint, 0, 0)
+            prefs.append("h")
+        except Exception:  # noqa: BLE001 - an annotation it cannot build from still names the kind of value
+            name = f"{name} {getattr(hint, '__name__', hint)}"
+    for tname, _ in sorted((seen or {}).items(), key=lambda kv: (-kv[1], kv[0])):
+        prefs += _PH_BY_TYPE.get(tname.split("[", 1)[0], [7])
+    low = str(name).lower()
+    words = set(low.replace(" ", "_").split("_"))
+    if words & set(_PH_CALLABLE_NAMES) or low.endswith(("_func", "_fn", "_callback", "_cb", "_handler", "_hook", "_factory")):
+        prefs.append(8)
+    if any(w in low for w in _PH_MAPPING):
+        prefs += [6, 7]
+    if any(w in low for w in _PH_SEQUENCE) or (low.endswith("s") and not low.endswith("ss") and len(low) > 3):
+        prefs.append(5)
+    if any(w in low for w in _PH_TEXT):
+        prefs += [4, 3]
+    if any(w in low for w in _PH_NUMBER) or low in ("n", "i", "j", "k", "x", "y"):
+        prefs += [2, 1]
+    return list(dict.fromkeys(prefs + list(range(len(_PH_SHOW)))))
+
+
+def _combos(lengths: list):
+    """Index tuples in order of their sum (every parameter's first choice, then one step away, ...), lexicographic
+    within one sum. Lazy, so a caller can stop after a few."""
+    def parts(total, ls):
+        if not ls:
+            if total == 0:
+                yield ()
+            return
+        for first in range(min(total, ls[0] - 1) + 1):
+            for rest in parts(total - first, ls[1:]):
+                yield (first,) + rest
+    for total in range(sum(n - 1 for n in lengths) + 1):
+        yield from parts(total, lengths)
+
+
+def _placeholder_maker(owner, spec):
+    """((make, recipe, ""), "") with placeholder arguments for the required parameters of __init__ that the type
+    hints could not fill, or (None, reason). Bounded by PLACEHOLDER_ATTEMPTS calls and PLACEHOLDER_TIMEOUTS hangs."""
+    params, hints = _init_hints(owner)
+    required = [p for p in params if p.default is inspect.Parameter.empty]
+    if not required:
+        return None, "placeholder arguments: no required parameters to fill"
+    seen = spec.get("self_types") or {}
+    orders = [_ph_order(p.name, hints.get(p.name, p.annotation), seen.get(p.name)) for p in required]
+    hint_of = {p.name: hints.get(p.name, p.annotation) for p in required}
+
+    def build(combo):
+        pos, kw = [], {}
+        for p, k in zip(required, combo):
+            value = _ph_value(k, hint_of[p.name])
+            if p.kind == p.KEYWORD_ONLY:
+                kw[p.name] = value
+            else:
+                pos.append(value)
+        return owner(*pos, **kw)
+
+    last = ""
+    attempts = timeouts = 0
+    for idx in _combos([len(o) for o in orders]):
+        if attempts >= PLACEHOLDER_ATTEMPTS or timeouts >= PLACEHOLDER_TIMEOUTS:
+            break
+        attempts += 1
+        combo = tuple(o[i] for o, i in zip(orders, idx))
+        try:
+            reset_determinism()
+            _with_timeout(lambda: build(combo), PLACEHOLDER_CALL_S)
+        except GuardBlocked:
+            raise
+        except CallTimeout:
+            timeouts += 1
+            last = f"ran past {PLACEHOLDER_CALL_S:g} s"
+            continue
+        except BaseException as exc:  # noqa: BLE001
+            last = f"{type(exc).__name__}: {str(exc)[:60]}"
+            continue
+        shown = ", ".join(f"{p.name}=" + (repr(_ph_value(k, hint_of[p.name])) if k == "h" else _PH_SHOW[k]) for p, k in zip(required, combo))
+
+        def make(i, combo=combo):
+            return build(combo)
+        make.weak = True
+        return (make, f"placeholder constructor arguments {owner.__name__}({shown})", ""), ""
+    stop = f", stopped after {timeouts} ran past {PLACEHOLDER_CALL_S:g} s" if timeouts >= PLACEHOLDER_TIMEOUTS else ""
+    return None, f"placeholder arguments: {attempts} tried, none worked{stop} (last: {last})"
+
+
+def _init_attributes(owner) -> dict:
+    """{attribute: value} that the class's own __init__ sets at its top level from a literal, an empty container, or a
+    parameter: a parameter with a default gives a copy of the default, a required one its first placeholder."""
+    import ast
+    import copy
+    import textwrap
+    init = next((k.__dict__["__init__"] for k in owner.__mro__ if "__init__" in k.__dict__), None)
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(init)))
+        sig = inspect.signature(init)
+    except Exception:  # noqa: BLE001 - no source (a C type, a generated __init__): nothing to copy
+        return {}
+    fdef = tree.body[0] if tree.body and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+    if fdef is None or not fdef.args.args:
+        return {}
+    me = fdef.args.args[0].arg
+    out: dict = {}
+    for stmt in fdef.body:
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        else:
+            continue
+        if not (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == me):
+            continue
+        if isinstance(value, ast.Name) and value.id in sig.parameters:
+            p = sig.parameters[value.id]
+            if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                out[target.attr] = () if p.kind == p.VAR_POSITIONAL else {}
+            elif p.default is not inspect.Parameter.empty:
+                out[target.attr] = copy.deepcopy(p.default)
+            else:
+                out[target.attr] = _ph_value(_ph_order(p.name, inspect.Parameter.empty, None)[0])
+            continue
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in ("list", "dict", "set", "tuple") \
+                and not value.args and not value.keywords:
+            out[target.attr] = {"list": list, "dict": dict, "set": set, "tuple": tuple}[value.func.id]()
+            continue
+        try:
+            out[target.attr] = ast.literal_eval(value)
+        except Exception:  # noqa: BLE001 - computed: left unset
+            continue
+    return out
+
+
+def _bypass_maker(owner):
+    """((make, recipe, ""), "") for an instance made without calling __init__: the class's __new__ with no arguments,
+    then the attributes _init_attributes finds. Class-level defaults stay visible through the class as usual. A class
+    whose __new__ needs arguments, or that cannot be instantiated at all, is skipped with the reason."""
+    new = owner.__new__
+
+    def make(i=0):
+        obj = object.__new__(owner) if new is object.__new__ else new(owner)
+        for k, v in _init_attributes(owner).items():
+            try:
+                object.__setattr__(obj, k, v)
+            except Exception:  # noqa: BLE001 - slots, read-only: left unset
+                continue
+        return obj
+    try:
+        reset_determinism()
+        attrs = sorted(_init_attributes(owner))
+        _with_timeout(make, PLACEHOLDER_CALL_S)
+    except GuardBlocked:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        what = "its __new__ needs arguments" if new is not object.__new__ and isinstance(exc, TypeError) else "it cannot be made without its constructor"
+        return None, f"{what} ({type(exc).__name__}: {str(exc)[:60]})"
+    make.weak = True
+    detail = f"attributes from __init__: {', '.join(attrs)}" if attrs else "no attributes from __init__"
+    return (make, f"an instance made without calling its constructor ({detail})", ""), ""
+
+
+def _carved_selves(spec) -> list:
+    """Encoded `self` values that inputs carry (recorded on the baseline from tests or callers), not guesses, each
+    once, in input order."""
+    out, seen = [], set()
+    for item in spec.get("inputs") or []:
+        if not item.get("has_self") or item.get("weak") or item.get("source") == "edit":
+            continue
+        first = (item.get("args") or [{}])[0]
+        if first.get("name") != "self":
+            continue
+        key = json.dumps(first.get("value"), sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            out.append(first["value"])
+    return out[:SELF_VARIANTS]
 
 
 def _build_args(item, make_self, index: int = 0):
@@ -1011,6 +1274,8 @@ def run_function(spec, root_real):
         out["gate_lines"] = sorted(gate_hits)
     if recipe:
         out["self_recipe"] = recipe
+    if getattr(make_self, "weak", False):
+        out["self_weak"] = True  # Task 6.8c: the instance is a placeholder; inputs run on it count as guesses
     if spec.get("mutants"):
         out["mutation"] = _run_mutants(fn, spec, make_self, owner, results)
     return out
@@ -1147,7 +1412,8 @@ def run_capture(spec, root_real) -> dict:
     inputs = spec["inputs"][:CAPTURE_INPUTS]
     strong_left = [False] * (len(inputs) + 1)  # strong_left[i]: some input from i on is not a guess
     for i in range(len(inputs) - 1, -1, -1):
-        strong_left[i] = strong_left[i + 1] or not inputs[i].get("weak")
+        guess = inputs[i].get("weak") or (getattr(make_self, "weak", False) and not inputs[i].get("has_self"))
+        strong_left[i] = strong_left[i + 1] or not guess
     for index, item in enumerate(inputs):
         # Full everywhere: stop, unless a non-guess input still to come could make a call recorded under a guess non-weak.
         if all(len(state["calls"][k]) >= lim and not (state["weak_left"][k] and strong_left[index]) for k, _, lim in wanted.values()):
@@ -1157,7 +1423,8 @@ def run_capture(spec, root_real) -> dict:
             break
         if owner is not None and make_self is None and not item.get("has_self"):
             break
-        state["weak_now"] = bool(item.get("weak"))
+        # A call made on a placeholder instance (Task 6.8c) is recorded as a guess too.
+        state["weak_now"] = bool(item.get("weak")) or (getattr(make_self, "weak", False) and not item.get("has_self"))
         # One slow call must not run past the caller's share of the recording time: the limit is what is left of it.
         got = _call_once(fn, item, make_self, index, trace, min(SHORT_TIMEOUT_S if timeouts else CALL_TIMEOUT_S, left))
         timeouts += got.get("outcome") == "timeout"

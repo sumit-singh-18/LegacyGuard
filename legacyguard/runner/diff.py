@@ -90,6 +90,11 @@ class Result:
     carved_unstored: int = 0        # calls (repeats included) not recorded because a value could not be encoded
     carved_note: str = ""           # why no calls were recorded, when the recording run failed or timed out
     carved_weak: int = 0            # of the added calls, those recorded only while guessed caller inputs ran (weak)
+    # Task 6.8c: how the placeholder `self` was built (worker "self_recipe" with "self_weak"), and the compared inputs
+    # that ran on it. Such inputs count as guesses; the note, wake, ledger and CI say the instance was a placeholder.
+    self_placeholder: str = ""
+    placeholder_inputs: int = 0
+    placeholder_note: str = ""      # for a difference: it may come from the placeholder state, not the edit
     baseline_unrunnable: bool = False  # untested because every own, non-guessed input raised or failed setup on the baseline (roadmap 6.5)
     # Task 6.6: inputs that timed out only in the new code while the old runs finished fast (to be confirmed), and the
     # confirmed ones: {"call", "new_limit_s", "old_seconds", "source"}. Confirmed slowdowns set status SLOWDOWN unless
@@ -448,6 +453,13 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     blocked: set[str] = set()
     setup_failures = 0
     setup_detail = ""
+    # Task 6.8c: a placeholder `self` (placeholder constructor arguments, or made without the constructor). Inputs run on
+    # it are guesses. If old and new code did not build it the same way (the edit changed the constructor), the inputs
+    # on it are not compared: they would differ by the instance, not by the method.
+    weak_self = bool(a.get("self_weak") or n.get("self_weak"))
+    if weak_self:
+        r.self_placeholder = n.get("self_recipe") or a.get("self_recipe") or "a placeholder instance"
+    self_mismatch = weak_self and a.get("self_recipe") != n.get("self_recipe")
     for item, oa, on, ob in zip(items, a["results"], n["results"], (b or {"results": a["results"]})["results"]):
         if item.get("expect") is not None:
             # A declared example: the new code is checked against what was declared, not against the old code.
@@ -459,6 +471,12 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             continue
         blocked.update(oa.get("blocked_kinds", []))
         blocked.update(on.get("blocked_kinds", []))
+        on_placeholder = weak_self and not item.get("has_self")
+        if on_placeholder and self_mismatch and oa["outcome"] != "setup_failed" and on["outcome"] != "setup_failed":
+            setup_failures += 1
+            setup_detail = setup_detail or (f"the placeholder instance was built differently by the old code "
+                                            f"({a.get('self_recipe') or 'none'}) and the new code ({n.get('self_recipe') or 'none'})")
+            continue
         if oa["outcome"] == "setup_failed" or on["outcome"] == "setup_failed":
             setup_failures += 1
             setup_detail = setup_detail or oa.get("detail") or on.get("detail") or ""
@@ -466,7 +484,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         ca, cn = _comparable(oa), _comparable(on)
         if ca is None or cn is None:
             continue
-        if item.get("weak") and ca["k"] == "raise" and cn["k"] == "raise":
+        if (item.get("weak") or on_placeholder) and ca["k"] == "raise" and cn["k"] == "raise":
             # Both versions reject a guessed value: it was never a valid call, so two different rejections prove nothing.
             # If new code accepts what old code rejected, that is a real change and stays.
             r.dropped_invalid += 1
@@ -477,6 +495,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                 r.dropped_nondeterministic += 1
                 continue
         r.inputs_compared += 1
+        r.placeholder_inputs += on_placeholder
         if ca.get("io"):
             r.inputs_with_io += 1
         if ca["k"] == "return":
@@ -485,7 +504,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             same_state = _key(ca.get("s") or {}) == _key(cn.get("s") or {}) and _key({"x": ca.get("io")}) == _key({"x": cn.get("io")})
             r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca, cn), "after": _show_outcome(cn, ca), "source": item["source"],
                                   **({"base": item["base"]} if item.get("base") else {}), "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
-                                  "special": _has_special(item), "state": not same_state,
+                                  "special": _has_special(item), "state": not same_state, "placeholder_self": on_placeholder,
                                   "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
     # A pass must rest on inputs that ran every changed statement (D-043). Guessed values for an untyped parameter often
     # leave by an early return or an error, and old and new code then agree without the edit ever being exercised.
@@ -509,7 +528,12 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                                 "so this difference may come from elsewhere: an earlier edit this session, another function, or non-determinism")
         # The example a person reads first: from real tests or real calls recorded from callers, then the repo's own examples, ordinary values before
         # NaN and infinity, a returned value before an error, and short before long.
-        r.differences.sort(key=lambda d: (d["noise"], d["source"] not in ("tests", "carved"), d["source"] != "examples", d["special"],
+        on_ph = sum(1 for d in r.differences if d.get("placeholder_self"))
+        if on_ph:
+            share = "Every differing input" if on_ph == len(r.differences) else f"{on_ph} of the {len(r.differences)} differing inputs"
+            r.placeholder_note = (f"{share} ran on a placeholder instance ({r.self_placeholder}), not one built by the project's own code, "
+                                  "so the difference may come from the placeholder state rather than from the edit")
+        r.differences.sort(key=lambda d: (d["noise"], d.get("placeholder_self", False), d["source"] not in ("tests", "carved"), d["source"] != "examples", d["special"],
                                           d["before_raw"]["k"] != "return" or d["after_raw"]["k"] != "return",
                                           len(d["call"]) + len(d["before"]) + len(d["after"])))
         r.only_special = all(d["special"] for d in r.differences)
@@ -524,8 +548,9 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
         return r
     slow = sum(1 for o in a["results"] if o.get("outcome") in ("timeout", "skipped_slow"))
     if r.inputs_completed == 0:
-        r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:120]})") + \
-                   (f"; {slow} inputs ran past the time limit" if slow else "")
+        r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:400]})") + \
+                   (f"; {slow} inputs ran past the time limit" if slow else "") + \
+                   (f"; the instance was a placeholder ({r.self_placeholder})" if r.self_placeholder and not self_mismatch else "")
         # On the baseline every input of the caller's own that is not a guess (no declared, carved, weak or edit-derived
         # input) raised or could not be set up: the cause is not this edit (engine ranking, roadmap 6.5).
         old = [oa.get("outcome") for item, oa in zip(items, a["results"])
@@ -627,6 +652,21 @@ def carved_text(r: Result) -> str:
             f"errors on them are not counted") if r.carved_weak else ""
     return (f"{r.carved_captured} calls recorded from its callers on the code before the edit{extra}; "
             f"{r.carved_replayed} of the {r.carved_added} added ran to a return or an exception in both versions{weak}")
+
+
+def placeholder_only(r: Result) -> bool:
+    """A difference found only on inputs run on a placeholder instance (Task 6.8c): it wakes Claude, hedged, but does
+    not fail CI on its own."""
+    return (r.status == DIFFERENT and bool(r.differences) and not r.declared_failures
+            and all(d.get("placeholder_self") for d in r.differences))
+
+
+def placeholder_text(r: Result) -> str:
+    """For a pass: how many inputs ran on a placeholder instance (Task 6.8c), or ''."""
+    if not r.placeholder_inputs:
+        return ""
+    return (f"{r.placeholder_inputs} of the {r.inputs_compared} inputs ran on a placeholder instance ({r.self_placeholder}), not one "
+            "built by the project's own code, so agreement on them is weaker evidence")
 
 
 def confidence_text(r: Result) -> str:
@@ -778,6 +818,16 @@ def _self_calls(cfg, conn, t: Target, work_root: str) -> list[dict]:
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def _self_types(t: Target, harvest: dict | None) -> dict:
+    """{param: {type name: count}} that real test runs passed to the method's class __init__ (harvested, roadmap B4).
+    The worker uses them to pick placeholder constructor arguments first (Task 6.8c)."""
+    if t.kind != "method" or "." not in t.qualname or not harvest:
+        return {}
+    rec = harvest.get(f"{t.file}::{t.qualname.rsplit('.', 1)[0]}.__init__") or {}
+    types = rec.get("types") or {}
+    return {k: v for k, v in types.items() if isinstance(v, dict) and k != "self"}
 
 
 def _with_mutants(specs: list[dict], runnable: dict, limit: int, old_root: str | None = None) -> list[dict]:
@@ -1164,6 +1214,9 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         self_calls = _self_calls(cfg, conn, t, work_root)
         if self_calls:
             spec["self_calls"] = self_calls
+        self_types = _self_types(t, harvest)
+        if self_types:
+            spec["self_types"] = self_types
         specs.append(spec)
         runnable[f"{module}:{t.qualname}"] = (t, items)
         roots.add(sys_rel)
@@ -1345,6 +1398,7 @@ def format_note(results: list[Result]) -> str:
             carved = carved_text(r)
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
                          f"({r.inputs_completed} returned a value{reach}). " + (f"{carved}. " if carved else "") + (f"{conf}. " if conf else "") + io +
+                         (f"{placeholder_text(r)[:1].upper()}{placeholder_text(r)[1:]}. " if r.placeholder_inputs else "") +
                          "The inputs are the repo's own examples plus guesses, so this is not a proof; values it did not try can still differ.")
         elif r.status == UNTESTED:
             carved = carved_text(r)
@@ -1390,6 +1444,8 @@ def format_wake(result: Result, finding_id: str) -> str:
                      "arithmetic, or the visible edge of a rounding change: a value on a rounding boundary can still come out a whole step different.")
     if result.unreached_note:
         lines.append(f"{result.unreached_note}.")
+    if result.placeholder_note:
+        lines.append(f"{result.placeholder_note}.")
     if result.slowdowns:
         lines.append(f"Separately, {slowdown_text(result.slowdowns[0])}.")
     if result.reason:

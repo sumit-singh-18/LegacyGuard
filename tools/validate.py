@@ -366,9 +366,14 @@ def _function(r) -> dict:
         # Task 6.6: listed on their own, never counted as a detection.
         out["slowdowns"] = [{"call": s["call"], "new_limit_s": s["new_limit_s"], "old_seconds": s["old_seconds"], "source": s["source"]}
                             for s in r.slowdowns]
-    carved ={k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
+    carved = {k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
     if carved["captured"] or carved["unstored"] or carved["note"]:
         out["carved"] = carved
+    # Task 6.8c: a result whose evidence rests only on a placeholder `self` is counted apart, never in the headline rates.
+    if getattr(r, "self_placeholder", ""):  # records built by older code or tests may not carry it
+        out["self_placeholder"], out["placeholder_inputs"] = r.self_placeholder, r.placeholder_inputs
+        out["placeholder_only"] = diff.placeholder_only(r) or (
+            r.status == diff.DONE and r.inputs_compared > 0 and r.placeholder_inputs == r.inputs_compared)
     if r.differences:
         d = r.differences[0]
         out["counterexample"] = {"call": d.get("call"), "before": d.get("before"), "after": d.get("after"),
@@ -444,13 +449,21 @@ def classify(kind: str, functions: list[dict], bug_files: list[str], score: str 
     else:
         relevant = list(functions)
     bad = (diff.DIFFERENT, diff.BROKEN)
-    different = [f for f in relevant if f["status"] in bad]
+    # A difference or a pass resting only on a placeholder `self` (Task 6.8c) is not a real comparison: it goes to
+    # placeholder_different / placeholder_verdict and leaves the verdict as if it were not there.
+    real = [f for f in relevant if not f.get("placeholder_only")]
+    different = [f for f in real if f["status"] in bad]
+    on_placeholder = [f for f in relevant if f.get("placeholder_only") and f["status"] in bad]
     other = [f for f in functions if f["status"] in bad and f not in relevant]
-    checked = any(f["status"] in (diff.DONE, diff.SLOWDOWN, *bad) for f in relevant)  # a slowdown was compared too
+    checked = any(f["status"] in (diff.DONE, diff.SLOWDOWN, *bad) for f in real)  # a slowdown was compared too
     verdict = DETECTED if different else QUIET if checked else UNCHECKED
+    placeholder_verdict = None
+    if verdict == UNCHECKED and any(f.get("placeholder_only") for f in relevant):
+        placeholder_verdict = DETECTED if on_placeholder else QUIET
     # A slowdown (an input that timed out only in the new code) is evidence, not a detection: listed apart, never in the verdict.
     slowdowns = [f for f in functions if f.get("slowdowns")]
-    return {"verdict": verdict, "different": different, "other_different": other, "slowdowns": slowdowns}
+    return {"verdict": verdict, "different": different, "other_different": other, "slowdowns": slowdowns,
+            "placeholder_different": on_placeholder, "placeholder_verdict": placeholder_verdict}
 
 
 def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WITH) -> dict:
@@ -461,7 +474,7 @@ def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WIT
     rec = {"name": case.get("name") or "?", "kind": case.get("kind"), "repo": case.get("repo"), "expect": None,
            "set": case.get("set") or TUNING, "score": case.get("score") or None,
            "direct_call_only": bool(case.get("direct_call_only")), "note": str(case.get("note") or ""),
-           "value_only_different": [],
+           "value_only_different": [], "placeholder_different": [], "placeholder_verdict": None,
            "fix_tests": fix_tests if case.get("kind") == "bug" else None, "synthetic_base": None,
            "fix_tests_restored": [], "deciding_input": None,
            "verdict": ERROR, "match": False, "error": "", "warnings": [], "seconds": 0.0, "prep_seconds": 0.0,
@@ -577,6 +590,8 @@ def metrics(records: list[dict]) -> dict:
         "error_cases": [r["name"] for r in records if r["verdict"] == ERROR],
         "unchecked_cases": [r["name"] for r in ran if r["verdict"] == UNCHECKED],
         "slowdown_cases": [r["name"] for r in ran if r.get("slowdowns")],  # Task 6.6: listed apart, never a detection
+        # Task 6.8c: unchecked cases whose only comparison ran on a placeholder `self`, by what it showed. Never in a rate.
+        "placeholder_cases": {v: [r["name"] for r in ran if r.get("placeholder_verdict") == v] for v in (DETECTED, QUIET)},
         "matched": sum(1 for r in checked if r["match"]),
         "detection": {"detected": found, "total": len(want), "rate": _rate(found, len(want))},
         "false_alarm": {"alarms": alarms, "total": len(calm), "rate": _rate(alarms, len(calm))},
@@ -681,8 +696,15 @@ def metrics_text(m: dict) -> str:
         f"Mutation score: {_pct(m['mutation']['score'])} ({m['mutation']['killed']} of {m['mutation']['total']} planted bugs caught)",
         f"Time per case: median {s['median']} s, p95 {s['p95']} s",
     ]
+    ph = m.get("placeholder_cases") or {}
+    ph_n = sum(len(v) for v in ph.values())
     if m["unchecked_cases"]:
-        lines.append(f"Unchecked (nothing compared, left out of the rates): {', '.join(m['unchecked_cases'])}")
+        lines.append(f"Unchecked (nothing compared, left out of the rates): {', '.join(m['unchecked_cases'])}"
+                     + (f" (of which {ph_n} compared only on a placeholder self)" if ph_n else ""))
+    if ph_n:
+        lines.append(f"Only on a placeholder self (not counted as detections or quiet): different {len(ph.get(DETECTED, []))}"
+                     f"{' (' + ', '.join(ph[DETECTED]) + ')' if ph.get(DETECTED) else ''}, quiet {len(ph.get(QUIET, []))}"
+                     f"{' (' + ', '.join(ph[QUIET]) + ')' if ph.get(QUIET) else ''}")
     if m["error_cases"]:
         lines.append(f"Errors (left out of the rates): {', '.join(m['error_cases'])}")
     if m.get("slowdown_cases"):
@@ -782,6 +804,7 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
     for r in records:
         if not (r["different"] or r["other_different"] or r["untested"] or r["error"] or r["warnings"] or r["verdict"] == UNCHECKED
                 or r.get("fix_tests_restored") or r.get("slowdowns") or r.get("value_only_different") or r.get("note")
+                or r.get("placeholder_different") or r.get("placeholder_verdict")
                 or r.get("direct_call_only") or r.get("score")):
             continue
         lines += [f"### {r['name']}" + (f" ({MODE_LABEL[r['fix_tests']]})" if r.get("fix_tests") else ""), ""]
@@ -808,11 +831,18 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
         if r["error"]:
             lines.append(f"- Error: {_cell(r['error'])}")
         if r["verdict"] == UNCHECKED:
-            lines.append("- Unchecked: no function in this case was verified, slowdown, different or broken.")
+            lines.append("- Unchecked: no function in this case was verified, slowdown, different or broken"
+                         + (f" on a real instance; on a placeholder self it was {r['placeholder_verdict']} (not counted)."
+                            if r.get("placeholder_verdict") else "."))
         for w in r["warnings"]:
             lines.append(f"- Warning: {_cell(w)}")
         lines += [_diff_line("Different", f) for f in r["different"]]
         lines += [_diff_line("Different outside the bug's files (not credited)", f) for f in r["other_different"]]
+        lines += [_diff_line("Different only on a placeholder self (not credited)", f) for f in r.get("placeholder_different") or []]
+        for f in r["functions"]:
+            if f.get("self_placeholder") and f["status"] in (diff.DONE, diff.DIFFERENT):
+                lines.append(f"- `{f['file']}::{f['qualname']}`: {f['placeholder_inputs']} of {f['inputs_compared']} inputs "
+                             f"ran on a placeholder self ({_cell(f['self_placeholder'])})")
         for f in r.get("slowdowns") or []:
             for s in f["slowdowns"][:3]:
                 lines.append(f"- Slowdown (not counted as a detection): `{f['file']}::{f['qualname']}`: "

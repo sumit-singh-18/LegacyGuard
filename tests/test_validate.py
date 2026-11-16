@@ -455,3 +455,33 @@ def test_check_setup_runs_no_guard(tmp_path, capsys):
         assert not (clone / ".legacyguard").exists()
         assert git(clone, "status", "--porcelain") == ""
     assert "1 of 3 cases ready" in capsys.readouterr().out
+
+
+def test_placeholder_only_results_are_counted_apart():
+    # Task 6.8c: a difference or a pass resting only on a placeholder `self` is never a headline detection or quiet.
+    from runner import diff
+    ph = diff.Result("a.py", "C.m", diff.DIFFERENT, "h", inputs_compared=2, self_placeholder="placeholder constructor arguments C(x=None)",
+                     placeholder_inputs=2, differences=[{"call": "m(1)", "before": "1", "after": "2", "source": "generated",
+                                                         "placeholder_self": True}])
+    rec = validate._function(ph)
+    assert rec["placeholder_only"] and rec["self_placeholder"].startswith("placeholder") and rec["placeholder_inputs"] == 2
+    passed = diff.Result("a.py", "C.n", diff.DONE, "h", inputs_compared=3, self_placeholder="x", placeholder_inputs=3)
+    mixed = diff.Result("a.py", "C.k", diff.DONE, "h", inputs_compared=3, self_placeholder="x", placeholder_inputs=1)
+    assert validate._function(passed)["placeholder_only"] and not validate._function(mixed)["placeholder_only"]
+    got = validate.classify("bug", [rec], ["a.py"])
+    assert got["verdict"] == "unchecked" and got["different"] == [] and got["placeholder_different"] == [rec]
+    assert got["placeholder_verdict"] == "detected"
+    got = validate.classify("bug", [validate._function(passed)], ["a.py"])
+    assert got["verdict"] == "unchecked" and got["placeholder_verdict"] == "quiet"
+    got = validate.classify("bug", [rec, validate._function(mixed)], ["a.py"])
+    assert got["verdict"] == "quiet" and got["placeholder_verdict"] is None
+    records = [{"name": "p", "kind": "bug", "expect": "detected", "verdict": "unchecked", "match": False, "seconds": 1.0,
+                "functions": [rec], "mutants_killed": 0, "mutants_total": 0, "placeholder_verdict": "detected"},
+               {"name": "q", "kind": "change", "expect": "quiet", "verdict": "unchecked", "match": False, "seconds": 1.0,
+                "functions": [validate._function(passed)], "mutants_killed": 0, "mutants_total": 0, "placeholder_verdict": "quiet"}]
+    m = validate.metrics(records)
+    assert m["detection"]["total"] == 0 and m["false_alarm"]["total"] == 0
+    assert m["placeholder_cases"] == {"detected": ["p"], "quiet": ["q"]}
+    text = validate.metrics_text(m)
+    assert "of which 2 compared only on a placeholder self" in text
+    assert "Only on a placeholder self (not counted as detections or quiet): different 1 (p), quiet 1 (q)" in text

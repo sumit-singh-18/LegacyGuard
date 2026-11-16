@@ -30,9 +30,15 @@ class Outcome:
     skipped: list = field(default_factory=list)       # callers left out of the budget, with reasons (engine.skipped_note)
 
     def failing(self, cfg) -> list:
-        out = [r for r in self.results if r.status in (diff.DIFFERENT, diff.BROKEN)
+        """Differences that fail the check. One found only on a placeholder instance (Task 6.8c) is not among them: it is
+        listed apart (placeholder_only) and annotated as a warning."""
+        out = [r for r in self.results if r.status in (diff.DIFFERENT, diff.BROKEN) and not diff.placeholder_only(r)
                and not waivers.is_waived(cfg, "behavior_difference", r.file, r.qualname, r.code_hash)]
         return out
+
+    def placeholder_only(self, cfg) -> list:
+        return [r for r in self.results if diff.placeholder_only(r)
+                and not waivers.is_waived(cfg, "behavior_difference", r.file, r.qualname, r.code_hash)]
 
 
 def _git(root: str, *args: str, check: bool = True) -> str:
@@ -150,8 +156,15 @@ def annotations(cfg, out: Outcome) -> list[str]:
         msg = f"{d['call']}  before {d['before']}  after {d['after']}" if d else r.reason
         if r.via:
             msg = f"Not edited, but it {r.via} (edited in {r.via_file}). " + msg
+        if r.placeholder_note:
+            msg += f". {r.placeholder_note}"
         line = out.lines.get(f"{r.file}::{r.qualname}", 1)
         lines.append(f"::error file={r.file},line={line},title=LegacyGuard: {r.qualname} behaves differently::{_esc(msg)}")
+    for r in out.placeholder_only(cfg):
+        d = r.differences[0]
+        msg = f"{d['call']}  before {d['before']}  after {d['after']}. {r.placeholder_note}"
+        line = out.lines.get(f"{r.file}::{r.qualname}", 1)
+        lines.append(f"::warning file={r.file},line={line},title=LegacyGuard: {r.qualname} differs on a placeholder instance::{_esc(msg)}")
     for rel, b in out.breaks:
         lines.append(f"::warning file={rel},title=LegacyGuard contract::{_esc(b.text())}")
     return lines
@@ -175,11 +188,13 @@ def report(cfg, out: Outcome) -> str:
     failing = out.failing(cfg)
     verified = [r for r in out.results if r.status == diff.DONE]
     untested = [r for r in out.results if r.status == diff.UNTESTED]
-    waived = [r for r in out.results if r.status in (diff.DIFFERENT, diff.BROKEN) and r not in failing]
+    on_placeholder = out.placeholder_only(cfg)
+    waived = [r for r in out.results if r.status in (diff.DIFFERENT, diff.BROKEN) and r not in failing and r not in on_placeholder]
     slower = [r for r in out.results if r.slowdowns]  # Task 6.6: listed apart, never failing the check
     lines = ["## LegacyGuard", "",
              f"Compared the changes against `{out.base[:10]}` by running old and new code on the same inputs: "
              f"**{len(failing)} behave differently**, {len(verified)} agree, {len(untested)} could not be checked"
+             + (f", {len(on_placeholder)} differ only on a placeholder instance (not failing)" if on_placeholder else "")
              + (f", {len(waived)} waived" if waived else "") + (f", {len(slower)} slower in the new code" if slower else "")
              + (f", {len(out.breaks)} contract or test changes" if out.breaks else "") + ".", ""]
     if failing:
@@ -193,14 +208,26 @@ def report(cfg, out: Outcome) -> str:
                 lines.append(f"  - `{d['call']}` declared {d['expected']}, got {d['got']}")
             if not r.differences and r.reason:
                 lines.append(f"  - {r.reason}")
+            if r.placeholder_note:
+                lines.append(f"  - {r.placeholder_note}.")
         lines += ["", "If a difference is intended, record it in `.legacyguard/waivers.json` with `/legacyguard:waive` and commit the file.", ""]
+    if on_placeholder:
+        lines += ["### Differs only on a placeholder instance (does not fail the check)", ""]
+        for r in on_placeholder:
+            where = f" (not edited; it {r.via}, edited in `{r.via_file}`)" if r.via else ""
+            lines.append(f"- `{r.file}::{r.qualname}`{where}")
+            for d in r.differences[:3]:
+                lines.append(f"  - `{d['call']}` before `{d['before']}` after `{d['after']}`")
+            lines.append(f"  - {r.placeholder_note}.")
+        lines.append("")
     if out.breaks:
         lines += ["### Contract and test changes", ""] + [f"- `{rel}`: {b.text()}" for rel, b in out.breaks] + [""]
     if verified:
         lines += ["<details><summary>Agree on the inputs tried</summary>", ""]
         for r in verified:
             conf = diff.confidence_text(r)
-            lines.append(f"- `{r.file}::{r.qualname}`: {r.inputs_compared} inputs" + (f"; {conf}" if conf else ""))
+            ph = diff.placeholder_text(r)
+            lines.append(f"- `{r.file}::{r.qualname}`: {r.inputs_compared} inputs" + (f"; {conf}" if conf else "") + (f"; {ph}" if ph else ""))
         lines += ["", "</details>", ""]
     if slower:
         lines += ["<details><summary>Slower in the new code (not counted as a difference)</summary>", ""]

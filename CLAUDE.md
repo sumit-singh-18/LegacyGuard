@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 309 tests after Task 6.8a). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 325 tests after Task 6.8c). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -171,6 +171,17 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   TMPDIR are not changed. The audit hook no longer mistakes the int mode of `os.mkdir`/`chmod`/`truncate` for a
   file descriptor. Gaps: `os.path.exists`/`stat`/`listdir` do not see shadow files; `_cache_like` is a broad
   name heuristic; Linux bubblewrap not verified.
+- **6.8c** `self` as a last resort (`lg_worker._instance_maker` after the repo-call, type-hint and no-argument
+  paths): a recorded instance from tests or carved calls (`_carved_selves`, not weak), then placeholder
+  constructor arguments (`_placeholder_maker`: None, 0, 1, '', 'x', [], {}, a namespace, a no-op function, True,
+  ordered by annotation, harvested types and name hints; at most 24 attempts, stops after 2 hung ones, cached per
+  class per run in `_LAST_RESORT`, chosen by count only so time never decides), then an instance made without
+  `__init__` (`_bypass_maker`: `object.__new__` plus literal and parameter assignments from `__init__`). Inputs on
+  a placeholder or bypass `self` are weak: both-raise is dropped; a difference still wakes, with a hedge, but CI
+  fails only when some difference is on a real instance (`diff.placeholder_only`; placeholder-only is a
+  `::warning` and its own report section). If old and new build the placeholder differently the inputs are not
+  compared. `tools/validate.py` counts placeholder-only results apart (never as detections or quiet; the case
+  stays unchecked).
 
 ## Known gaps still open
 

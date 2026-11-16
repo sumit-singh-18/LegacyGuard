@@ -95,10 +95,13 @@ def test_untyped_init_uses_constructor_call_from_tests(tmp_path, make_cfg):
     assert any("100" in d["call"] or "withdraw(amount=100)" in d["call"] for d in r.differences)
 
 
-def test_unbuildable_class_says_why(tmp_path, make_cfg):
+def test_untyped_class_gets_a_placeholder_instance(tmp_path, make_cfg):
+    # Task 6.8c: no hints and no constructor call in the repo. A placeholder argument builds it, and the pass says so;
+    # a class that cannot be built at all is in tests/test_self_fallback.py.
     new = MONEY.replace("return self.thing", "return self.thing or None")
     r = run_methods(tmp_path, make_cfg, MONEY, new)["Needy.get"]
-    assert r.status == diff.UNTESTED and "could not build a Needy" in r.reason
+    assert r.status == diff.DONE and r.self_placeholder == "placeholder constructor arguments Needy(thing=None)"
+    assert r.placeholder_inputs == r.inputs_compared
 
 
 def test_worker_reports_recipe(tmp_path, run_worker):
