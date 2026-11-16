@@ -58,7 +58,14 @@ def build(cfg, data: dict) -> dict:
              "prompts": data.get("prompts_used", 0), "wakeups": data.get("wakeups", 0), "generated": dt.datetime.now().isoformat(timespec="minutes"),
              "counts": counts, "turned_back": sum(1 for f in visible if f["state"] == "resolved"), "statuses": list(ledger.STATUSES),
              "index": idb.exists(cfg.root), "coverage": True, "truncated": 0, "note": NOTE, "footer": report.FOOTER, "not_followed": []}
+    try:  # the current caller budget, for the panel's "Checked by the guard?" text
+        from guardlib import engine
+        from runner import diff as differ
+        model["caller_budget"] = [engine.MAX_DEPENDENTS, differ.MAX_FUNCTIONS]
+    except Exception:  # noqa: BLE001 - the page falls back to the defaults
+        pass
     ran = data.get("callers_run") or {}
+    skipped = data.get("callers_skipped") or {}  # callers left out of a check, never tried (roadmap 6.5)
     if model["index"] and changed:
         conn = idb.connect(cfg.root)
         try:
@@ -91,8 +98,9 @@ def build(cfg, data: dict) -> dict:
                 node["routes"] = sorted(set(node["routes"]) | set(route_of.get((file, item), [])))
                 by_hop: dict[int, list[dict]] = {}
                 model["not_followed"] = sorted(set(model["not_followed"]) | set(getattr(imp, "not_followed", [])))
-                # callers the guard ran come first in each step, so the cap never hides them
-                for c in sorted(imp.callers, key=lambda c: (c["hop"], f"{c['file']}::{c['qualname']}" not in ran)):
+                # callers the guard ran, or left out of a check, come first in each step, so the cap never hides them
+                for c in sorted(imp.callers, key=lambda c: (c["hop"], f"{c['file']}::{c['qualname']}" not in ran
+                                                            and f"{c['file']}::{c['qualname']}" not in skipped)):
                     cid = f"{c['file']}::{c['qualname']}"
                     if cid not in nodes:
                         if callers_added >= MAX_CALLERS:
@@ -101,7 +109,8 @@ def build(cfg, data: dict) -> dict:
                         callers_added += 1
                         nodes[cid] = {"id": cid, "name": c["qualname"], "file": c["file"], "kind": "caller", "layer": c["hop"], "status": None, "state": None,
                                       "tests": (not c.get("no_test")) if imp.coverage_known else None, "routes": [], "sources": c["sources"], "via": c["via"], "findings": [],
-                                      "ran": ran.get(cid)}
+                                      # a skip is newer than any run: engine.record drops it when the caller runs
+                                      "ran": None if cid in skipped else ran.get(cid), "skipped": skipped.get(cid)}
                     target = nodes[cid]
                     if target["kind"] == "caller":
                         target["layer"] = min(target["layer"], c["hop"])
@@ -165,6 +174,7 @@ const SC={'Verified pass':'ok','Confirmed failure':'fail','Behavior difference �
 let sel=null,fade=false;
 const cls=n=>n.kind==='changed'?'s-'+(SC[n.status]||'unt'):(n.ran&&n.ran.status==='agree'?'s-ok':(n.ran&&n.ran.status==='differ'?'s-diff':(n.tests===false?'c-notest':(n.tests===true?'c-test':'c-unknown'))));
 function sub(n){let t;if(n.kind==='changed')t=(n.affected?'not edited · ':'')+n.status+(n.turned_back?' · turned back':(n.state==='waived'?' · waived':''));
+ else if(n.skipped)t='not run: '+n.skipped.reason;
  else if(n.ran)t=n.ran.status==='agree'?'run too: old and new agree':(n.ran.status==='differ'?'run too: result changed':'tried, could not be run');
  else t=n.tests===false?'no test reaches it':(n.tests===true?'tests reach it':'test reach unknown');
  return n.routes.length?t+' · '+n.routes[0]:t}
@@ -200,11 +210,12 @@ function panel(){const a=$('aside'),n=sel&&N.get(sel);if(!n){a.innerHTML='<p cla
   if(n.sources.length)h+=f('Note',esc(n.sources.join(', ')))}
  else{h+=f('Why it is here',`It calls <code>${esc(n.via)}</code>, ${n.layer===1?'which changed':'which leads to a changed function'}. Sources: ${esc(n.sources.join(', '))}.`);
   h+=f('Tests',n.tests===null?'Unknown: no test map yet.':(n.tests?'Existing tests reach it.':'No existing test reaches it, so nothing here would catch a break.'));
-  let c;if(n.ran&&n.ran.status==='agree')c='Yes. It was run with the edited code, and old and new agree on '+esc(n.ran.inputs)+' inputs. That is not a proof.';
+  let c;if(n.skipped)c='No. It was not run: '+esc(n.skipped.reason)+'. It was not tried, so nothing is known about it from execution.';
+  else if(n.ran&&n.ran.status==='agree')c='Yes. It was run with the edited code, and old and new agree on '+esc(n.ran.inputs)+' inputs. That is not a proof.';
   else if(n.ran&&n.ran.status==='differ')c='Yes, and its result changed: '+(n.ran.example?'<pre>'+esc(n.ran.example)+'</pre>':'see the findings.');
   else if(n.ran)c='It was tried and could not be run'+(n.ran.reason?': '+esc(n.ran.reason):'')+'.';
-  else if(n.layer===1)c='No. The guard runs up to six direct callers, the ones in the same file first. This one was not among them.';
-  else c='No. Only functions that call the edited one directly are run.';
+  else if(n.layer<=2){const b=M.caller_budget||[8,12];c='No. For each edit the guard runs up to '+b[0]+' callers, one or two steps away, within '+b[1]+' functions per check; callers more likely to run go first. This one was not among them.'}
+  else c='No. Only callers one or two steps away from the edited function are run.';
   h+=f('Checked by the guard?',c)}
  if(n.routes.length)h+=f('Reached from',n.routes.map(esc).join('<br>'));a.innerHTML=h+'</dl>'}
 function pick(id){sel=id;draw();panel()}
