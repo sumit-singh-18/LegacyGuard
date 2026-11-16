@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 325 tests after Task 6.8c). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 339 tests after Task 6.8d). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -182,6 +182,18 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   `::warning` and its own report section). If old and new build the placeholder differently the inputs are not
   compared. `tools/validate.py` counts placeholder-only results apart (never as detections or quiet; the case
   stays unchecked).
+- **6.8d** old-vs-old disagreement names its cause (`runner/noise.py::causes`, guard side, explains only, never
+  changes what is compared; labels for heuristic causes are hedged: "values that look like random tokens"). The
+  untested reason reads e.g. "non-deterministic: old code disagreed with itself on 2 of 3 inputs: object addresses
+  in the return value (2)"; causes are also in the ledger evidence and `tools/validate.py` records and metrics.
+  Benign noise is frozen at the source, identically for old and new, only when the caller is project code
+  (`lg_worker._from_project`): `time.monotonic`, `perf_counter`, `process_time`, `thread_time` (+ `_ns`; 1 ms per
+  reading from 1000.0), thread ids and default thread names, `os.getpid`/`getppid`. `time.sleep` and timed waits
+  that run out (`Event.wait`, `Condition.wait`, `Queue.get`, `Thread.join`, `select.select`) advance the frozen
+  clocks by the requested timeout, so deadline loops end. Not covered: `Lock`/`Semaphore.acquire(timeout)`,
+  selectors, socket timeouts (a timed-out call after 200+ frozen readings is reported as a deadline loop on a
+  frozen clock). An edit that only adds or removes a clock read stays a difference with a `clock_note` hedge.
+  `id()` values and the order of id-hashed sets are classified but not normalised.
 
 ## Known gaps still open
 

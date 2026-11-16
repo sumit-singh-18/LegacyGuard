@@ -5,6 +5,7 @@ from pathlib import Path
 
 from guardlib import baseline, checks, intent, ledger, paths, symbols, virtual, waivers
 from runner import diff as differ
+from runner import noise
 
 
 def is_guarded_source(cfg, rel: str | None) -> bool:
@@ -398,6 +399,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                 evidence += f". {r.unreached_note}"
             if r.placeholder_note:
                 evidence += f". {r.placeholder_note}"
+            if getattr(r, "clock_note", ""):
+                evidence += f". {r.clock_note}"
             state = "waived" if waived else "intended" if intended else "open"
             extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared,
                      "statements": [r.statements_reached, r.statements_total], **via}
@@ -426,7 +429,9 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                     old["state"] = "resolved" if old["kind"] in ("behavior_difference", "slowdown") else "superseded"
             f, new = ledger.add_finding(data, kind="verified", status=ledger.VERIFIED, source="diff", subject=r.subject, file=r.file, item=r.qualname,
                                         evidence=f"{r.inputs_compared} inputs compared, {r.inputs_completed} returned a value" +
-                                                 (f", {r.dropped_nondeterministic} dropped as non-deterministic" if r.dropped_nondeterministic else "") +
+                                                 (f", {r.dropped_nondeterministic} dropped as non-deterministic" +
+                                                  (f" ({noise.summary(r.nondeterministic_detail, 2)})" if getattr(r, "nondeterministic_detail", None) else "")
+                                                  if r.dropped_nondeterministic else "") +
                                                  (f"; {differ.reached_text(r)}" + (f" of {differ.callee_names(r.callees)}" if r.via and r.callees else "")
                                                   if r.statements_total else "") +
                                                  (f"; {differ.confidence_text(r)}" if r.mutants_total else "") +

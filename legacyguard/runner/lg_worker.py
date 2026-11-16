@@ -18,7 +18,9 @@ import ipaddress
 import itertools
 import json
 import os
+import queue
 import random
+import select
 import shutil
 import signal
 import socket
@@ -26,6 +28,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import types
@@ -1036,16 +1039,57 @@ def _state_after(watched, self_before=None) -> dict | None:
 # Old and new code are run with the same random seed, the same clock and the same uuid sequence, reset before every
 # input. Values that came from randomness or the time then agree whenever the code agrees, so such functions can be
 # checked instead of being dropped as non-deterministic. The clock moves forward 1 ms per reading, so code that waits
-# for time to pass still finishes.
+# for time to pass still finishes. Consequence: an edit that only adds or removes a clock reading (time.time, and since
+# Task 6.8d also monotonic/perf_counter in the project's code) shifts every later reading by 1 ms, so a value computed
+# from the clock differs; diff.py keeps that a difference and adds a hedge (Result.clock_note).
 FROZEN_START = 1705320000.0  # 2024-01-15 12:00:00 UTC
-_CLOCK = {"t": FROZEN_START}
+MONO_START = 1000.0          # where the frozen monotonic, perf_counter, process_time and thread_time readings start
+_CLOCK = {"t": FROZEN_START, "mono": MONO_START, "reads": 0}  # reads: frozen readings during this input
+CLOCK_LOOP_READS = 200  # a call that ran out of time after this many frozen readings was probably waiting on the clock
 _IDS = random.Random(0)
 DET = {"on": False}
 _REAL = {"dt": _dt.datetime, "date": _dt.date, "time": time.time, "time_ns": time.time_ns,
-         "uuid1": uuid.uuid1, "uuid4": uuid.uuid4}
+         "uuid1": uuid.uuid1, "uuid4": uuid.uuid4,
+         "monotonic": time.monotonic, "monotonic_ns": time.monotonic_ns, "perf_counter": time.perf_counter,
+         "perf_counter_ns": time.perf_counter_ns, "process_time": time.process_time, "process_time_ns": time.process_time_ns,
+         "thread_time": time.thread_time, "thread_time_ns": time.thread_time_ns, "sleep": time.sleep,
+         "get_ident": threading.get_ident, "get_native_id": threading.get_native_id,
+         "getpid": os.getpid, "getppid": os.getppid,
+         "ident": threading.Thread.ident, "native_id": threading.Thread.native_id,
+         "event_wait": threading.Event.wait, "condition_wait": threading.Condition.wait, "join": threading.Thread.join,
+         "queue_get": queue.Queue.get, "select": select.select}
+_monotonic = _REAL["monotonic"]  # the worker's own time limits always use the real clock
+
+# What one run looked like from outside (Task 6.8d): its real process ids, the threads it saw and the span of each real
+# clock. When OLD-A and OLD-B disagree, diff.py compares the differing values with these to name the cause
+# (thread ids, process ids, time readings); nothing here changes what is compared.
+_ENV_CLOCKS = ("time", "monotonic", "perf_counter")  # process_time is left out: its small readings look like any number
+_ENV_START = {k: _REAL[k]() for k in _ENV_CLOCKS}
+_SEEN_THREADS: set = set()
+MAX_SEEN_THREADS = 64
+
+
+def _note_threads() -> None:
+    try:
+        for t in threading.enumerate():
+            for prop in ("ident", "native_id"):
+                value = _REAL[prop].fget(t)
+                if value is not None and len(_SEEN_THREADS) < MAX_SEEN_THREADS:
+                    _SEEN_THREADS.add(value)
+    except Exception:  # noqa: BLE001 - the snapshot is a diagnosis aid only
+        pass
+
+
+def env_snapshot() -> dict:
+    _note_threads()
+    return {"pid": _REAL["getpid"](), "ppid": _REAL["getppid"](), "threads": sorted(_SEEN_THREADS),
+            "clocks": {k: [_ENV_START[k], _REAL[k]()] for k in _ENV_CLOCKS},
+            "paths": [p for p in (SCRATCH.get("dir"), SCRATCH.get("temp")) if p],
+            "heap": [id(object()), id(sys), id(_SEEN_THREADS)]}
 
 
 def _tick() -> float:
+    _CLOCK["reads"] += 1
     _CLOCK["t"] += 0.001
     return _CLOCK["t"]
 
@@ -1064,6 +1108,153 @@ def _fake_uuid4():
 
 def _fake_uuid1(node=None, clock_seq=None):
     return uuid.UUID(int=_IDS.getrandbits(128), version=1)
+
+
+# Task 6.8d: clocks, thread ids and process ids read by the project's own code. Two runs of the same old code read
+# different values from them (they are not seeded), so a method that stores time.monotonic() or threading.get_ident()
+# on self disagreed with itself and was never checked. They are frozen only for callers in the project (and the
+# TIME_HELPERS modules): asyncio, threading, queue and other libraries keep the real values, so their own timers and
+# waits behave as before. The worker's own limits use the real clock (_monotonic).
+PROJECT = {"root": ""}
+_FROM_PROJECT: dict = {}
+_OWN_MODULES = {"__main__", "lg_worker", "lg_codec", "lg_stubs", "lg_server", "legacyguard_harvest"}
+FAKE_PID, FAKE_PPID = 4242, 4241
+_THREAD_IDS: dict = {}  # real ident or native id -> a small stable number, in the order the project's code first read it
+
+
+def _from_project(depth: int = 2) -> bool:
+    """True when the function `depth` frames up (the caller of a fake) belongs to the project."""
+    root = PROJECT["root"]
+    if not root or not DET["on"]:
+        return False
+    try:
+        g = sys._getframe(depth).f_globals
+    except ValueError:
+        return False
+    name = g.get("__name__")
+    hit = _FROM_PROJECT.get(name)
+    if hit is None:
+        path = g.get("__file__")
+        hit = bool(path) and name not in _OWN_MODULES and (name in TIME_HELPERS or os.path.realpath(path).startswith(root))
+        _FROM_PROJECT[name] = hit
+    return hit
+
+
+def _mono_tick() -> float:
+    _CLOCK["reads"] += 1
+    _CLOCK["mono"] += 0.001
+    return _CLOCK["mono"]
+
+
+def _frozen_clock(real_name: str, ns: bool):
+    real = _REAL[real_name]
+
+    def reading():
+        if not _from_project():
+            return real()
+        value = _mono_tick()
+        return int(value * 1_000_000_000) if ns else value
+    reading.__name__ = real_name
+    return reading
+
+
+def _advance(seconds) -> None:
+    """Move both frozen clocks on by the time a wait asked for (the same amount in every run, whatever the real wait)."""
+    try:
+        step = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return
+    _CLOCK["t"] += step
+    _CLOCK["mono"] += step
+
+
+def _fake_sleep(seconds):
+    """A real sleep. For the project's code the frozen clocks also move on by the time asked for, so a loop that sleeps
+    until a deadline read from them ends as it would with the real clock."""
+    _REAL["sleep"](seconds)
+    if _from_project():
+        _advance(seconds)
+
+
+# The standard blocking waits with a timeout, as called by the project's code: the wait is real, and when it ran out
+# (no event, no item, nothing ready) the frozen clocks move on by the timeout, as for time.sleep. A loop such as
+# `while time.monotonic() < deadline: event.wait(0.01)` then ends after as many rounds as with the real clock. A wait
+# that returned early moves nothing (the real time it took is not repeatable). Calls from library code (queue's own
+# Condition.wait, asyncio) stay untouched, so a wait is never counted twice. Not covered: Lock/Semaphore.acquire with a
+# timeout and selectors/socket timeouts; a call that runs out of time after many frozen readings says so (clock_loop).
+def _event_wait(self, timeout=None):
+    got = _REAL["event_wait"](self, timeout)
+    if not got and timeout is not None and _from_project():
+        _advance(timeout)
+    return got
+
+
+def _condition_wait(self, timeout=None):
+    got = _REAL["condition_wait"](self, timeout)
+    if not got and timeout is not None and _from_project():
+        _advance(timeout)
+    return got
+
+
+def _queue_get(self, block=True, timeout=None):
+    try:
+        return _REAL["queue_get"](self, block, timeout)
+    except queue.Empty:
+        if block and timeout is not None and _from_project():
+            _advance(timeout)
+        raise
+
+
+def _thread_join(self, timeout=None):
+    _REAL["join"](self, timeout)
+    if timeout is not None and self.is_alive() and _from_project():
+        _advance(timeout)
+
+
+def _fake_select(rlist, wlist, xlist, timeout=None):
+    got = _REAL["select"](rlist, wlist, xlist, timeout)
+    if timeout is not None and not any(got) and _from_project():
+        _advance(timeout)
+    return got
+
+
+def _stable_thread_id(real, kind: str):
+    if real is None:
+        return None
+    return _THREAD_IDS.setdefault((kind, real), sum(1 for k in _THREAD_IDS if k[0] == kind) + 1)
+
+
+def _fake_get_ident():
+    real = _REAL["get_ident"]()
+    return _stable_thread_id(real, "ident") if _from_project() else real
+
+
+def _fake_get_native_id():
+    real = _REAL["get_native_id"]()
+    return _stable_thread_id(real, "native") if _from_project() else real
+
+
+def _fake_getpid():
+    return FAKE_PID if _from_project() else _REAL["getpid"]()
+
+
+def _fake_getppid():
+    return FAKE_PPID if _from_project() else _REAL["getppid"]()
+
+
+def _thread_ident(self):
+    real = _REAL["ident"].fget(self)
+    return _stable_thread_id(real, "ident") if _from_project() else real
+
+
+def _thread_native_id(self):
+    real = _REAL["native_id"].fget(self)
+    return _stable_thread_id(real, "native") if _from_project() else real
+
+
+_CLOCKS = {name: _frozen_clock(name, name.endswith("_ns")) for name in
+           ("monotonic", "monotonic_ns", "perf_counter", "perf_counter_ns", "process_time", "process_time_ns",
+            "thread_time", "thread_time_ns")}
 
 
 class _SameAsReal(type):
@@ -1100,7 +1291,10 @@ class FrozenDate(_dt.date, metaclass=_SameAsReal):
 
 
 _SWAPS = {id(_REAL["dt"]): FrozenDatetime, id(_REAL["date"]): FrozenDate, id(_REAL["time"]): _fake_time,
-          id(_REAL["time_ns"]): _fake_time_ns, id(_REAL["uuid4"]): _fake_uuid4, id(_REAL["uuid1"]): _fake_uuid1}
+          id(_REAL["time_ns"]): _fake_time_ns, id(_REAL["uuid4"]): _fake_uuid4, id(_REAL["uuid1"]): _fake_uuid1,
+          id(_REAL["sleep"]): _fake_sleep, id(_REAL["get_ident"]): _fake_get_ident,
+          id(_REAL["get_native_id"]): _fake_get_native_id, id(_REAL["getpid"]): _fake_getpid,
+          id(_REAL["getppid"]): _fake_getppid, id(_REAL["select"]): _fake_select, **{id(_REAL[n]): fake for n, fake in _CLOCKS.items()}}
 _SCANNED: set = set()
 
 
@@ -1108,6 +1302,16 @@ def install_determinism() -> None:
     DET["on"] = True
     time.time, time.time_ns = _fake_time, _fake_time_ns
     uuid.uuid4, uuid.uuid1 = _fake_uuid4, _fake_uuid1
+    for name, fake in _CLOCKS.items():
+        setattr(time, name, fake)
+    time.sleep = _fake_sleep
+    threading.get_ident, threading.get_native_id = _fake_get_ident, _fake_get_native_id
+    os.getpid, os.getppid = _fake_getpid, _fake_getppid
+    threading.Thread.ident = property(_thread_ident, doc=_REAL["ident"].__doc__)
+    threading.Thread.native_id = property(_thread_native_id, doc=_REAL["native_id"].__doc__)
+    threading.Event.wait, threading.Condition.wait, threading.Thread.join = _event_wait, _condition_wait, _thread_join
+    queue.Queue.get = _queue_get
+    select.select = _fake_select
 
 
 # Library modules whose own "now" should follow the frozen clock. Other libraries keep their references: swapping a
@@ -1153,9 +1357,14 @@ def frozen_datetime_module(on: bool) -> None:
 def reset_determinism() -> None:
     if not DET["on"]:
         return
-    _CLOCK["t"] = FROZEN_START
+    _CLOCK["t"], _CLOCK["mono"], _CLOCK["reads"] = FROZEN_START, MONO_START, 0
     _IDS.seed(0)
     random.seed(0)
+    _THREAD_IDS.clear()
+    if hasattr(threading, "_counter"):
+        # Default thread names ("Thread-3 (run)") count from 1 again for every input: other inputs and planted bugs
+        # that start threads must not shift the numbers.
+        threading._counter = itertools.count(1).__next__
     np = sys.modules.get("numpy")
     if np is not None:
         try:
@@ -1203,7 +1412,7 @@ def run_route(spec) -> dict:
     except BaseException as exc:  # noqa: BLE001
         return {"status": "import_error", "reason": f"{type(exc).__name__}: {exc}"}
     results = [_call_once(call, item, None, i) for i, item in enumerate(spec["inputs"])]
-    return {"status": "ran", "results": results, "lines": None}
+    return {"status": "ran", "results": results, "lines": None, "env": env_snapshot()}
 
 
 def run_function(spec, root_real):
@@ -1245,31 +1454,34 @@ def run_function(spec, root_real):
                 make_self, recipe, no_self = _instance_maker(owner, spec)
         except GuardBlocked as exc:
             no_self = f"building a {owner.__name__} was blocked: {exc}"
-    fn_deadline = time.monotonic() + FUNCTION_BUDGET_S
+    fn_deadline = _monotonic() + FUNCTION_BUDGET_S
     # Per input: the seconds the call itself took and the time limit it ran under (None when it did not run). They sit
     # beside the outcomes, not in them, so outcomes stay what the comparison reads. A slowdown check (Task 6.6) re-runs
     # single inputs with "full_limit" (never the reduced limit) and "indexes" (each input's position in the first run,
     # which picks how its instance is built).
     seconds: list = []
     limits: list = []
+    clock_reads: list = []  # Task 6.8d: frozen clock readings per input (None when it did not run)
     indexes = spec.get("indexes") or []
     for index, item in enumerate(spec["inputs"]):
         seconds.append(None)
         limits.append(None)
+        clock_reads.append(None)
         if owner is not None and make_self is None and not item.get("has_self"):
             results.append({"outcome": "setup_failed", "detail": no_self})
             continue
         # After two inputs time out, the rest get a short limit: one slow function must not use up the whole check.
         # After MAX_TIMEOUTS the rest are skipped, not run: they are almost surely as slow, and are reported as such.
         timeouts = sum(1 for r in results if r.get("outcome") in ("timeout", "skipped_slow"))
-        if timeouts >= MAX_TIMEOUTS or time.monotonic() > fn_deadline:
+        if timeouts >= MAX_TIMEOUTS or _monotonic() > fn_deadline:
             results.append({"outcome": "skipped_slow"})
             continue
         limit = CALL_TIMEOUT_S if timeouts < 2 or spec.get("full_limit") else SHORT_TIMEOUT_S
         position = indexes[index] if index < len(indexes) else index
         results.append(_call_once(fn, item, make_self, position, trace, limit))
-        seconds[-1], limits[-1] = LAST_CALL["seconds"], limit
-    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None, "seconds": seconds, "limits": limits}
+        seconds[-1], limits[-1], clock_reads[-1] = LAST_CALL["seconds"], limit, LAST_CALL.get("clock_reads")
+    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None, "seconds": seconds, "limits": limits,
+           "clock_reads": clock_reads, "env": env_snapshot()}
     if gate:
         out["gate_lines"] = sorted(gate_hits)
     if recipe:
@@ -1407,7 +1619,7 @@ def run_capture(spec, root_real) -> dict:
         except GuardBlocked:
             make_self = None
     trace = _capture_tracer(wanted, state)
-    deadline = time.monotonic() + min(FUNCTION_BUDGET_S, float(spec.get("budget") or FUNCTION_BUDGET_S))
+    deadline = _monotonic() + min(FUNCTION_BUDGET_S, float(spec.get("budget") or FUNCTION_BUDGET_S))
     timeouts = 0
     inputs = spec["inputs"][:CAPTURE_INPUTS]
     strong_left = [False] * (len(inputs) + 1)  # strong_left[i]: some input from i on is not a guess
@@ -1418,7 +1630,7 @@ def run_capture(spec, root_real) -> dict:
         # Full everywhere: stop, unless a non-guess input still to come could make a call recorded under a guess non-weak.
         if all(len(state["calls"][k]) >= lim and not (state["weak_left"][k] and strong_left[index]) for k, _, lim in wanted.values()):
             break
-        left = deadline - time.monotonic()
+        left = deadline - _monotonic()
         if left <= 0.01 or timeouts >= 2:
             break
         if owner is not None and make_self is None and not item.get("has_self"):
@@ -1440,13 +1652,13 @@ def _gate_spec(spec, root_real):
     return os.path.realpath(os.path.join(root_real or ".", g["file"])), lines
 
 
-LAST_CALL = {"seconds": None}  # how long the last _call_once call ran (time.monotonic is never frozen)
+LAST_CALL = {"seconds": None, "clock_reads": None}  # how long the last _call_once call ran (the real clock: _monotonic)
 
 
 def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CALL_TIMEOUT_S) -> dict:
     """One input through fn, with a fresh seed, clock and instance. The outcome as the comparison reads it."""
     start = len(BLOCKS)
-    LAST_CALL["seconds"] = None
+    LAST_CALL["seconds"] = LAST_CALL["clock_reads"] = None
     reset_determinism()
     lg_stubs.reset()
     try:
@@ -1461,11 +1673,11 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
         setup_was, SETUP["on"] = SETUP["on"], False  # the compared call: nothing is redirected, every write is refused
         frozen_datetime_module(True)
         try:
-            began = time.monotonic()
+            began = _monotonic()
             try:
                 value = _with_timeout(lambda: _finish(fn(*pos, **kw)), seconds)
             finally:
-                LAST_CALL["seconds"] = round(time.monotonic() - began, 4)
+                LAST_CALL["seconds"] = round(_monotonic() - began, 4)
         finally:
             frozen_datetime_module(False)
             SETUP["on"] = setup_was
@@ -1476,11 +1688,16 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
         outcome = {"outcome": "blocked", "detail": str(exc)}
     except CallTimeout:
         outcome = {"outcome": "timeout"}
+        if DET["on"] and _CLOCK["reads"] >= CLOCK_LOOP_READS:
+            outcome["clock_loop"] = _CLOCK["reads"]
     except BaseException as exc:  # noqa: BLE001
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             outcome = {"outcome": "exit", "detail": type(exc).__name__}
         else:
             outcome = {"outcome": "raise", "type": type(exc).__name__, "message": lg_codec._scrub(str(exc))[:500]}
+    _note_threads()
+    # Beside the outcome, not in it (like the seconds): lets diff.py hedge a difference that is only a clock shift.
+    LAST_CALL["clock_reads"] = _CLOCK["reads"] if DET["on"] else None
     if outcome["outcome"] in ("return", "raise"):
         state = _state_after(watched, self_before)
         if state:
@@ -1527,10 +1744,10 @@ def _run_mutants(fn, spec, make_self, owner, results) -> dict:
     for i, item, real in usable:
         if not _same(_call_once(identity, item, make_self, i), real):
             return {"applicable": False, "reason": "the function behaves differently when recompiled on its own"}
-    deadline = time.monotonic() + MUTANT_BUDGET_S
+    deadline = _monotonic() + MUTANT_BUDGET_S
     killed, survived, total = 0, [], 0
     for m in plan["mutants"]:
-        if time.monotonic() > deadline:
+        if _monotonic() > deadline:
             break
         total += 1
         try:
@@ -1544,7 +1761,7 @@ def _run_mutants(fn, spec, make_self, owner, results) -> dict:
             if got["outcome"] == "timeout" or not _same(got, real):
                 caught = True
                 break
-            if time.monotonic() > deadline:
+            if _monotonic() > deadline:
                 break
         if caught:
             killed += 1
@@ -1589,6 +1806,7 @@ def prepare(request, with_django: bool = True) -> tuple[str, str | None]:
     os.chdir(root)
     add_paths(request)
     root_real = os.path.realpath(root) + os.sep
+    PROJECT["root"] = root_real
     SCRATCH["protect"] = [root_real] + [os.path.realpath(p) + os.sep for p in request.get("protect") or []]
     return root_real, (setup_django(request) if with_django else None)
 

@@ -485,3 +485,19 @@ def test_placeholder_only_results_are_counted_apart():
     text = validate.metrics_text(m)
     assert "of which 2 compared only on a placeholder self" in text
     assert "Only on a placeholder self (not counted as detections or quiet): different 1 (p), quiet 1 (q)" in text
+
+
+def test_nondeterministic_causes_counted():
+    """Task 6.8d: an untested non-deterministic function carries its causes; metrics count functions per cause."""
+    from runner import diff, noise
+    r = diff.Result("a.py", "f", diff.UNTESTED, "h", reason="non-deterministic: old code disagreed with itself on 2 of 2 inputs: x",
+                    dropped_nondeterministic=2, nondeterministic_causes={noise.TIME: 2, noise.THREAD_IDS: 1})
+    rec = validate._function(r)
+    assert rec["nondeterministic_causes"] == {noise.TIME: 2, noise.THREAD_IDS: 1} and rec["dropped_nondeterministic"] == 2
+    other = {"status": diff.UNTESTED, "reason": "non-deterministic: old code disagreed with itself on 1 of 1 inputs: y",
+             "nondeterministic_causes": {noise.TIME: 1}}
+    records = [{"name": "a", "kind": "bug", "expect": "detected", "verdict": "unchecked", "match": False, "seconds": 1.0,
+                "functions": [rec, other, {"status": diff.UNTESTED, "reason": "timed out"}], "mutants_killed": 0, "mutants_total": 0}]
+    m = validate.metrics(records)
+    assert m["nondeterministic_causes"] == {noise.TIME: 2, noise.THREAD_IDS: 1}
+    assert "Untested as non-deterministic, by cause (functions): time readings 2, thread ids 1" in validate.metrics_text(m)

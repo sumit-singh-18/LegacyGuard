@@ -18,6 +18,7 @@ from runner import examples
 from runner import inputs as input_lib
 from runner import lg_codec
 from runner import mutants
+from runner import noise
 from runner import os_sandbox
 from runner import warm
 
@@ -67,6 +68,10 @@ class Result:
     inputs_compared: int = 0
     inputs_completed: int = 0
     dropped_nondeterministic: int = 0
+    # Task 6.8d: why OLD-A and OLD-B disagreed on the dropped inputs. causes: cause -> inputs (noise.ADDRESSES, ...);
+    # detail: "cause in where" -> inputs, e.g. {"time readings in self": 3}.
+    nondeterministic_causes: dict = field(default_factory=dict)
+    nondeterministic_detail: dict = field(default_factory=dict)
     dropped_invalid: int = 0
     differences: list[dict] = field(default_factory=list)
     only_special: bool = False  # every differing input contains NaN or infinity; ordinary values agree
@@ -95,6 +100,7 @@ class Result:
     self_placeholder: str = ""
     placeholder_inputs: int = 0
     placeholder_note: str = ""      # for a difference: it may come from the placeholder state, not the edit
+    clock_note: str = ""            # Task 6.8d: every difference is confined to frozen clock readings
     baseline_unrunnable: bool = False  # untested because every own, non-guessed input raised or failed setup on the baseline (roadmap 6.5)
     # Task 6.6: inputs that timed out only in the new code while the old runs finished fast (to be confirmed), and the
     # confirmed ones: {"call", "new_limit_s", "old_seconds", "source"}. Confirmed slowdowns set status SLOWDOWN unless
@@ -425,6 +431,30 @@ def _has_special(item: dict) -> bool:
     return False
 
 
+def _clock_only(reads_old, reads_new, ca: dict, cn: dict) -> bool:
+    """True when old and new read the frozen clock a different number of times and every differing piece of their
+    outcomes is a number (Task 6.8d): the difference may be the clock shift alone."""
+    if reads_old is None or reads_new is None or reads_old == reads_new:
+        return False
+    try:
+        return noise.numbers_only(ca, cn)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _note_disagreement(r: Result, ca: dict, cb: dict | None, env_a: dict | None, env_b: dict | None) -> None:
+    """Count why the two old runs disagreed on one input (Task 6.8d). Each cause and each "cause in where" counts once
+    per input."""
+    try:
+        found = noise.causes(ca, cb, env_a, env_b)
+    except Exception:  # noqa: BLE001 - a diagnosis must never cost the comparison
+        found = [(noise.OTHER, "the outcome")]
+    for cause in {c for c, _ in found}:
+        r.nondeterministic_causes[cause] = r.nondeterministic_causes.get(cause, 0) + 1
+    for label in {f"{c} in {w}" for c, w in found}:
+        r.nondeterministic_detail[label] = r.nondeterministic_detail.get(label, 0) + 1
+
+
 def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | None, n: dict | None, use_self_diff: bool) -> Result:
     r = Result(target.file, target.qualname, UNTESTED, target.code_hash, inputs_tried=len(items))
     if a is None or n is None or (use_self_diff and b is None):
@@ -460,7 +490,8 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     if weak_self:
         r.self_placeholder = n.get("self_recipe") or a.get("self_recipe") or "a placeholder instance"
     self_mismatch = weak_self and a.get("self_recipe") != n.get("self_recipe")
-    for item, oa, on, ob in zip(items, a["results"], n["results"], (b or {"results": a["results"]})["results"]):
+    reads_a, reads_n = a.get("clock_reads") or [], n.get("clock_reads") or []
+    for i, (item, oa, on, ob) in enumerate(zip(items, a["results"], n["results"], (b or {"results": a["results"]})["results"])):
         if item.get("expect") is not None:
             # A declared example: the new code is checked against what was declared, not against the old code.
             from guardlib import intent
@@ -493,6 +524,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             cb = _comparable(ob)
             if cb is None or _key(ca) != _key(cb):
                 r.dropped_nondeterministic += 1
+                _note_disagreement(r, ca, cb, a.get("env"), (b or {}).get("env"))
                 continue
         r.inputs_compared += 1
         r.placeholder_inputs += on_placeholder
@@ -505,7 +537,9 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             r.differences.append({"call": show_call(target, item), "before": _show_outcome(ca, cn), "after": _show_outcome(cn, ca), "source": item["source"],
                                   **({"base": item["base"]} if item.get("base") else {}), "args": item["args"], "has_self": item.get("has_self", False), "before_raw": ca, "after_raw": cn,
                                   "special": _has_special(item), "state": not same_state, "placeholder_self": on_placeholder,
-                                  "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"])})
+                                  "noise": same_state and ca["k"] == "return" and cn["k"] == "return" and _float_noise(ca["v"], cn["v"]),
+                                  "clock_only": _clock_only(reads_a[i] if i < len(reads_a) else None,
+                                                             reads_n[i] if i < len(reads_n) else None, ca, cn)})
     # A pass must rest on inputs that ran every changed statement (D-043). Guessed values for an untyped parameter often
     # leave by an early return or an error, and old and new code then agree without the edit ever being exercised.
     # A caller is held to the edited functions' statements: agreeing on inputs that never reach them says nothing.
@@ -538,6 +572,10 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                                           len(d["call"]) + len(d["before"]) + len(d["after"])))
         r.only_special = all(d["special"] for d in r.differences)
         r.only_float_noise = all(d["noise"] for d in r.differences)
+        if all(d.get("clock_only") for d in r.differences):
+            r.clock_note = ("The difference is confined to numbers, and the two versions read the frozen clock a different number "
+                            "of times: the clock moves 1 ms per reading, so an edit that adds or removes a clock read shifts "
+                            "every later reading and may account for it")
         return r
     if blocked:
         r.reason = " and ".join(sorted(BLOCK_REASON.get(k, k) for k in blocked))
@@ -545,11 +583,16 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     if r.dropped_nondeterministic and r.dropped_nondeterministic >= r.inputs_compared:
         # One input like dice(0) agreeing with itself must not turn a random function into a Verified pass.
         r.reason = f"non-deterministic: old code disagreed with itself on {r.dropped_nondeterministic} of {r.dropped_nondeterministic + r.inputs_compared} inputs"
+        if r.nondeterministic_detail:
+            r.reason += f": {noise.summary(r.nondeterministic_detail)}"
         return r
     slow = sum(1 for o in a["results"] if o.get("outcome") in ("timeout", "skipped_slow"))
+    loops = sum(1 for o in a["results"] if o.get("outcome") == "timeout" and o.get("clock_loop"))
     if r.inputs_completed == 0:
         r.reason = ("no input ran to completion" if not setup_failures else f"inputs could not be set up ({setup_detail[:400]})") + \
                    (f"; {slow} inputs ran past the time limit" if slow else "") + \
+                   (f"; {loops} of them after many frozen clock readings (a loop waiting for a deadline on the frozen clock, "
+                    "which moves 1 ms per reading and only waits it knows of move it further)" if loops else "") + \
                    (f"; the instance was a placeholder ({r.self_placeholder})" if r.self_placeholder and not self_mismatch else "")
         # On the baseline every input of the caller's own that is not a guess (no declared, carved, weak or edit-derived
         # input) raised or could not be set up: the cause is not this edit (engine ranking, roadmap 6.5).
@@ -1446,6 +1489,8 @@ def format_wake(result: Result, finding_id: str) -> str:
         lines.append(f"{result.unreached_note}.")
     if result.placeholder_note:
         lines.append(f"{result.placeholder_note}.")
+    if result.clock_note:
+        lines.append(f"{result.clock_note}.")
     if result.slowdowns:
         lines.append(f"Separately, {slowdown_text(result.slowdowns[0])}.")
     if result.reason:

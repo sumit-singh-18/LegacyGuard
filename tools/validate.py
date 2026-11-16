@@ -366,6 +366,10 @@ def _function(r) -> dict:
         # Task 6.6: listed on their own, never counted as a detection.
         out["slowdowns"] = [{"call": s["call"], "new_limit_s": s["new_limit_s"], "old_seconds": s["old_seconds"], "source": s["source"]}
                             for s in r.slowdowns]
+    if getattr(r, "nondeterministic_causes", None):
+        # Task 6.8d: why the old code disagreed with itself, per cause: the number of inputs dropped for it.
+        out["dropped_nondeterministic"] = r.dropped_nondeterministic
+        out["nondeterministic_causes"] = dict(r.nondeterministic_causes)
     carved = {k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
     if carved["captured"] or carved["unstored"] or carved["note"]:
         out["carved"] = carved
@@ -596,9 +600,21 @@ def metrics(records: list[dict]) -> dict:
         "detection": {"detected": found, "total": len(want), "rate": _rate(found, len(want))},
         "false_alarm": {"alarms": alarms, "total": len(calm), "rate": _rate(alarms, len(calm))},
         "untested": {"functions": len(untested), "total": len(functions), "share": _rate(len(untested), len(functions))},
+        "nondeterministic_causes": nondeterministic_causes(untested),
         "mutation": {"killed": killed, "total": total, "score": _rate(killed, total)},
         "seconds": {"median": round(statistics.median(times), 3) if times else None, "p95": _p95(times)},
     }
+
+
+def nondeterministic_causes(untested: list[dict]) -> dict[str, int]:
+    """Task 6.8d: for functions left untested because the old code disagreed with itself, how many show each cause."""
+    counts: dict[str, int] = {}
+    for f in untested:
+        if not str(f.get("reason", "")).startswith("non-deterministic"):
+            continue
+        for cause in f.get("nondeterministic_causes") or {"unknown (older record)": 1}:
+            counts[cause] = counts.get(cause, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def modes_for(fix_tests: str) -> list[str]:
@@ -709,6 +725,9 @@ def metrics_text(m: dict) -> str:
         lines.append(f"Errors (left out of the rates): {', '.join(m['error_cases'])}")
     if m.get("slowdown_cases"):
         lines.append(f"Slowdowns (not counted as detections): {', '.join(m['slowdown_cases'])}")
+    if m.get("nondeterministic_causes"):
+        lines.append("Untested as non-deterministic, by cause (functions): "
+                     + ", ".join(f"{cause} {n}" for cause, n in m["nondeterministic_causes"].items()))
     if m.get("deciding_sources") and _sources_text(m["deciding_sources"]) != "-":
         lines.append("Inputs that differed in detected cases: " + _sources_text(m["deciding_sources"]))
     lines += _set_lines(m)
