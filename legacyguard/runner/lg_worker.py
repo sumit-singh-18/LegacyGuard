@@ -771,7 +771,16 @@ def run_function(spec, root_real):
         except GuardBlocked as exc:
             no_self = f"building a {owner.__name__} was blocked: {exc}"
     fn_deadline = time.monotonic() + FUNCTION_BUDGET_S
+    # Per input: the seconds the call itself took and the time limit it ran under (None when it did not run). They sit
+    # beside the outcomes, not in them, so outcomes stay what the comparison reads. A slowdown check (Task 6.6) re-runs
+    # single inputs with "full_limit" (never the reduced limit) and "indexes" (each input's position in the first run,
+    # which picks how its instance is built).
+    seconds: list = []
+    limits: list = []
+    indexes = spec.get("indexes") or []
     for index, item in enumerate(spec["inputs"]):
+        seconds.append(None)
+        limits.append(None)
         if owner is not None and make_self is None and not item.get("has_self"):
             results.append({"outcome": "setup_failed", "detail": no_self})
             continue
@@ -781,8 +790,11 @@ def run_function(spec, root_real):
         if timeouts >= MAX_TIMEOUTS or time.monotonic() > fn_deadline:
             results.append({"outcome": "skipped_slow"})
             continue
-        results.append(_call_once(fn, item, make_self, index, trace, CALL_TIMEOUT_S if timeouts < 2 else SHORT_TIMEOUT_S))
-    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None}
+        limit = CALL_TIMEOUT_S if timeouts < 2 or spec.get("full_limit") else SHORT_TIMEOUT_S
+        position = indexes[index] if index < len(indexes) else index
+        results.append(_call_once(fn, item, make_self, position, trace, limit))
+        seconds[-1], limits[-1] = LAST_CALL["seconds"], limit
+    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None, "seconds": seconds, "limits": limits}
     if gate:
         out["gate_lines"] = sorted(gate_hits)
     if recipe:
@@ -948,9 +960,13 @@ def _gate_spec(spec, root_real):
     return os.path.realpath(os.path.join(root_real or ".", g["file"])), lines
 
 
+LAST_CALL = {"seconds": None}  # how long the last _call_once call ran (time.monotonic is never frozen)
+
+
 def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CALL_TIMEOUT_S) -> dict:
     """One input through fn, with a fresh seed, clock and instance. The outcome as the comparison reads it."""
     start = len(BLOCKS)
+    LAST_CALL["seconds"] = None
     reset_determinism()
     lg_stubs.reset()
     try:
@@ -963,7 +979,11 @@ def _call_once(fn, item, make_self, index: int, trace=None, seconds: float = CAL
         _IN_CALL["active"] = True
         frozen_datetime_module(True)
         try:
-            value = _with_timeout(lambda: _finish(fn(*pos, **kw)), seconds)
+            began = time.monotonic()
+            try:
+                value = _with_timeout(lambda: _finish(fn(*pos, **kw)), seconds)
+            finally:
+                LAST_CALL["seconds"] = round(time.monotonic() - began, 4)
         finally:
             frozen_datetime_module(False)
             _IN_CALL["active"] = False

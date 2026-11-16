@@ -142,7 +142,7 @@ def test_new_side_hang_is_not_remembered(tmp_path, make_cfg):
     assert [d.qualname for d in deps] == ["caller"]
     results = diff.run(cfg, str(base), str(root), deps, harvest={})
     r = results[0]
-    assert r.status == diff.UNTESTED and "no input ran to completion" in r.reason and not r.baseline_unrunnable
+    assert r.status == diff.SLOWDOWN and not r.baseline_unrunnable  # Task 6.6: a new-only hang is a slowdown
     data = ledger.fresh("s")
     engine.record(cfg, data, results)
     assert "pkg/use.py::caller" not in data["callers_unrunnable"]

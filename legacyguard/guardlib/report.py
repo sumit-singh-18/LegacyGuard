@@ -6,7 +6,7 @@ from pathlib import Path
 
 from guardlib import ledger
 
-ORDER = {ledger.FAILURE: 0, ledger.DIFFERENCE: 1, ledger.UNTESTED: 2, ledger.RISK: 3, ledger.VERIFIED: 4}
+ORDER = {ledger.FAILURE: 0, ledger.DIFFERENCE: 1, ledger.SLOWDOWN: 2, ledger.UNTESTED: 3, ledger.RISK: 4, ledger.VERIFIED: 5}
 HIDDEN_STATES = {"superseded"}
 STATE_NOTE = {"open": "open", "applied": "edit went through", "resolved": "turned back: re-run matches baseline", "waived": "waived by developer",
               "not_applied": "edit did not land", "blocked": "denied", "recorded": ""}
@@ -90,6 +90,15 @@ def story(data: dict) -> list[dict]:
                 steps.append({"kind": "checked", "id": f["id"], "text": f"{name} was not edited; it {f['via']}, so it was run too, and old and new code agree: {f['evidence']}."})
             else:
                 steps.append({"kind": "checked", "id": f["id"], "text": f"{name} changed, and old and new code agree: {f['evidence']}."})
+        elif f["kind"] == "slowdown" and f["state"] != "superseded":
+            # Task 6.6: an input that timed out only in the new code. Evidence, never a wrong result.
+            how = {"resolved": " Claude revised it, and the guard re-ran it without the slowdown.",
+                   "waived": " You accepted it with /legacyguard:waive."}.get(f["state"], "")
+            s = (f.get("slowdowns") or [{}])[0]
+            what = (f"the new code ran past {s['new_limit_s']:g} s on `{_clean(s['call'])[:160]}` while the old code finished in "
+                    f"{max(s['old_seconds'], 0.001):.3f} s") if s.get("call") else _clean(f["evidence"])[:260]
+            steps.append({"kind": "slowdown", "id": f["id"],
+                          "text": f"{name} ran slower after the edit: {what}. This is a slowdown, not a proof of a wrong result.{how}"})
         elif f["kind"] == "untested" and f["state"] != "superseded":
             why = _clean(f["evidence"]).replace("untested because: ", "").replace("untested because it ", "it ")[:160]
             steps.append({"kind": "unchecked", "id": f["id"], "text": f"{name} changed but could not be checked by running it: {why}."})
@@ -130,7 +139,7 @@ def _skipped_steps(data: dict) -> list[dict]:
 
 
 STORY_LABEL = {"asked": "You asked", "broke": "What broke", "fixed": "What fixed it", "open": "Needs you", "accepted": "Accepted", "checked": "Checked",
-               "unchecked": "Not checked", "asked_you": "Asked you", "blocked": "Blocked"}
+               "unchecked": "Not checked", "asked_you": "Asked you", "blocked": "Blocked", "slowdown": "Slower"}
 
 
 def render(data: dict, cfg) -> str:
@@ -161,6 +170,8 @@ def summary(data: dict, cfg, path: Path | None = None) -> str:
     open_diff = sum(1 for f in visible(data) if f["status"] == ledger.DIFFERENCE and f["state"] == "open")
     parts = [f"{c[ledger.VERIFIED]} verified pass", f"{c[ledger.FAILURE]} confirmed failure", f"{open_diff} open behavior difference", f"{turned_back} turned back",
              f"{c[ledger.UNTESTED]} untested", f"{c[ledger.RISK]} potential risk"]
+    if c[ledger.SLOWDOWN]:
+        parts.append(f"{c[ledger.SLOWDOWN]} slowdown{'s' if c[ledger.SLOWDOWN] != 1 else ''} (not a proof of a wrong result)")
     text = "LegacyGuard: " + ", ".join(parts) + f". Prompts {data['prompts_used']} of {cfg.budget}, wake-ups {data['wakeups']}."
     return text + (f" Report: {path}" if path else "")
 
