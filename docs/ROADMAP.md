@@ -304,6 +304,28 @@ README.
 | 6.6 | A guarded "slowdown" result for timeouts only in the new code (never counted as a detection) | new evidence kind (youtube-dl 10) |
 | 6.7 | Held-out corpus + validation run 3 on both sets | generalisation |
 
+**Sprint 6.8, general runnability (added 2026-11-15 from validation run 3; reviewer-agreed ahead of Sprint 7).**
+Run 3 left 8 of 10 held-out bugs unchecked: the guard could not run the code. Nothing in Sprint 7 can be measured
+until it can. Success metric: the **unchecked share** on both sets first, detections second. All fixes are general;
+fixtures are built from generic shapes, and no holdout bug number appears in commits or tests.
+
+| Task | What | Class from run 3 |
+|---|---|---|
+| 6.8a | Allow writes during import and input setup but redirect them (scratch HOME/XDG_CACHE_HOME, repo cache dirs as scratch); keep blocking during the call | import blocked by a file write (black, tornado) |
+| 6.8b | `bytes`/`bytearray`/`memoryview` input builders | no inputs for the signature |
+| 6.8c | Build `self` as a last resort (`object.__new__` plus defaults, carved `self`, placeholders for required params); results labelled weaker | `self` cannot be built |
+| 6.8d | Classify old-vs-old disagreement (addresses in repr, threads, time) and normalise; report "non-deterministic" with the cause | old code disagrees with itself |
+| 6.8e | Diagnose, then feed unreached-line and guard info back into input generation (hardest, least certain) | inputs never reach the edit |
+| 6.8f | New fresh held-out set (10 bugs, other projects, chosen before the fixes) and run 4 | the current holdout set has been seen |
+
+**Sprint 7 order after review:** 6.8 first; then 7.4 (A2 throwaway cwd; acceptance includes "black imports" since a
+cwd change alone does not stop an absolute-path write) and 7.2 (route correctness; a route is not "verified" when
+every request returned the same early 4xx; reached N of M rule); then 7.1 (impact on the resolved graph, last, no
+bearing on the unchecked rate). Django route diffing (7.5) and `/legacyguard:characterize` (7.7) wait for the
+runnability and determinism fixes; contract tools (7.6) are independent and may run in parallel, split into
+oasdiff and `makemigrations --check` first, squawk and buf optional. Unverified research claims (bwrap
+`--tmp-overlay` flag and version, oasdiff JSON fields, `cp -c` behaviour) must be confirmed before building.
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; `/legacyguard:impact` and the MCP `impact` tool on the
 resolved call graph; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff

@@ -77,3 +77,8 @@ until the reviewer passes it. Newest entries at the bottom.
   them; map, report, CI comment and backtest did not know the status; waive refused it), PASS in round 2. Merged
   de6f5a2 (278 tests on Python 3.12 and 3.10).
 - Next: Task 6.7, validation run 3 on the tuning set and the held-out set.
+- Task 6.7 (validation run 3): harness reviewed PASS and committed (2236b5d). Run 3 done: held-out 1 of 2 checked
+  detected without fix tests (8 of 10 unchecked), tuning 8 of 9 / 9 of 9, no false alarms. The guard does not
+  generalize yet: five general failure classes (import file write, `self` not buildable, non-deterministic old
+  code, inputs not reaching the edit, no `bytes` inputs). Report docs/validation/2026-11-run3.md (draft, review
+  pending); README headline now the held-out number. Sprint 7 research sent to review.

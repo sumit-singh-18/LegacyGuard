@@ -168,18 +168,22 @@ claude plugin marketplace remove turnback-lab
 
 ## How well it works (measured on real bugs)
 
-Nine real bugs from [BugsInPy](https://github.com/soarsmu/BugsInPy) in youtube-dl, tqdm and thefuck were put
-back into their fixed code, and the guard was asked whether the code still behaves the same
-([write-up](docs/validation/2026-11-run2.md)):
+Real bugs from [BugsInPy](https://github.com/soarsmu/BugsInPy) were put back into their fixed code, and the guard
+was asked whether the code still behaves the same ([write-up](docs/validation/2026-11-run3.md)). The headline is
+the **held-out** set: ten bugs in tornado, black, httpie, cookiecutter and luigi that the guard was never tuned on.
 
-| | Caught |
+| Held-out set (10 bugs, not tuned on) | Caught |
 |---|---|
-| Without the regression test the fix added (the realistic case) | 4 of the 9 bugs (4 of the 5 it could check) |
-| With that test present | 6 of the 9 bugs (6 of the 6 it could check) |
-| False alarms | none |
+| Without the regression test the fix added (the realistic case) | 1 of the 2 it could check; **8 of the 10 it could not check** |
+| With that test present | 1 of the 3 it could check; 7 could not be checked (1 of 10 either way) |
+| False alarms | not measured in this run |
 
-Where it could not check a bug, it says so instead of reporting "no difference". These numbers come from a
-small sample and will change as more projects are added.
+So on code it had never seen, the guard found 1 bug in 10. In most cases it could not run the changed code at all
+(a module that writes a cache file on import, objects it could not build, code that gave different answers
+between two identical runs). It says so instead of reporting "no difference". On the nine bugs it was built
+against (youtube-dl, tqdm, thefuck) it catches 8 without the fix's test and 9 with it, but that number reflects
+tuning and does not predict unseen code. These numbers come from a small sample. Fixing the failure classes
+listed in the write-up is the next work.
 
 ## What it does not do
 
