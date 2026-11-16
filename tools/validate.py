@@ -384,7 +384,7 @@ def classify(kind: str, functions: list[dict], bug_files: list[str]) -> dict:
     """Verdict and the function lists behind it.
 
     For a bug case only functions in the bug's files, or callers of them (via), count: a difference elsewhere goes
-    to other_different. The verdict is "unchecked" when no counted function was verified, different or broken
+    to other_different. The verdict is "unchecked" when no counted function was verified, slowdown, different or broken
     (nothing was really compared), so it is not mistaken for quiet.
     """
     if kind == "bug":
@@ -395,7 +395,7 @@ def classify(kind: str, functions: list[dict], bug_files: list[str]) -> dict:
     bad = (diff.DIFFERENT, diff.BROKEN)
     different = [f for f in relevant if f["status"] in bad]
     other = [f for f in functions if f["status"] in bad and f not in relevant]
-    checked = any(f["status"] in (diff.DONE, *bad) for f in relevant)
+    checked = any(f["status"] in (diff.DONE, diff.SLOWDOWN, *bad) for f in relevant)  # a slowdown was compared too
     verdict = DETECTED if different else QUIET if checked else UNCHECKED
     # A slowdown (an input that timed out only in the new code) is evidence, not a detection: listed apart, never in the verdict.
     slowdowns = [f for f in functions if f.get("slowdowns")]
@@ -669,7 +669,7 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
     for mode in modes:
         title = MODE_LABEL[mode].capitalize() + (" (headline)" if mode == WITHOUT and len(modes) > 1 else "")
         lines += [f"### {title}", "", "```", metrics_text(by_mode[mode]), "```", ""]
-    lines += ["Rates count only checked cases. A case is \"unchecked\" when no function in it was verified, different or "
+    lines += ["Rates count only checked cases. A case is \"unchecked\" when no function in it was verified, slowdown, different or "
               "broken (nothing was really compared); it and errors are listed separately. "
               "Agreement is evidence on the inputs tried, not a proof.", "",
               "The input shown per case is the counterexample listed first, which the guard picks from tests, then examples; "
@@ -702,7 +702,7 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
         if r["error"]:
             lines.append(f"- Error: {_cell(r['error'])}")
         if r["verdict"] == UNCHECKED:
-            lines.append("- Unchecked: no function in this case was verified, different or broken.")
+            lines.append("- Unchecked: no function in this case was verified, slowdown, different or broken.")
         for w in r["warnings"]:
             lines.append(f"- Warning: {_cell(w)}")
         lines += [_diff_line("Different", f) for f in r["different"]]

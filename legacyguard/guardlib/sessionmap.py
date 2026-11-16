@@ -14,7 +14,7 @@ from guardlib import impact, ledger, report
 from indexer import db as idb
 from indexer import names
 
-CHANGED_KINDS = ("behavior_difference", "verified", "untested")
+CHANGED_KINDS = ("behavior_difference", "slowdown", "verified", "untested")
 MAX_CALLERS = 30
 NOTE = ("The guard runs each edited function and up to six functions that call it directly; the rest of the map is who depends on the change. "
         "Edges come from matching function names, so one can be wrong and dynamic calls are missing. "
@@ -25,8 +25,10 @@ NOTE = ("The guard runs each edited function and up to six functions that call i
 def _rank(f: dict) -> int:
     """Which finding speaks for a changed function: open evidence first, turned-back history last."""
     if f["status"] in (ledger.DIFFERENCE, ledger.FAILURE):
-        return {"open": 0, "waived": 1}.get(f["state"], 4)
-    return 2 if f["status"] == ledger.UNTESTED else 3
+        return {"open": 0, "waived": 1}.get(f["state"], 5)
+    if f["status"] == ledger.SLOWDOWN:  # Task 6.6: evidence, ranked after differences and before untested
+        return 2 if f["state"] in ("open", "waived") else 5
+    return 3 if f["status"] == ledger.UNTESTED else 4
 
 
 def _changed(data: dict) -> dict[tuple, dict]:
@@ -135,9 +137,9 @@ def build(cfg, data: dict) -> dict:
 
 CSS = r"""
 :root{--bg:#f7f7f5;--panel:#fff;--ink:#1d2125;--muted:#5d6670;--line:#d4d8dc;--soft:#eef0f1;--edge:#8b949e;
---ok:#1a7f5a;--ok-bg:#e3f4ea;--fail:#c81e4a;--fail-bg:#fde6ec;--diff:#c2410c;--diff-bg:#fdeadd;--risk:#9a6406;--risk-bg:#fcf1cf;--unt:#5b55b0;--unt-bg:#eceafb}
+--ok:#1a7f5a;--ok-bg:#e3f4ea;--fail:#c81e4a;--fail-bg:#fde6ec;--diff:#c2410c;--diff-bg:#fdeadd;--risk:#9a6406;--risk-bg:#fcf1cf;--unt:#5b55b0;--unt-bg:#eceafb;--slow:#0e7490;--slow-bg:#dff3f7}
 @media (prefers-color-scheme:dark){:root{--bg:#14171a;--panel:#1d2125;--ink:#e8eaec;--muted:#a2abb3;--line:#3a4047;--soft:#272c31;--edge:#7b848d;
---ok:#4cc38a;--ok-bg:#16332a;--fail:#f5688d;--fail-bg:#451b28;--diff:#f0894f;--diff-bg:#44271a;--risk:#e0ad3f;--risk-bg:#40330f;--unt:#a9a2f2;--unt-bg:#2b2850}}
+--ok:#4cc38a;--ok-bg:#16332a;--fail:#f5688d;--fail-bg:#451b28;--diff:#f0894f;--diff-bg:#44271a;--risk:#e0ad3f;--risk-bg:#40330f;--unt:#a9a2f2;--unt-bg:#2b2850;--slow:#5cc8dc;--slow-bg:#123239}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 header{padding:16px 20px 4px}h1{font-size:19px;margin:0 0 2px}h2{font-size:14px;margin:22px 0 8px}.meta{color:var(--muted);font-size:13px;margin:0}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0}.chip{border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12.5px;background:var(--panel);white-space:nowrap}
@@ -151,7 +153,7 @@ code,pre{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}pre{white-spa
 svg text{fill:var(--ink)}.col{font-size:12px;fill:var(--muted)}.nm{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace}.sb{font-size:11px;fill:var(--muted)}
 .nd{cursor:pointer}.nd rect{fill:var(--panel);stroke:var(--line);stroke-width:1}.nd:focus{outline:none}.nd:focus-visible rect,.nd.sel rect{stroke:var(--ink);stroke-width:2.5}
 .s-ok rect{fill:var(--ok-bg);stroke:var(--ok);stroke-width:2}.s-fail rect{fill:var(--fail-bg);stroke:var(--fail);stroke-width:2}.s-diff rect{fill:var(--diff-bg);stroke:var(--diff);stroke-width:2}
-.s-risk rect{fill:var(--risk-bg);stroke:var(--risk);stroke-width:2}.s-unt rect{fill:var(--unt-bg);stroke:var(--unt);stroke-width:2}
+.s-risk rect{fill:var(--risk-bg);stroke:var(--risk);stroke-width:2}.s-unt rect{fill:var(--unt-bg);stroke:var(--unt);stroke-width:2}.s-slow rect{fill:var(--slow-bg);stroke:var(--slow);stroke-width:2}
 .c-notest rect{fill:var(--risk-bg);stroke:var(--risk)}.c-unknown rect{stroke-dasharray:3 3}
 .e{fill:none;stroke:var(--edge);stroke-width:1.4}.e.guess{stroke-dasharray:5 4}.dim{opacity:.42}.fade{opacity:.3}
 table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;border-bottom:1px solid var(--soft);text-align:left;vertical-align:top;font-size:13px}th{color:var(--muted);font-weight:600;white-space:nowrap}
@@ -160,7 +162,7 @@ td.ev{overflow-wrap:anywhere;min-width:220px}tr.go{cursor:pointer}tr.go:hover td
 #story h2{margin:0 0 6px}#story ol{margin:0;padding:0;list-style:none}#story li{display:flex;gap:10px;padding:4px 0;align-items:baseline}
 .tag{flex:none;width:104px;font-size:12px;font-weight:600;border-radius:4px;padding:1px 8px;border:1px solid var(--line);background:var(--soft);text-align:center}
 .t-broke{background:var(--diff-bg);border-color:var(--diff)}.t-fixed,.t-checked{background:var(--ok-bg);border-color:var(--ok)}.t-open{background:var(--fail-bg);border-color:var(--fail)}
-.t-unchecked{background:var(--unt-bg);border-color:var(--unt)}.t-asked_you,.t-blocked,.t-accepted{background:var(--risk-bg);border-color:var(--risk)}#story code{background:var(--soft);padding:0 3px;border-radius:3px}
+.t-unchecked{background:var(--unt-bg);border-color:var(--unt)}.t-slowdown{background:var(--slow-bg);border-color:var(--slow)}.t-asked_you,.t-blocked,.t-accepted{background:var(--risk-bg);border-color:var(--risk)}#story code{background:var(--soft);padding:0 3px;border-radius:3px}
 .note{color:var(--muted);font-size:12.5px;padding:0 20px 22px;max-width:980px}.empty{padding:16px;color:var(--muted)}
 @media (max-width:980px){main{flex-direction:column}aside{width:100%;position:static;max-height:none}}
 """
@@ -170,17 +172,17 @@ const M=JSON.parse(document.getElementById('data').textContent),$=s=>document.qu
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const cut=(s,n)=>s.length>n?s.slice(0,n-1)+'…':s;
 const N=new Map(M.nodes.map(n=>[n.id,n])),W=224,H=46,GX=78,GY=12,PX=44,PY=34;
-const SC={'Verified pass':'ok','Confirmed failure':'fail','Behavior difference — intent unknown':'diff','Potential risk (static only)':'risk','Untested':'unt'};
+const SC={'Verified pass':'ok','Confirmed failure':'fail','Behavior difference — intent unknown':'diff','Potential risk (static only)':'risk','Untested':'unt','Slowdown — not a proof of a wrong result':'slow'};
 let sel=null,fade=false;
-const cls=n=>n.kind==='changed'?'s-'+(SC[n.status]||'unt'):(n.ran&&n.ran.status==='agree'?'s-ok':(n.ran&&n.ran.status==='differ'?'s-diff':(n.tests===false?'c-notest':(n.tests===true?'c-test':'c-unknown'))));
+const cls=n=>n.kind==='changed'?'s-'+(SC[n.status]||'unt'):(n.ran&&n.ran.status==='agree'?'s-ok':(n.ran&&n.ran.status==='differ'?'s-diff':n.ran&&n.ran.status==='slow'?'s-slow':(n.tests===false?'c-notest':(n.tests===true?'c-test':'c-unknown'))));
 function sub(n){let t;if(n.kind==='changed')t=(n.affected?'not edited · ':'')+n.status+(n.turned_back?' · turned back':(n.state==='waived'?' · waived':''));
  else if(n.skipped)t='not run: '+n.skipped.reason;
- else if(n.ran)t=n.ran.status==='agree'?'run too: old and new agree':(n.ran.status==='differ'?'run too: result changed':'tried, could not be run');
+ else if(n.ran)t=n.ran.status==='agree'?'run too: old and new agree':(n.ran.status==='differ'?'run too: result changed':(n.ran.status==='slow'?'run too: slower in the new code':'tried, could not be run'));
  else t=n.tests===false?'no test reaches it':(n.tests===true?'tests reach it':'test reach unknown');
  return n.routes.length?t+' · '+n.routes[0]:t}
 function layout(){const cols=[];for(const n of M.nodes)(cols[n.layer]=cols[n.layer]||[]).push(n);const pos=new Map();
  for(let c=0;c<cols.length;c++){const col=cols[c]=cols[c]||[];
-  if(c>0){const rank=n=>Math.min(1e9,...M.edges.filter(e=>e.from===n.id&&pos.has(e.to)).map(e=>pos.get(e.to).y));const ran=n=>n.ran?(n.ran.status==='differ'?0:(n.ran.status==='agree'?1:2)):3;col.sort((a,b)=>(ran(a)-ran(b))||(rank(a)-rank(b))||a.id.localeCompare(b.id))}
+  if(c>0){const rank=n=>Math.min(1e9,...M.edges.filter(e=>e.from===n.id&&pos.has(e.to)).map(e=>pos.get(e.to).y));const ran=n=>n.ran?(n.ran.status==='differ'?0:(n.ran.status==='slow'?0.5:(n.ran.status==='agree'?1:2))):3;col.sort((a,b)=>(ran(a)-ran(b))||(rank(a)-rank(b))||a.id.localeCompare(b.id))}
   col.forEach((n,r)=>pos.set(n.id,{x:PX+c*(W+GX),y:PY+r*(H+GY)}))}
  return{cols,pos}}
 function linked(id){const out=new Set([id]);for(const[a,b]of[['from','to'],['to','from']]){const q=[id];while(q.length){const x=q.pop();for(const e of M.edges)if(e[a]===x&&!out.has(e[b])){out.add(e[b]);q.push(e[b])}}}return out}
@@ -213,6 +215,7 @@ function panel(){const a=$('aside'),n=sel&&N.get(sel);if(!n){a.innerHTML='<p cla
   let c;if(n.skipped)c='No. It was not run: '+esc(n.skipped.reason)+'. It was not tried, so nothing is known about it from execution.';
   else if(n.ran&&n.ran.status==='agree')c='Yes. It was run with the edited code, and old and new agree on '+esc(n.ran.inputs)+' inputs. That is not a proof.';
   else if(n.ran&&n.ran.status==='differ')c='Yes, and its result changed: '+(n.ran.example?'<pre>'+esc(n.ran.example)+'</pre>':'see the findings.');
+  else if(n.ran&&n.ran.status==='slow')c='Yes. It was run with the edited code and was slower: '+(n.ran.example?'<pre>'+esc(n.ran.example)+'</pre>':'see the findings.')+' That is a slowdown, not a proof of a wrong result.';
   else if(n.ran)c='It was tried and could not be run'+(n.ran.reason?': '+esc(n.ran.reason):'')+'.';
   else if(n.layer<=2){const b=M.caller_budget||[8,12];c='No. For each edit the guard runs up to '+b[0]+' callers, one or two steps away, within '+b[1]+' functions per check; callers more likely to run go first. This one was not among them.'}
   else c='No. Only callers one or two steps away from the edited function are run.';

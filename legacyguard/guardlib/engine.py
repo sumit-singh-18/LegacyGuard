@@ -330,12 +330,12 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
         via = {"via": r.via, "via_file": r.via_file, **({"callees": r.callees} if r.callees else {})} if r.via else {}
         if r.via:
             # What happened to each caller is kept for the session map, whether or not it becomes a finding.
-            outcome = {differ.DONE: "agree", differ.DIFFERENT: "differ", differ.BROKEN: "differ"}.get(r.status, "not_run")
+            outcome = {differ.DONE: "agree", differ.DIFFERENT: "differ", differ.BROKEN: "differ", differ.SLOWDOWN: "slow"}.get(r.status, "not_run")
             data.setdefault("callers_run", {})[f"{r.file}::{r.qualname}"] = {
                 "status": outcome, "inputs": r.inputs_compared, "via": r.via, "reason": (r.reason or "")[:160],
                 "statements": [r.statements_reached, r.statements_total],
                 "example": (f"{r.differences[0]['call']} gave {r.differences[0]['before']} before and {r.differences[0]['after']} after"
-                            if r.differences else "")[:300]}
+                            if r.differences else differ.slowdown_text(r.slowdowns[0]) if r.status == differ.SLOWDOWN and r.slowdowns else "")[:300]}
             # Remembered so later edits in this session rank it last (dependents, roadmap 6.5).
             try:
                 ledger.note_caller_outcome(data, f"{r.file}::{r.qualname}", _own_hash(cfg, r.file, r.qualname),

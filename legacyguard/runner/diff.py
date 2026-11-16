@@ -1233,11 +1233,11 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
 # ---- slowdown (Task 6.6, roadmap 3d) ----
 # An input that times out only in the new code (youtube-dl 10: the buggy regex backtracks for 23 s, the old code returns
 # at once). Timing is noisy (the per-call limit drops to 0.5 s after two timeouts, and three workers share the machine),
-# so a candidate needs both old runs to have returned within a small share of the full limit, and is reported only after
+# so a candidate needs the old runs to have finished (returned or raised) within a small share of the full limit, and is reported only after
 # each version is re-run alone on that input with the full limit: the new code must time out again and the old code
 # must still be fast. A reduced limit in the first run never decides anything by itself; the re-run does.
 CALL_TIMEOUT_S = 5            # matches lg_worker.CALL_TIMEOUT_S, the full per-call limit
-SLOWDOWN_OLD_SHARE = 0.1      # both old runs returned within this share of the full limit
+SLOWDOWN_OLD_SHARE = 0.1      # the old runs finished within this share of the full limit
 MAX_SLOWDOWN_CHECKS = 2       # inputs re-run per check (each can take the full limit in the new code)
 SLOWDOWN_MARGIN_S = 30        # process start and imports, on top of the calls themselves
 
@@ -1263,7 +1263,7 @@ def slowdown_candidates(items: list[dict], a: dict, b: dict | None, n: dict, use
         old = [_fast_in(a, i)] + ([_fast_in(b, i)] if use_self_diff else [])
         if any(s is None for s in old):
             continue
-        out.append({"index": i, "reduced": limits[i] < CALL_TIMEOUT_S, "old_seconds": max(old), "source": item.get("source") or ""})
+        out.append({"index": i, "reduced": limits[i] < CALL_TIMEOUT_S, "old_seconds": max(old), "old_runs": len(old), "source": item.get("source") or ""})
     return out
 
 
@@ -1317,7 +1317,7 @@ def confirm_slowdowns(cfg, py: str, baseline_root: str, work_root: str, paths_ol
                     continue
                 r = results[t.qualname]
                 r.slowdowns.append({"call": show_call(t, by_key[key]["inputs"][c["index"]]), "new_limit_s": CALL_TIMEOUT_S,
-                                    "old_seconds": max(old_s, c["old_seconds"]), "source": c["source"]})
+                                    "old_seconds": max(old_s, c["old_seconds"]), "source": c["source"], "old_runs": c.get("old_runs", 1)})
                 if r.status not in (DIFFERENT, BROKEN):
                     r.status = SLOWDOWN
     except Exception:  # noqa: BLE001 - a slowdown check that cannot run must never change or hide the diff's result
@@ -1325,7 +1325,7 @@ def confirm_slowdowns(cfg, py: str, baseline_root: str, work_root: str, paths_ol
 
 
 def slowdown_text(s: dict) -> str:
-    return (f"the new code ran past {s['new_limit_s']:g} s on {s['call']} while the old code returned in {max(s['old_seconds'], 0.001):.3f} s; "
+    return (f"the new code ran past {s['new_limit_s']:g} s on {s['call']} while the old code finished in {max(s['old_seconds'], 0.001):.3f} s; "
             "this is a slowdown, not a proof of a wrong result")
 
 
@@ -1349,7 +1349,8 @@ def format_note(results: list[Result]) -> str:
             lines.append(f"LegacyGuard could not check {r.subject} by running it: {r.reason}. " + (f"{carved}. " if carved else "") +
                          "Nothing is known about this edit from execution.")
         elif r.status == SLOWDOWN and r.slowdowns:
-            more = f" ({len(r.slowdowns) - 1} more such input)" if len(r.slowdowns) > 1 else ""
+            extra = len(r.slowdowns) - 1
+            more = f" ({extra} more such input{'s' if extra > 1 else ''})" if extra else ""
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: {slowdown_text(r.slowdowns[0])}{more}. "
                          "Each version was re-run alone on that input with the full limit and did the same again.")
     if len(own) > 4:
@@ -1404,10 +1405,12 @@ def format_slowdown_wake(result: Result, finding_id: str) -> str:
     if result.via:
         lines.append(f"This function was not edited. It {result.via}, which was edited in {result.via_file}.")
     for s in result.slowdowns[1:MAX_SHOWN]:
-        lines.append(f"Also on {s['call']}: the new code ran past {s['new_limit_s']:g} s, the old code returned in {max(s['old_seconds'], 0.001):.3f} s.")
-    lines.append(f"Both runs of the code before the edit returned on this input within {SLOWDOWN_OLD_SHARE:.0%} of the {CALL_TIMEOUT_S} s per-call "
+        lines.append(f"Also on {s['call']}: the new code ran past {s['new_limit_s']:g} s, the old code finished in {max(s['old_seconds'], 0.001):.3f} s.")
+    # With self-diff off there was one old run in the first pass, not two.
+    runs = "Both runs of the code before the edit" if first.get("old_runs", 1) >= 2 else "The run of the code before the edit"
+    lines.append(f"{runs} finished on this input within {SLOWDOWN_OLD_SHARE:.0%} of the {CALL_TIMEOUT_S} s per-call "
                  "limit; each version was then re-run alone on it with the full limit, and the new code timed out again while the old code "
-                 "returned again. Timing depends on the machine. This is not counted as a behavior difference and does not block the edit.")
+                 "finished again. Timing depends on the machine. This is not counted as a behavior difference and does not block the edit.")
     if result.reason:
         lines.append(f"Also: {result.reason}.")
     lines.append("Common causes are a regular expression that backtracks (nested or overlapping quantifiers) and a loop that no longer "

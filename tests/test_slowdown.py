@@ -53,10 +53,11 @@ def test_new_only_backtracking_is_a_slowdown_not_a_difference(tmp_path, make_cfg
     assert 0 <= s["old_seconds"] <= diff.CALL_TIMEOUT_S * diff.SLOWDOWN_OLD_SHARE
     text = diff.slowdown_text(s)
     assert text.startswith(f"the new code ran past {diff.CALL_TIMEOUT_S} s on is_word(")
-    assert "while the old code returned in" in text and "this is a slowdown, not a proof of a wrong result" in text
+    assert "while the old code finished in" in text and "this is a slowdown, not a proof of a wrong result" in text
     wake = diff.format_wake(r, "LG-1")
     assert wake.startswith("LegacyGuard slowdown [LG-1]") and "LegacyGuard behavior difference" not in wake
     assert "not a proof of a wrong result" in wake and "does not block" in wake
+    assert s["old_runs"] == 2 and "Both runs of the code before the edit finished" in wake
 
 
 def test_both_versions_slow_is_nothing(tmp_path, make_cfg):
@@ -197,7 +198,7 @@ def test_harness_lists_slowdowns_separately():
     f = validate._function(_slow_result())
     assert f["status"] == diff.SLOWDOWN and f["slowdowns"]
     got = validate.classify("bug", [f], ["m.py"])
-    assert got["verdict"] != validate.DETECTED and not got["different"]
+    assert got["verdict"] == validate.QUIET and not got["different"]
     assert got["slowdowns"] == [f]
     rec = {"name": "case1", "kind": "bug", "expect": "detected", "verdict": got["verdict"], "match": False, "seconds": 1.0,
            "functions": [f], "mutants_killed": 0, "mutants_total": 0, "slowdowns": got["slowdowns"]}
@@ -210,3 +211,116 @@ def test_harness_lists_slowdowns_separately():
     md = validate.markdown([{**full, **rec}], {"with": m}, "manifest.json")
     assert "- Slowdown (not counted as a detection): `m.py::f`: the new code ran past 5 s on f('aaa!')" in md
     assert "Different:" not in md
+
+
+# ---- review fixes ----
+
+def test_slowdown_counts_as_checked_and_quiet():
+    f = validate._function(_slow_result())
+    assert validate.classify("bug", [f], ["m.py"])["verdict"] == validate.QUIET
+    assert validate.classify("change", [f], [])["verdict"] == validate.QUIET
+    # Something else differing still decides the verdict.
+    other = {"file": "m.py", "qualname": "g", "status": diff.DIFFERENT}
+    assert validate.classify("change", [f, other], [])["verdict"] == validate.DETECTED
+    rec = {"name": "c", "kind": "change", "expect": "quiet", "verdict": "quiet", "match": True, "seconds": 1.0,
+           "functions": [f], "mutants_killed": 0, "mutants_total": 0, "slowdowns": [f]}
+    m = validate.metrics([rec])
+    assert m["checked"] == 1 and m["false_alarm"] == {"alarms": 0, "total": 1, "rate": 0.0}
+
+
+def test_stop_does_not_rerun_a_recorded_slowdown(tmp_path, make_cfg, monkeypatch):
+    from guardlib import audit
+    root = write_tree(tmp_path / "p", {"m.py": "def f(x):\n    return x\n"})
+    cfg = make_cfg(root)
+    data = ledger.fresh("s")
+    engine.record(cfg, data, [_slow_result()])
+    t = diff.Target("m.py", "f", "function", [], "h1")
+    monkeypatch.setattr(engine, "is_guarded_source", lambda cfg, rel: True)
+    monkeypatch.setattr(engine, "targets_for", lambda cfg, rel, data: [t])
+
+    def no_run(*a, **k):
+        raise AssertionError("Stop re-ran a function whose slowdown is already recorded for this code")
+    monkeypatch.setattr(audit.differ, "run", no_run)
+    audit._behavior_findings(cfg, data, ["m.py"])
+    assert next(f for f in data["findings"] if f["kind"] == "slowdown")["state"] == "open"
+
+
+def test_session_map_and_report_show_slowdowns(tmp_path, make_cfg):
+    from guardlib import report, sessionmap
+    root = write_tree(tmp_path / "p", {"m.py": "def f(x):\n    return x\n", "c.py": "def c():\n    return 1\n"})
+    cfg = make_cfg(root)
+    data = ledger.fresh("s")
+    caller = diff.Result("c.py", "c", diff.SLOWDOWN, "hc", inputs_compared=1, via="calls g", via_file="n.py", callees=["g"],
+                         slowdowns=[{"call": "c()", "new_limit_s": 5, "old_seconds": 0.002, "source": "generated"}])
+    engine.record(cfg, data, [_slow_result(), caller])
+    assert data["callers_run"]["c.py::c"]["status"] == "slow"
+    assert "ran past 5 s" in data["callers_run"]["c.py::c"]["example"]
+    model = sessionmap.build(cfg, data)
+    node = next(n for n in model["nodes"] if n["id"] == "m.py::f")
+    assert node["status"] == ledger.SLOWDOWN
+    html = sessionmap.render_html(model)
+    assert "'Slowdown — not a proof of a wrong result':'slow'" in html and ".s-slow rect" in html and "--slow-bg" in html
+    assert "run too: slower in the new code" in html and ".t-slowdown" in html
+    steps = [s for s in report.story(data) if s["kind"] == "slowdown"]
+    assert steps and "not a proof of a wrong result" in steps[0]["text"] and "f('aaa!')" in steps[0]["text"]
+    # The caller's own slowdown is a finding too: the function it reaches (g) showed nothing in this check.
+    assert "2 slowdowns (not a proof of a wrong result)" in report.summary(data, cfg)
+    assert "**Slower:**" in report.render(data, cfg)
+
+
+def test_backtest_maps_slowdown_without_a_wake(tmp_path, make_cfg, monkeypatch):
+    from guardlib import backtest
+    root = write_tree(tmp_path / "p", {"m.py": "def f(x):\n    return x\n"})
+    cfg = make_cfg(root)
+    monkeypatch.setattr(backtest.differ, "run", lambda *a, **k: [_slow_result()])
+    rec = backtest.evaluate_edit(cfg, root, root, "m.py", "def f(x):\n    return x\n", "def f(x):\n    return x + 0\n", {})
+    assert [f["status"] for f in rec["functions"]] == [ledger.SLOWDOWN]
+    assert rec["wake"] is False
+
+
+def test_ci_lists_slowdowns_and_never_fails_on_them(tmp_path, make_cfg):
+    from guardlib import ci
+    root = write_tree(tmp_path / "p", {"m.py": "def f(x):\n    return x\n"})
+    cfg = make_cfg(root)
+    out = ci.Outcome(base="abcdef1234", results=[_slow_result()])
+    text = ci.report(cfg, out)
+    assert "<details><summary>Slower in the new code (not counted as a difference)</summary>" in text
+    assert diff.slowdown_text(_slow_result().slowdowns[0]) in text and "**0 behave differently**" in text
+    assert all(ci.exit_code(cfg, out, fail_on) == 0 for fail_on in ("difference", "any", "none"))
+
+
+def test_waived_slowdown_does_not_wake_again(tmp_path, make_cfg, monkeypatch):
+    import argparse
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent / "legacyguard" / "scripts"))
+    import lg_more
+    root = write_tree(tmp_path / "p", {"m.py": "def f(x):\n    return x\n"})
+    cfg = make_cfg(root)
+    with ledger.locked(cfg.state_dir) as data:
+        assert engine.record(cfg, data, [_slow_result()])
+        fid = next(f["id"] for f in data["findings"] if f["kind"] == "slowdown")
+    monkeypatch.setattr(lg_more, "_cfg", lambda: cfg)
+    assert lg_more.cmd_waive(argparse.Namespace(id=fid, reason="expected: larger inputs now")) == 0
+    assert ledger.load(cfg.state_dir)["findings"][0]["state"] == "waived"
+    later = ledger.fresh("s2")  # a new session on the same code: the waiver holds and nothing wakes
+    assert engine.record(cfg, later, [_slow_result()]) == []
+    assert next(f for f in later["findings"] if f["kind"] == "slowdown")["state"] == "waived"
+
+
+def test_wording_for_one_old_run_and_plural_note():
+    one = diff.Result("m.py", "f", diff.SLOWDOWN, "h",
+                      slowdowns=[{"call": "f(1)", "new_limit_s": 5, "old_seconds": 0.01, "source": "tests", "old_runs": 1}])
+    wake = diff.format_wake(one, "LG-2")
+    assert "The run of the code before the edit finished" in wake and "Both runs" not in wake
+    two = diff.Result("m.py", "f", diff.SLOWDOWN, "h", slowdowns=[{**one.slowdowns[0], "old_runs": 2}] * 3)
+    assert "Both runs of the code before the edit finished" in diff.format_wake(two, "LG-3")
+    assert "(2 more such inputs)" in diff.format_note([two])
+    assert "(1 more such input)" in diff.format_note([diff.Result("m.py", "f", diff.SLOWDOWN, "h", slowdowns=two.slowdowns[:2])])
+    text = diff.slowdown_text(one.slowdowns[0])
+    assert "while the old code finished in" in text and "returned" not in text
+
+
+def test_call_limit_matches_the_worker():
+    # Read from the file, not imported: importing the worker into the guard's own process is not its job.
+    worker = (Path(__file__).resolve().parent.parent / "legacyguard" / "runner" / "lg_worker.py").read_text()
+    import re
+    assert int(re.search(r"^CALL_TIMEOUT_S = (\d+)", worker, re.M).group(1)) == diff.CALL_TIMEOUT_S

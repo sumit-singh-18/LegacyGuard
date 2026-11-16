@@ -65,7 +65,7 @@ def _behavior_findings(cfg, data, changed):
         if not engine.is_guarded_source(cfg, rel):
             continue
         targets = engine.targets_for(cfg, rel, data)
-        checked = {(f["item"], f["code_hash"]) for f in data["findings"] if f["file"] == rel and f["kind"] in ("verified", "untested", "behavior_difference")
+        checked = {(f["item"], f["code_hash"]) for f in data["findings"] if f["file"] == rel and f["kind"] in ("verified", "untested", "behavior_difference", "slowdown")
                    and f["state"] in ("open", "recorded", "waived")}
         todo = [t for t in targets if (t.qualname, t.code_hash) not in checked]
         if todo:

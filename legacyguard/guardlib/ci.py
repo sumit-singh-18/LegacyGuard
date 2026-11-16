@@ -176,10 +176,12 @@ def report(cfg, out: Outcome) -> str:
     verified = [r for r in out.results if r.status == diff.DONE]
     untested = [r for r in out.results if r.status == diff.UNTESTED]
     waived = [r for r in out.results if r.status in (diff.DIFFERENT, diff.BROKEN) and r not in failing]
+    slower = [r for r in out.results if r.slowdowns]  # Task 6.6: listed apart, never failing the check
     lines = ["## LegacyGuard", "",
              f"Compared the changes against `{out.base[:10]}` by running old and new code on the same inputs: "
              f"**{len(failing)} behave differently**, {len(verified)} agree, {len(untested)} could not be checked"
-             + (f", {len(waived)} waived" if waived else "") + (f", {len(out.breaks)} contract or test changes" if out.breaks else "") + ".", ""]
+             + (f", {len(waived)} waived" if waived else "") + (f", {len(slower)} slower in the new code" if slower else "")
+             + (f", {len(out.breaks)} contract or test changes" if out.breaks else "") + ".", ""]
     if failing:
         lines += ["### Behaves differently", ""]
         for r in failing:
@@ -199,6 +201,11 @@ def report(cfg, out: Outcome) -> str:
         for r in verified:
             conf = diff.confidence_text(r)
             lines.append(f"- `{r.file}::{r.qualname}`: {r.inputs_compared} inputs" + (f"; {conf}" if conf else ""))
+        lines += ["", "</details>", ""]
+    if slower:
+        lines += ["<details><summary>Slower in the new code (not counted as a difference)</summary>", ""]
+        for r in slower:
+            lines += [f"- `{r.file}::{r.qualname}`: {diff.slowdown_text(s)}" for s in r.slowdowns[:3]]
         lines += ["", "</details>", ""]
     if untested:
         lines += ["<details><summary>Could not be checked</summary>", ""]

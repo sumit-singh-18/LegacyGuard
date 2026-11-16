@@ -38,8 +38,8 @@ def cmd_waive(args) -> int:
         f = ledger.find(data, args.id)
         if f is None:
             sys.exit(f"{args.id}: no such finding in this session. /legacyguard:status lists them.")
-        if f["kind"] not in ("behavior_difference", "contract_break"):
-            sys.exit(f"{f['id']} is {f['status']}; only behavior differences and contract breaks can be waived.")
+        if f["kind"] not in ("behavior_difference", "contract_break", "slowdown"):
+            sys.exit(f"{f['id']} is {f['status']}; only behavior differences, contract breaks and slowdowns can be waived.")
         waivers.add(cfg, f, reason)
         f["state"] = "waived"
     print(f"Waived {f['id']} ({f['subject']}). It stays quiet until this code changes. Recorded in .legacyguard/waivers.json.")

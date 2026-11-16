@@ -65,7 +65,9 @@ def evaluate_edit(cfg, old_root: Path, new_root: Path, rel: str, before: str | N
         targets = differ.changed_targets(rel, before, after)
         if targets:
             for r in differ.run(cfg, str(old_root), str(new_root), targets, harvest=harvest):
-                status = {differ.DONE: ledger.VERIFIED, differ.DIFFERENT: ledger.DIFFERENCE, differ.BROKEN: ledger.FAILURE, differ.UNTESTED: ledger.UNTESTED}[r.status]
+                # A slowdown (Task 6.6) is its own status and is not counted as a wake-up below.
+                status = {differ.DONE: ledger.VERIFIED, differ.DIFFERENT: ledger.DIFFERENCE, differ.BROKEN: ledger.FAILURE, differ.UNTESTED: ledger.UNTESTED,
+                          differ.SLOWDOWN: ledger.SLOWDOWN}.get(r.status, ledger.UNTESTED)
                 rec["functions"].append({"qualname": r.qualname, "status": status, "reason": r.reason, "inputs_compared": r.inputs_compared,
                                          "dropped": r.dropped_nondeterministic, "example": {k: r.differences[0][k] for k in ("call", "before", "after")} if r.differences else None})
             rec["wake"] = any(f["status"] in (ledger.DIFFERENCE, ledger.FAILURE) for f in rec["functions"])
