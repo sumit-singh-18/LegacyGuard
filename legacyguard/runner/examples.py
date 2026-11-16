@@ -162,7 +162,10 @@ def _from_text(text: str) -> list:
 def _walk_literals(tree: ast.AST) -> list:
     out: list = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, (str, int, float)) and not isinstance(node.value, bool):
+        if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+            if len(node.value) <= MAX_TEXT:
+                out.append(node.value)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (str, int, float)) and not isinstance(node.value, bool):
             if isinstance(node.value, str):
                 if len(node.value) <= MAX_TEXT:
                     out.append(node.value)
@@ -1186,7 +1189,7 @@ def _edit_side(text: str, changed: set[int]) -> tuple[list, list[dict]]:
     for node in ast.walk(tree):
         if not hasattr(node, "lineno") or not _in_spans(node, spans):
             continue
-        if isinstance(node, ast.Constant) and (node.value is None or isinstance(node.value, (str, int, float, bool))):
+        if isinstance(node, ast.Constant) and (node.value is None or isinstance(node.value, (str, bytes, int, float, bool))):
             literals.append((node.lineno, node.col_offset, node.value))
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "re" and node.func.attr in RE_FUNCS and node.args
@@ -1272,8 +1275,8 @@ def _edit_guards(text: str, changed: set[int]) -> list[tuple[str, list]]:
             # compared to len(x), not to x.
             if isinstance(atom, ast.Compare) and not any(isinstance(n, ast.Call) for n in ast.walk(atom)):
                 consts = [c.value for c in ast.walk(atom) if isinstance(c, ast.Constant)
-                          and (c.value is None or isinstance(c.value, (str, int, float, bool)))
-                          and not (isinstance(c.value, str) and len(c.value) > 40)]
+                          and (c.value is None or isinstance(c.value, (str, bytes, int, float, bool)))
+                          and not (isinstance(c.value, (str, bytes)) and len(c.value) > 40)]
             for name in dict.fromkeys(names):
                 have = found.setdefault(name, [])
                 for c in consts:
@@ -1285,7 +1288,7 @@ def _edit_guards(text: str, changed: set[int]) -> list[tuple[str, list]]:
 def edit_info(old_text: str, new_text: str) -> dict:
     """What an edit changed, from the two versions of one function's text.
 
-    {"literals": str/int/float/bool/None constants in the changed statements of either version,
+    {"literals": str/bytes/int/float/bool/None constants in the changed statements of either version,
      "fragments": text one changed string literal has and its counterpart lacks,
      "numbers": [old, new] pairs of numeric constants that changed,
      "regexes": [{"fn", "old", "new", "flags"}] re calls whose pattern literal changed,
@@ -1304,7 +1307,7 @@ def edit_info(old_text: str, new_text: str) -> dict:
     old_lits, old_res = _edit_side(old_text, changed_old)
     new_lits, new_res = _edit_side(new_text, changed_new)
     literals = _unique(old_lits + new_lits)
-    literals = [v for v in literals if not isinstance(v, str) or len(v) <= MAX_CALL_TEXT][:MAX_EDIT_LITERALS]
+    literals = [v for v in literals if not isinstance(v, (str, bytes)) or len(v) <= MAX_CALL_TEXT][:MAX_EDIT_LITERALS]
     fragments: list[str] = []
     numbers: list[list] = []
     old_strs = [v for v in old_lits if isinstance(v, str)]

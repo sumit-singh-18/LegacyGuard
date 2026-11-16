@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 278 tests after Task 6.6). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 298 tests after Task 6.8b). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -154,6 +154,14 @@ Same agent loop; every task passed review. Held-out set for run 3: docs/validati
 - **6.6** `slowdown` status (`diff.slowdown_candidates`, `confirm_slowdowns`, at most 2 re-runs; worker reports
   `seconds`/`limits`); shown in ledger, map ("slow" callers), report, CI comment; `validate.py` counts it as checked
   but never as a detection.
+
+## Sprint 6.8 (on main, 2026-11-15), general runnability from validation run 3 (docs/validation/2026-11-run3.md)
+
+Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both sets.
+- **6.8b** bytes, bytearray and memoryview parameters get inputs (`inputs.BYTES_HINTS`, `BYTES_POOL`, hint
+  rewrite of `a|b` unions, edit splicing and guard values for bytes constants). The codec tags bytearray and
+  memoryview separately so values round-trip and print as Python literals. Known weak spot: `_grid_values` and
+  `_fits_hint` still strip `|None` by substring, so `list[int|None]` loses element Nones there.
 
 ## Known gaps still open
 

@@ -64,6 +64,42 @@ def _split_top(text: str, sep: str) -> list[str]:
     return parts
 
 
+def _bar_union(ann: str) -> str:
+    """Union[bytes,str] in the spelling the rest of the builder reads: bytes|str. Other hints are returned unchanged."""
+    m = re.fullmatch(r"Union\[(.+)\]", ann)
+    return "|".join(_split_top(m.group(1), ",")) if m else ann
+
+
+# Bytes-like hints and the type each one's values are given as. ByteString and Buffer take plain bytes.
+BYTES_HINTS = {"bytes": bytes, "bytearray": bytearray, "memoryview": memoryview, "ByteString": bytes, "Buffer": bytes}
+# Values code that reads raw bytes branches on: empty, one ASCII byte, valid UTF-8 beyond ASCII, bytes that are not
+# UTF-8 (a lone continuation byte, a Latin-1 accent, a UTF-16 BOM with a NUL), a UTF-8 BOM, LF and CRLF line ends,
+# surrounding whitespace, and one longer value.
+BYTES_POOL = [b"", b"a", b"abc", "h\u00e9llo \u20ac".encode("utf-8"), b"\x80", b"caf\xe9", b"\xff\xfe\x00a",
+              b"\xef\xbb\xbfabc", b"a\nb\n", b"a\r\nb\r\n", b" a b \t", b"\x00",
+              b"line\r\n" * 20]
+BYTES_ALPHABET = TEXT_ALPHABET + "\r\n\t\u00e9\u20ac"
+
+
+def _as_bytes_kind(kind, value: bytes):
+    return value if kind is bytes else kind(value)
+
+
+def _bytes_values(kind, pool: list) -> list:
+    """The project's own bytes values first, then the edge pool, as the hint's type."""
+    found = [bytes(v) for v in pool if isinstance(v, (bytes, bytearray))]
+    return [_as_bytes_kind(kind, v) for v in dict.fromkeys(found + BYTES_POOL)]
+
+
+def _bytes_strategy(kind, st, pool: list):
+    """Random binary, and text encoded as UTF-8 (parsers of bytes branch on ASCII punctuation and line ends that random
+    binary seldom holds), with the edge pool mixed in."""
+    found = [bytes(v) for v in pool if isinstance(v, (bytes, bytearray))]
+    base = st.one_of(st.binary(max_size=24), st.text(BYTES_ALPHABET, max_size=16).map(lambda t: t.encode("utf-8")))
+    base = _with_pool(st, base, list(dict.fromkeys(found + BYTES_POOL)))
+    return base if kind is bytes else base.map(lambda v: _as_bytes_kind(kind, v))
+
+
 def _collection_strategy(ann: str, st, pool: list):
     """Strategies for the shapes real signatures use: tuple[float, float] ranges, list[T], Iterable[str], unions (FR-40)."""
     union = _split_top(ann, "|")
@@ -120,13 +156,18 @@ def _strategy_for(annotation: str | None, default: str | None, st, pool: list | 
     fine = st.decimals(min_value=Decimal("-1000"), max_value=Decimal("1000"), places=3, allow_nan=False, allow_infinity=False)
     if ann:
         optional = False
+        ann = _bar_union(ann)
         m = re.fullmatch(r"Optional\[(.+)\]", ann)
         if m:
-            ann, optional = m.group(1), True
-        if ann.endswith("|None") or ann.startswith("None|"):
-            ann, optional = ann.replace("|None", "").replace("None|", ""), True
+            ann, optional = _bar_union(m.group(1)), True
+        members = _split_top(ann, "|")
+        if "None" in members and len(members) > 1:
+            # Only a top-level None: list[int|None] is a list that may hold None, not an optional list.
+            ann, optional = "|".join(m for m in members if m != "None"), True
         base = None
-        if ann == "Decimal":
+        if ann in BYTES_HINTS:
+            base = _bytes_strategy(BYTES_HINTS[ann], st, pool)
+        elif ann == "Decimal":
             base = _with_pool(st, st.one_of(money, rate, fine), [Decimal(str(v)) for v in nums])
         elif ann == "int":
             base = _with_pool(st, st.one_of(st.integers(-1000, 1000), st.integers(-2**40, 2**40)), ints)
@@ -209,7 +250,7 @@ def _grid_values(p: dict, pool: list) -> list | None:
     if _fake_kind(p.get("annotation")):
         return [lg_codec.FakeMarker(_fake_kind(p["annotation"]))]
     ann = (p.get("annotation") or "").replace("typing.", "").replace("decimal.", "").replace(" ", "").strip("\"'")
-    ann = re.sub(r"^Optional\[(.+)\]$", r"\1", ann).replace("|None", "").replace("None|", "")
+    ann = _bar_union(re.sub(r"^Optional\[(.+)\]$", r"\1", _bar_union(ann))).replace("|None", "").replace("None|", "")
     ann = ann or _type_from_default(p.get("default"))
     strs = [v for v in pool if isinstance(v, str)]
     ints = [v for v in pool if isinstance(v, int) and not isinstance(v, bool)]
@@ -224,6 +265,8 @@ def _grid_values(p: dict, pool: list) -> list | None:
         return merged or None
     if ann == "bool":
         return [False, True]
+    if ann in BYTES_HINTS:
+        return _bytes_values(BYTES_HINTS[ann], pool)
     if ann == "int":
         return list(dict.fromkeys(SMALL_INTS + ints))[:GRID_PER_PARAM]
     if ann == "float":
@@ -668,6 +711,10 @@ def _synthetic_bases(sym: dict) -> list[dict]:
         elif ann in ("str", "Optional[str]", "str|None"):
             text_args.append({"name": p["name"], "kind": "pos", "value": lg_codec.encode_input("")})
             num_args.append(text_args[-1])
+        elif re.sub(r"^Optional\[(.+)\]$|\|None$", r"\1", ann) in BYTES_HINTS:
+            kind = BYTES_HINTS[re.sub(r"^Optional\[(.+)\]$|\|None$", r"\1", ann)]
+            text_args.append({"name": p["name"], "kind": "pos", "value": lg_codec.encode_input(_as_bytes_kind(kind, b""))})
+            num_args.append(text_args[-1])
         elif ann in ("int", "float", "Optional[int]", "Optional[float]", "int|None", "float|None"):
             zero = 0 if "int" in ann else 0.0
             text_args.append({"name": p["name"], "kind": "pos", "value": lg_codec.encode_input(zero)})
@@ -724,6 +771,8 @@ def _guard_values(consts: list) -> list:
             out += [c, c + 1, c * 10 if c else 10, c / 2 if c else 0.5, c - 1]
         elif isinstance(c, str):
             out += [c, "", c + "x"]
+        elif isinstance(c, bytes):
+            out += [c, b"", c + b"x", c[:-1]]
     out += [None, 0, "", 1, "x"]
     unique: list = []
     for v in out:
@@ -739,7 +788,9 @@ def _fits_hint(value, annotation: str | None) -> bool:
     if not ann:
         return True
     optional = bool(re.fullmatch(r"Optional\[.+\]", ann)) or "|None" in ann or "None|" in ann
-    ann = re.sub(r"^Optional\[(.+)\]$", r"\1", ann).replace("|None", "").replace("None|", "")
+    ann = _bar_union(ann)
+    optional = optional or "|None" in ann or "None|" in ann
+    ann = _bar_union(re.sub(r"^Optional\[(.+)\]$", r"\1", ann)).replace("|None", "").replace("None|", "")
     if value is None:
         return optional
     members = _split_top(ann, "|")
@@ -751,6 +802,8 @@ def _fits_hint(value, annotation: str | None) -> bool:
         return "float" in members
     if isinstance(value, str):
         return "str" in members
+    if isinstance(value, bytes):
+        return any(BYTES_HINTS.get(m) is bytes for m in members)
     return False  # Any, object, a class or a hint not known here: no plain value is taken to fit (on purpose)
 
 
@@ -848,6 +901,8 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
     literals = edit.get("literals") or []
     tokens = [v for v in literals if isinstance(v, str) and 0 < len(v) <= 20] + list(edit.get("fragments") or [])
     tokens = list(dict.fromkeys(tokens))[:12]
+    byte_tokens = [v for v in literals if isinstance(v, bytes) and 0 < len(v) <= 20] + [t.encode("utf-8") for t in tokens]
+    byte_tokens = list(dict.fromkeys(byte_tokens))[:12]
     numbers = _number_values(edit.get("numbers") or [])
     regexes = edit.get("regexes") or []
     dict_values = list(literals) + [True, False, None]
@@ -879,6 +934,12 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
                 for tok in tokens:
                     for spliced in (tok + v, v + tok, v[:1] + tok + v[1:]):
                         variant(base, i, spliced, "splice")
+            elif t in ("bytes", "bytearray", "memoryview") and v is not None:
+                # The edit's bytes literals, and its text tokens as UTF-8, spliced the same way as into text.
+                raw, kind = bytes(lg_codec.decode(enc)), {"bytes": bytes, "bytearray": bytearray, "memoryview": memoryview}[t]
+                for tok in byte_tokens:
+                    for spliced in (tok + raw, raw + tok, raw[:1] + tok + raw[1:]):
+                        variant(base, i, _as_bytes_kind(kind, spliced), "splice")
             elif (t == "v" and isinstance(v, int) and not isinstance(v, bool)) or t == "float":
                 for n in numbers:
                     variant(base, i, n, "number")
@@ -1006,8 +1067,9 @@ def with_carved_edit_items(sym: dict, items: list[dict], edit: dict | None, stat
 
 
 # Hints the strategies above can build. A hint they cannot build would leave the parameter worse off than no hint.
-BUILDABLE_HINT = re.compile(r"int|float|str|bool|Decimal|date|datetime|(?:list|set|frozenset)\[(?:int|float|str|bool|Decimal)\]"
-                            r"|tuple\[(?:int|float|str|bool|Decimal)(?:,(?:int|float|str|bool|Decimal))*\]|dict\[str,(?:int|float|str|bool|Decimal)\]")
+_ATOM = r"(?:int|float|str|bool|Decimal|bytes)"
+BUILDABLE_HINT = re.compile(rf"int|float|str|bool|Decimal|date|datetime|bytes|bytearray|memoryview|(?:list|set|frozenset)\[{_ATOM}\]"
+                            rf"|tuple\[{_ATOM}(?:,{_ATOM})*\]|dict\[str,{_ATOM}\]")
 
 
 def with_runtime_types(sym: dict, harvested: dict | None) -> dict:

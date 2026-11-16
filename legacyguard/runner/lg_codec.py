@@ -59,8 +59,27 @@ def _simple(value):
     if isinstance(value, uuid.UUID):
         return {"t": "uuid", "v": str(value)}
     if isinstance(value, (bytes, bytearray)):
-        return {"t": "bytes", "v": base64.b64encode(bytes(value)).decode()}
+        # bytearray keeps its own tag: it decodes back to a mutable bytearray, and a function that returns one where the
+        # other version returned bytes behaves differently.
+        tag = "bytes" if isinstance(value, bytes) else "bytearray"
+        return {"t": tag, "v": base64.b64encode(bytes(value)).decode()}
+    if isinstance(value, memoryview):
+        return _memoryview(value)
     return None
+
+
+def _memoryview(value: memoryview) -> dict:
+    """A memoryview by its contents (and item format, when not plain bytes). A released view has none: it is tagged as
+    released, so canon never fails on it."""
+    try:
+        data = value.tobytes()
+        fmt = value.format
+    except ValueError:
+        return {"t": "memoryview", "v": None, "released": True}
+    out = {"t": "memoryview", "v": base64.b64encode(data).decode()}
+    if fmt != "B":
+        out["fmt"] = fmt
+    return out
 
 
 def _class_ref(cls) -> str:
@@ -161,6 +180,13 @@ def decode(enc):
         return uuid.UUID(v)
     if t == "bytes":
         return base64.b64decode(v)
+    if t == "bytearray":
+        return bytearray(base64.b64decode(v))
+    if t == "memoryview":
+        if v is None:
+            raise ValueError("a released memoryview cannot be rebuilt")
+        view = memoryview(base64.b64decode(v))
+        return view.cast(enc["fmt"]) if enc.get("fmt") else view
     if t == "list":
         return [decode(x) for x in v]
     if t == "tuple":
@@ -232,6 +258,14 @@ def display(enc, plain_decimal: bool = False) -> str:
         return v
     if t == "Decimal":
         return v if plain_decimal else f'Decimal("{v}")'
+    if t in ("bytes", "bytearray", "memoryview"):
+        if v is None:
+            return "<released memoryview>"
+        try:
+            text = repr(base64.b64decode(v))
+        except (ValueError, TypeError):
+            return f"<{t}>"
+        return text if t == "bytes" else f"{t}({text})"
     if t == "date":
         return f'date.fromisoformat("{v}")'
     if t == "datetime":

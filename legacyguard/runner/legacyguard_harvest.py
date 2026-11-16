@@ -36,7 +36,8 @@ def _rel(code):
     return rel
 
 
-_SIMPLE = {bool: "bool", int: "int", float: "float", str: "str", bytes: "bytes", type(None): "None"}
+_SIMPLE = {bool: "bool", int: "int", float: "float", str: "str", bytes: "bytes", bytearray: "bytearray", memoryview: "memoryview",
+           type(None): "None"}
 
 
 def type_name(value, depth: int = 0) -> str:

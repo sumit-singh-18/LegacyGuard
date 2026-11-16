@@ -351,6 +351,7 @@ def _samples(variant: int):
     pick = lambda options: options[variant % len(options)]  # noqa: E731
     return {int: pick([1, -3, 0, 7]), float: pick([1.5, -2.5, 0.0, 2.675]), str: pick(["x", "", "Hello World", "a-b/c"]),
             bool: pick([True, False]), bytes: pick([b"x", b""]), complex: 1j,
+            bytearray: bytearray(pick([b"x", b""])), memoryview: memoryview(pick([b"x", b""])),
             decimal.Decimal: decimal.Decimal(pick(["10.00", "-2.675", "0", "0.005"])),
             _REAL["date"]: pick([_REAL["date"](2024, 1, 15), _REAL["date"](2000, 2, 29)]),
             _REAL["dt"]: pick([_REAL["dt"](2024, 1, 15, 12, 0), _REAL["dt"](1999, 12, 31, 23, 59, 59)]),

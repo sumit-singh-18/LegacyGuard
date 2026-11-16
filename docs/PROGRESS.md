@@ -82,3 +82,4 @@ until the reviewer passes it. Newest entries at the bottom.
   generalize yet: five general failure classes (import file write, `self` not buildable, non-deterministic old
   code, inputs not reaching the edit, no `bytes` inputs). Report docs/validation/2026-11-run3.md (draft, review
   pending); README headline now the held-out number. Sprint 7 research sent to review.
+- Task 6.8b (bytes, bytearray, memoryview inputs): review REVISE (nested `|None` hints lost inner None), PASS in round 2. 298 tests on Python 3.12 and 3.10.
