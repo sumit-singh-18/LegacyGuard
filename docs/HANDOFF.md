@@ -41,9 +41,10 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
       4. **Inputs never reach the edit.** luigi `to_str_params` reaches 0 of 2 changed statements, and cookiecutter reaches only part of the change.
       5. **No inputs can be built for the signature:** black `decode_bytes(src: bytes)` gets none. The builder probably does not support `bytes`.
     - Make these classes **general** fixes. Do not tune on the held-out bugs. Then re-measure, ideally on a **second, fresh held-out set**, because this one has now been looked at.
+  - The harness passed review and is committed locally. Run 3 used exactly this harness, so its numbers stand. Quote the line marked "(the number to publish)", not the pooled rate.
   - Still to do for 6.7:
-    1. Have the reviewer check the harness diff (hashes against BugsInPy, scoring, that controls are excluded, that luigi 22 is scored by outcome type, that `legacyguard/` is unchanged).
-    2. Commit the harness.
+    1. (done) Harness reviewed: PASS.
+    2. (done) Harness committed.
     3. Have the results reviewed, then write `docs/validation/2026-11-run3.md` like run 2.
     4. Update the README's "How well it works" section with the **held-out** number as the headline.
     5. Log it in `PROGRESS.md`.
