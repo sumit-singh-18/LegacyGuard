@@ -17,7 +17,8 @@ FAILURE = "Confirmed failure"
 DIFFERENCE = "Behavior difference — intent unknown"
 RISK = "Potential risk (static only)"
 UNTESTED = "Untested"
-STATUSES = (VERIFIED, FAILURE, DIFFERENCE, RISK, UNTESTED)
+SLOWDOWN = "Slowdown — not a proof of a wrong result"  # Task 6.6: an input timed out only in the new code
+STATUSES = (VERIFIED, FAILURE, DIFFERENCE, RISK, UNTESTED, SLOWDOWN)
 SOURCES = ("names", "tests", "routes", "schema", "history", "diff", "rule")
 
 

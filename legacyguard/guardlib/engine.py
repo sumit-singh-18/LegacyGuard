@@ -166,7 +166,8 @@ def targets_for(cfg, rel: str, data: dict) -> list[differ.Target]:
 
 
 def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, differ.Result]]:
-    """Add findings to the ledger. Returns new, unwaived differences: the ones that may wake Claude."""
+    """Add findings to the ledger. Returns new, unwaived differences (and, in guarded or strict mode, new slowdowns):
+    the ones that may wake Claude."""
     wake: list[tuple[dict, differ.Result]] = []
     # A caller two steps away is quiet when the caller between it and the edit already shows the difference.
     edited = {r.qualname.rsplit(".", 1)[-1]: r.status for r in results if r.via}
@@ -201,7 +202,23 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                 continue
             if r.status in (differ.DIFFERENT, differ.BROKEN) and source_status in (differ.DIFFERENT, differ.BROKEN):
                 continue
-        if r.status in (differ.DIFFERENT, differ.BROKEN):
+            if r.status == differ.SLOWDOWN and (source_status or differ.SLOWDOWN in statuses):
+                continue  # the edited function's own result already shows it
+        if r.status == differ.SLOWDOWN:
+            # Task 6.6: its own finding kind, never a behavior difference. It wakes Claude in guarded and strict mode only,
+            # and nothing blocks on it.
+            evidence = "; ".join(differ.slowdown_text(s) for s in r.slowdowns[:differ.MAX_SHOWN]) or r.reason
+            waived = waivers.is_waived(cfg, "slowdown", r.file, r.qualname, r.code_hash)
+            f, new = ledger.add_finding(data, kind="slowdown", status=ledger.SLOWDOWN, source="diff", subject=r.subject, file=r.file, item=r.qualname,
+                                        evidence=evidence, code_hash=r.code_hash, state="waived" if waived else "open",
+                                        extra={"slowdowns": r.slowdowns[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared, **via})
+            for old in data["findings"]:
+                if old is not f and old["file"] == r.file and old["item"] == r.qualname and (
+                        old["kind"] in ("verified", "untested") or (old["kind"] == "slowdown" and old["state"] == "open")):
+                    old["state"] = "superseded"
+            if new and f["state"] == "open" and cfg.mode in ("guarded", "strict"):
+                wake.append((f, r))
+        elif r.status in (differ.DIFFERENT, differ.BROKEN):
             status = ledger.DIFFERENCE if r.status == differ.DIFFERENT else ledger.FAILURE
             shown = [{k: d[k] for k in ("call", "before", "after", "source")} for d in r.differences[:differ.MAX_SHOWN]]
             evidence = "; ".join(f"{d['call']} before {d['before']} after {d['after']}" for d in shown) or r.reason
@@ -241,8 +258,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                 wake.append((f, r))
         elif r.status == differ.DONE:
             for old in data["findings"]:
-                if old["file"] == r.file and old["item"] == r.qualname and old["kind"] in ("behavior_difference", "untested", "verified") and old["state"] in ("open", "recorded"):
-                    old["state"] = "resolved" if old["kind"] == "behavior_difference" else "superseded"
+                if old["file"] == r.file and old["item"] == r.qualname and old["kind"] in ("behavior_difference", "slowdown", "untested", "verified") and old["state"] in ("open", "recorded"):
+                    old["state"] = "resolved" if old["kind"] in ("behavior_difference", "slowdown") else "superseded"
             f, new = ledger.add_finding(data, kind="verified", status=ledger.VERIFIED, source="diff", subject=r.subject, file=r.file, item=r.qualname,
                                         evidence=f"{r.inputs_compared} inputs compared, {r.inputs_completed} returned a value" +
                                                  (f", {r.dropped_nondeterministic} dropped as non-deterministic" if r.dropped_nondeterministic else "") +

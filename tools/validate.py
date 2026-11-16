@@ -334,7 +334,11 @@ def _function(r) -> dict:
            "inputs_compared": r.inputs_compared, "mutants_killed": r.mutants_killed, "mutants_total": r.mutants_total}
     if r.via:
         out["via"], out["via_file"] = r.via, r.via_file
-    carved = {k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
+    if getattr(r, "slowdowns", None):
+        # Task 6.6: listed on their own, never counted as a detection.
+        out["slowdowns"] = [{"call": s["call"], "new_limit_s": s["new_limit_s"], "old_seconds": s["old_seconds"], "source": s["source"]}
+                            for s in r.slowdowns]
+    carved ={k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
     if carved["captured"] or carved["unstored"] or carved["note"]:
         out["carved"] = carved
     if r.differences:
@@ -393,7 +397,9 @@ def classify(kind: str, functions: list[dict], bug_files: list[str]) -> dict:
     other = [f for f in functions if f["status"] in bad and f not in relevant]
     checked = any(f["status"] in (diff.DONE, *bad) for f in relevant)
     verdict = DETECTED if different else QUIET if checked else UNCHECKED
-    return {"verdict": verdict, "different": different, "other_different": other}
+    # A slowdown (an input that timed out only in the new code) is evidence, not a detection: listed apart, never in the verdict.
+    slowdowns = [f for f in functions if f.get("slowdowns")]
+    return {"verdict": verdict, "different": different, "other_different": other, "slowdowns": slowdowns}
 
 
 def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WITH) -> dict:
@@ -406,7 +412,7 @@ def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WIT
            "fix_tests_restored": [], "deciding_input": None,
            "verdict": ERROR, "match": False, "error": "", "warnings": [], "seconds": 0.0, "prep_seconds": 0.0,
            "python": None, "python_version": None, "files": [], "changed_files": [],
-           "functions": [], "different": [], "other_different": [], "verified": [], "untested": [], "contract_breaks": 0,
+           "functions": [], "different": [], "other_different": [], "slowdowns": [], "verified": [], "untested": [], "contract_breaks": 0,
            "mutants_killed": 0, "mutants_total": 0, "mutation_score": None}
     start = time.monotonic()
     try:
@@ -516,6 +522,7 @@ def metrics(records: list[dict]) -> dict:
         "errors": len(records) - len(ran), "unchecked": len(ran) - len(checked),
         "error_cases": [r["name"] for r in records if r["verdict"] == ERROR],
         "unchecked_cases": [r["name"] for r in ran if r["verdict"] == UNCHECKED],
+        "slowdown_cases": [r["name"] for r in ran if r.get("slowdowns")],  # Task 6.6: listed apart, never a detection
         "matched": sum(1 for r in checked if r["match"]),
         "detection": {"detected": found, "total": len(want), "rate": _rate(found, len(want))},
         "false_alarm": {"alarms": alarms, "total": len(calm), "rate": _rate(alarms, len(calm))},
@@ -600,6 +607,8 @@ def metrics_text(m: dict) -> str:
         lines.append(f"Unchecked (nothing compared, left out of the rates): {', '.join(m['unchecked_cases'])}")
     if m["error_cases"]:
         lines.append(f"Errors (left out of the rates): {', '.join(m['error_cases'])}")
+    if m.get("slowdown_cases"):
+        lines.append(f"Slowdowns (not counted as detections): {', '.join(m['slowdown_cases'])}")
     if m.get("deciding_sources") and _sources_text(m["deciding_sources"]) != "-":
         lines.append("Inputs that differed in detected cases: " + _sources_text(m["deciding_sources"]))
     return "\n".join(lines)
@@ -679,7 +688,7 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
     lines.append("")
     for r in records:
         if not (r["different"] or r["other_different"] or r["untested"] or r["error"] or r["warnings"] or r["verdict"] == UNCHECKED
-                or r.get("fix_tests_restored")):
+                or r.get("fix_tests_restored") or r.get("slowdowns")):
             continue
         lines += [f"### {r['name']}" + (f" ({MODE_LABEL[r['fix_tests']]})" if r.get("fix_tests") else ""), ""]
         if r.get("synthetic_base"):
@@ -698,6 +707,10 @@ def markdown(records: list[dict], by_mode: dict, manifest: str) -> str:
             lines.append(f"- Warning: {_cell(w)}")
         lines += [_diff_line("Different", f) for f in r["different"]]
         lines += [_diff_line("Different outside the bug's files (not credited)", f) for f in r["other_different"]]
+        for f in r.get("slowdowns") or []:
+            for s in f["slowdowns"][:3]:
+                lines.append(f"- Slowdown (not counted as a detection): `{f['file']}::{f['qualname']}`: "
+                             f"{_cell(diff.slowdown_text(s))}")
         for f in r["untested"]:
             lines.append(f"- Untested: `{f['file']}::{f['qualname']}`: {_cell(f['reason'])}")
         lines.append("")
