@@ -24,6 +24,23 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
     ```
     .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml tools/validation/holdout.yaml --fix-tests both --workdir /private/tmp/claude-501/lg-validation --out /private/tmp/claude-501/lg-validation/out-run3
     ```
+  - **Run 3 finished. Raw output: `docs/validation/2026-11-run3-raw.md` and `-results.json`.**
+
+    | Set | Without fix tests | With fix tests |
+    |---|---|---|
+    | Tuning set | 8 of 9 detected | 9 of 9 detected |
+    | Held-out set | 1 of 2 checked detected, **8 of 10 unchecked** | 1 of 3 checked, 7 unchecked |
+    | Control | unchecked, as expected | unchecked, as expected |
+
+    - No false alarms.
+    - A slowdown was flagged on youtube-dl-10. It was not counted as a detection.
+    - **The real finding: the guard does not generalize yet.** It cannot *run* most held-out code. These failure classes come straight from the raw file, and they are the next work, more urgent than Sprint 7:
+      1. **Import blocked by a file write.** black's whole module comes out untested with "importing the module file write is blocked". It probably writes the lib2to3 grammar pickle cache at import. A2 (throwaway cwd and temp writes at import) or allowing cache writes during import would fix it.
+      2. **`self` cannot be built.** `Session()` (httpie), `TaskProcess` (luigi) and `PeriodicCallback` (tornado) all need required constructor arguments, and there are no type hints or literal calls to supply them. Possible fixes: a `None`/placeholder constructor, or reusing a carved `self`.
+      3. **Old code disagrees with itself.** tornado `PeriodicCallback.start` and luigi `Worker.run` give different results across the two old runs. The likely cause is object ids, threads, or time that isn't frozen.
+      4. **Inputs never reach the edit.** luigi `to_str_params` reaches 0 of 2 changed statements, and cookiecutter reaches only part of the change.
+      5. **No inputs can be built for the signature:** black `decode_bytes(src: bytes)` gets none. The builder probably does not support `bytes`.
+    - Make these classes **general** fixes. Do not tune on the held-out bugs. Then re-measure, ideally on a **second, fresh held-out set**, because this one has now been looked at.
   - Still to do for 6.7:
     1. Have the reviewer check the harness diff (hashes against BugsInPy, scoring, that controls are excluded, that luigi 22 is scored by outcome type, that `legacyguard/` is unchanged).
     2. Commit the harness.
