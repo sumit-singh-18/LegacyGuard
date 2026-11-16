@@ -67,3 +67,13 @@ until the reviewer passes it. Newest entries at the bottom.
   (guarded slowdown result).
 - Tasks 6.3 + 6.4 implemented (the three fixtures thefuck 7, tqdm 4, youtube-dl 5 detected without fix tests);
   sent to review. Task 6.6 still being built.
+
+## 2026-11-15
+
+- Tasks 6.3 + 6.4: review REVISE (guard values ignored an untyped parameter's default and caused a false alarm on
+  an f-string refactor; DATE_LIKE matched update/validate/time; builtins filled the guard cap), PASS in round 2.
+  Committed f766cb8 (260 tests).
+- Task 6.6 (slowdown result): review REVISE (harness dropped slowdown cases from the denominators; Stop re-ran
+  them; map, report, CI comment and backtest did not know the status; waive refused it), PASS in round 2. Merged
+  de6f5a2 (278 tests on Python 3.12 and 3.10).
+- Next: Task 6.7, validation run 3 on the tuning set and the held-out set.

@@ -48,11 +48,12 @@ index, status, impact, map, waive, pin, mode. All of them call `scripts/lg.py --
 every changed statement of the edited functions it calls), `different` (for a caller whose inputs ran none of the
 changed statements, the wake text and evidence say the difference may come from elsewhere), `broken` (the module no
 longer imports), `untested` (with a reason: DB, network, file write, uncallable, timeout, not every changed statement
-reached, non-deterministic). Comment-, whitespace- and docstring-only edits produce no result at all.
+reached, non-deterministic), `slowdown` (only the new code timed out where both old runs finished fast, confirmed
+by a re-run under the full limit; never a detection, never fails CI, waivable). Comment-, whitespace- and docstring-only edits produce no result at all.
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 202 tests after Sprint 5). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 278 tests after Task 6.6). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -137,6 +138,22 @@ Built with the researcher/implementer/reviewer agents (.claude/agents/, /sprint-
 - **Methods judged on their own effect on self:** the worker snapshots self before each call and reports only
   attributes added, changed or removed by the call; `__init__`/`__post_init__`/`__setstate__`/`__new__` are
   judged on the whole instance. Counterexamples name what changed (`then self.last=1` vs `then self unchanged`).
+
+## Sprint 6 (on main, 2026-11-15), from validation run 2 (docs/validation/2026-11-run2.md)
+
+Same agent loop; every task passed review. Held-out set for run 3: docs/validation/holdout-set.md (never tuned on).
+- **6.1** edit inputs also applied on carved calls; callers get edit inputs; guessed caller inputs inherit weak.
+- **6.2** the function's own test files first; pytest fixtures and str.format resolved (cached, capped).
+- **6.3** edit splices inside Construct-recipe string arguments (prefix, suffix, word positions).
+- **6.4** guard inputs (`examples._edit_guards`, `inputs._guard_items`): values on both sides of constants in the
+  if/elif/while conditions enclosing a changed statement; typed params filtered by hint, untyped by the default's
+  type or the compared constants (`_fits_guard`); builtins/self skipped. `DATE_POOL` when the edit or examples look
+  date-related (`DATE_LIKE`). All source "edit", weak, under MAX_EDIT_ITEMS. Callers do not get guards/dates yet.
+- **6.5** callers unlikely to run rank last (session memory of callers whose old side cannot run); open differences
+  are never cut; skipped callers are named in the note, wake, Stop report, session map and CI.
+- **6.6** `slowdown` status (`diff.slowdown_candidates`, `confirm_slowdowns`, at most 2 re-runs; worker reports
+  `seconds`/`limits`); shown in ledger, map ("slow" callers), report, CI comment; `validate.py` counts it as checked
+  but never as a detection.
 
 ## Known gaps still open
 
