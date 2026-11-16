@@ -680,10 +680,160 @@ def _synthetic_bases(sym: dict) -> list[dict]:
     return bases
 
 
+MAX_SPLICE_WORDS = 3     # words of a constructed object's string argument an edit token may replace
+MAX_GUARD_VALUES = 10
+MAX_GUARD_BASES = 2
+MAX_GUARD_CROSS = 4      # other arguments set to None (or left to their default), one at a time
+MAX_DATE_BASES = 3
+# Our heuristic, not taken from any library: one instant (Tuesday 17 March 2015, a day above 12 so day-first and
+# month-first readings differ) written in common date formats. Tried only when the edit or the function's examples
+# look date-related (examples.DATE_LIKE, DATE_EXAMPLE).
+DATE_POOL = [
+    "Tue, 17 Mar 2015 14:05:09 +0000",   # RFC 2822
+    "2015-03-17T14:05:09Z",              # ISO 8601
+    "2015-03-17 14:05:09",
+    "Mar 17, 2015 02:05 PM",             # Mon DD, YYYY HH:MM AM/PM
+    "17/03/2015",                        # DD/MM/YYYY
+]
+DATE_EXAMPLE = re.compile(r"(?<!\d)(?:19|20)\d\d(?!\d)")
+DATE_EXAMPLE_PART = re.compile(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d[/:-]\d")
+
+
+def _construct_splices(v: str, tok: str) -> list[str]:
+    """An edit token in a constructed object's string argument: as prefix and suffix, after the first character, after
+    the first word, and in place of each of the first words (Sprint 6 task 6.3)."""
+    out = [tok + v, v + tok, v[:1] + tok + v[1:]]
+    words = v.split(" ")
+    if len(words) > 1:
+        out.append(words[0] + " " + tok + " " + " ".join(words[1:]))
+        for k in range(min(len(words), MAX_SPLICE_WORDS)):
+            out.append(" ".join(words[:k] + [tok] + words[k + 1:]))
+    return [s for s in dict.fromkeys(out) if s != v]
+
+
+def _guard_values(consts: list) -> list:
+    """Values that satisfy and violate the comparisons in a guarding condition: for `x not in (True, 1)`, True, False, 1,
+    2, 10, 0.5, 0; then the truthiness and None checks every condition makes (None, 0, '', a non-empty value)."""
+    out: list = []
+    for c in consts:
+        if c is None:
+            out.append(None)
+        elif isinstance(c, bool):
+            out += [True, False]
+        elif isinstance(c, (int, float)):
+            out += [c, c + 1, c * 10 if c else 10, c / 2 if c else 0.5, c - 1]
+        elif isinstance(c, str):
+            out += [c, "", c + "x"]
+    out += [None, 0, "", 1, "x"]
+    unique: list = []
+    for v in out:
+        if not any(type(v) is type(w) and v == w for w in unique):
+            unique.append(v)
+    return unique[:MAX_GUARD_VALUES]
+
+
+def _fits_hint(value, annotation: str | None) -> bool:
+    """Whether a guard value agrees with a parameter's type hint. No hint: anything goes; a hint the check does not know
+    (a class): nothing does, as a plain value would only be rejected."""
+    ann = (annotation or "").replace("typing.", "").replace(" ", "").strip("\"'")
+    if not ann:
+        return True
+    optional = bool(re.fullmatch(r"Optional\[.+\]", ann)) or "|None" in ann or "None|" in ann
+    ann = re.sub(r"^Optional\[(.+)\]$", r"\1", ann).replace("|None", "").replace("None|", "")
+    if value is None:
+        return optional
+    members = _split_top(ann, "|")
+    if isinstance(value, bool):
+        return "bool" in members
+    if isinstance(value, int):
+        return "int" in members or "float" in members
+    if isinstance(value, float):
+        return "float" in members
+    if isinstance(value, str):
+        return "str" in members
+    return False  # Any, object, a class or a hint not known here: no plain value is taken to fit (on purpose)
+
+
+def _family(value) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, (bool, int, float)):
+        return "number"  # bool, int and float as one family: `unit_scale=False` also takes 10
+    return type(value).__name__
+
+
+def _fits_guard(value, param: dict, consts: list) -> bool:
+    """Whether a guard value may be passed to a parameter. With a type hint, the hint decides (_fits_hint). Without
+    one, the value's type must agree with the default's (the one value known to be valid, as in _grid_values) or with
+    a constant the guard compares the parameter against; None only when the default or a constant is None."""
+    if param.get("annotation"):
+        return _fits_hint(value, param["annotation"])
+    families = {_family(c) for c in consts}
+    default = param.get("default")
+    if default is not None:
+        try:
+            families.add(_family(ast.literal_eval(default)))
+        except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+            kind = _type_from_default(default)
+            if kind:
+                families.add("str" if kind == "str" else "number")
+    return _family(value) in families
+
+
+def _looks_like_date(bases: list[dict]) -> bool:
+    for base in bases:
+        for arg in base.get("args") or []:
+            v = (arg.get("value") or {}).get("v")
+            if isinstance(v, str) and DATE_EXAMPLE.search(v) and DATE_EXAMPLE_PART.search(v):
+                return True
+    return False
+
+
+def _guard_items(sym: dict, bases: list[dict], guards: list[dict]) -> list[dict]:
+    """Calls aimed at the conditions guarding a changed statement (Sprint 6 task 6.4): each tested parameter set to
+    values on both sides of its comparisons, alone and crossed with one other argument at a time set to None (or, for a
+    keyword argument with a default, left out). Values and Nones a parameter's type hint rules out are skipped: an
+    `x: int` given '' would differ wherever the edit touched arithmetic, which says nothing about valid calls."""
+    params = {p["name"]: p for p in _plain_params(sym)}
+    out = []
+    for g in guards:
+        name = g.get("name")
+        if name not in params:
+            continue
+        consts = list(g.get("consts") or [])
+        values = [v for v in _guard_values(consts) if _fits_guard(v, params[name], consts)]
+        for base in bases[:MAX_GUARD_BASES]:
+            for value in values:
+                try:
+                    encoded = lg_codec.encode_input(value)
+                except Exception:  # noqa: BLE001
+                    continue
+                args = [dict(a) for a in base["args"]]
+                at = next((i for i, a in enumerate(args) if a.get("name") == name), None)
+                if at is None:
+                    args.append({"name": name, "kind": "kw", "value": encoded})
+                else:
+                    args[at] = {**args[at], "value": encoded}
+                variants = [args]
+                others = [i for i, a in enumerate(args) if a.get("name") not in ("self", name)
+                          and a.get("kind") not in ("varargs", "varkw")][:MAX_GUARD_CROSS]
+                for i in others:
+                    other = params.get(args[i].get("name")) or {}
+                    if args[i].get("kind") == "kw" and other.get("default") is not None:
+                        variants.append(args[:i] + args[i + 1:])
+                    elif args[i]["value"] != {"t": "v", "v": None} and _fits_hint(None, other.get("annotation")):
+                        variants.append(args[:i] + [{**args[i], "value": lg_codec.encode_input(None)}] + args[i + 1:])
+                for v in variants:
+                    out.append({"args": v, "has_self": base.get("has_self", False), "source": "edit", "weak": True})
+    return out
+
+
 def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path, deadline: float | None = None,
                 regex_cache: dict | None = None, regex_floor: bool = True) -> list[dict]:
-    """Inputs aimed at the edit: its regexes' distinguishing strings, its numbers, its literals spliced into text and
-    dict examples. Each is a copy of an example call (or placeholder call) with one argument replaced.
+    """Inputs aimed at the edit: its regexes' distinguishing strings, its numbers, its literals spliced into text, dict
+    examples and the string arguments of constructed objects, values on both sides of the conditions guarding a changed
+    statement, and (for date-like code) a pool of date formats. Each is a copy of an example call (or placeholder call)
+    with one argument replaced, or for a guard, one tested parameter set and at most one other argument set to None.
 
     regex_cache: {"samples": [...]} shared between calls for the same edit, so the regex samples are drawn once; a later
     call only screens its own splices. regex_floor: the regex child gets at least REGEX_CHILD_MIN_S even when the seed
@@ -704,7 +854,7 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
     dict_values = [v for i, v in enumerate(dict_values) if not any(type(v) is type(w) and v == w for w in dict_values[:i])]
     dict_values = [v for v in dict_values if not isinstance(v, str) or len(v) <= 40][:12]
     bases = [b for b in bases if b.get("args")][:MAX_EDIT_BASES] or _synthetic_bases(sym)
-    kinds: dict[str, list[dict]] = {"regex": [], "number": [], "dict": [], "splice": []}
+    kinds: dict[str, list[dict]] = {"regex": [], "number": [], "dict": [], "splice": [], "construct": [], "guard": [], "date": []}
     texts: dict[int, str] = {}  # id(splice item) -> the text it passes, for screening
 
     def variant(base, index, value, kind):
@@ -743,10 +893,38 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
                         args = [dict(a) for a in base["args"]]
                         args[i] = {**args[i], "value": {"t": "dict", "v": pairs}}
                         kinds["dict"].append({"args": args, "has_self": base.get("has_self", False), "source": "edit", "weak": True})
+            elif t == "construct":
+                # One string argument of the recipe at a time, positional then keyword (Sprint 6 task 6.3).
+                slots = [("args", j) for j in range(len(enc.get("args") or []))] + [("kw", j) for j in range(len(enc.get("kw") or []))]
+                for where, j in slots:
+                    inner = enc[where][j] if where == "args" else enc[where][j][1]
+                    if inner.get("t") != "v" or not isinstance(inner.get("v"), str):
+                        continue
+                    for tok in tokens:
+                        for spliced in _construct_splices(inner["v"], tok):
+                            recipe = {**enc, "args": list(enc.get("args") or []), "kw": [list(kv) for kv in enc.get("kw") or []]}
+                            if where == "args":
+                                recipe["args"][j] = {"t": "v", "v": spliced}
+                            else:
+                                recipe["kw"][j] = [recipe["kw"][j][0], {"t": "v", "v": spliced}]
+                            args = [dict(a) for a in base["args"]]
+                            args[i] = {**args[i], "value": recipe}
+                            item = {"args": args, "has_self": base.get("has_self", False), "source": "edit", "weak": True}
+                            kinds["construct"].append(item)
+                            texts[id(item)] = spliced
+    kinds["guard"] = _guard_items(sym, bases, edit.get("guards") or [])
+    if edit.get("dates") or _looks_like_date(bases):
+        for base in bases[:MAX_DATE_BASES]:
+            for i, arg in enumerate(base["args"]):
+                enc = arg["value"]
+                if (arg.get("name") != "self" and arg.get("kind") not in ("varargs", "varkw") and enc.get("t") == "v"
+                        and isinstance(enc.get("v"), str)):
+                    for value in DATE_POOL:
+                        variant(base, i, value, "date")
     if regexes:
         # Drop splices on which a changed regex backtracks for too long: old and new would both time out, so they
         # compare nothing and only use up the worker's time (youtube-dl's js_to_json on an unterminated quote).
-        screen = list(dict.fromkeys(texts[id(item)] for item in kinds["splice"]))
+        screen = list(dict.fromkeys(texts[id(item)] for item in kinds["splice"] + kinds["construct"]))
         seconds = _deadline_left(deadline)
         if regex_floor:
             seconds = max(seconds, REGEX_CHILD_MIN_S)
@@ -759,10 +937,11 @@ def _edit_items(sym: dict, bases: list[dict], edit: dict | None, state_dir: Path
             samples = list(cached)
             slow = _regex_child(regexes, screen, state_dir, seconds, sample=False)[0] if screen else []
         if slow is None:
-            kinds["splice"] = []  # not screened in time: none rather than risk them
+            kinds["splice"] = kinds["construct"] = []  # not screened in time: none rather than risk them
         elif slow:
             dropped = set(slow)
             kinds["splice"] = [item for item in kinds["splice"] if texts[id(item)] not in dropped]
+            kinds["construct"] = [item for item in kinds["construct"] if texts[id(item)] not in dropped]
         for base in bases:
             for i, arg in enumerate(base["args"]):
                 enc = arg["value"]

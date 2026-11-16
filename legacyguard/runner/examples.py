@@ -1218,13 +1218,80 @@ def _fragments(a: str, b: str) -> list[str]:
     return out
 
 
+MAX_GUARDS = 6
+MAX_GUARD_CONSTS = 6
+# Words and strptime directives that say a function handles dates (Sprint 6 task 6.4): our heuristic for when the
+# date pool in inputs.py is worth trying.
+# "date" must start a word or follow an underscore (date_str, parse_date, datetime) or be a camel-case part (toDate):
+# update, validate and candidate do not count. A bare `time` (import time, time.sleep) does not either.
+DATE_LIKE = re.compile(r"(?<![A-Za-z])[Dd]ate|(?<=[a-z])Date|(?i:timestamp|strptime|strftime|parsedate)|%[YHMSbB]")
+GUARD_SKIP = {"self", "cls"} | set(dir(__import__("builtins")))
+
+
+def _guard_atoms(test: ast.AST) -> list[ast.AST]:
+    """`a and not (b or c)` -> [a, b, c]: the parts of a condition that test one thing each."""
+    if isinstance(test, ast.BoolOp):
+        return [atom for v in test.values for atom in _guard_atoms(v)]
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _guard_atoms(test.operand)
+    return [test]
+
+
+def _edit_guards(text: str, changed: set[int]) -> list[tuple[str, list]]:
+    """(name, compared constants) for the names tested by the if/elif/while conditions that enclose a changed statement.
+
+    `if unit_scale and unit_scale not in (True, 1):` gives ("unit_scale", [True, 1]); `if total:` gives ("total", []).
+    Only plain names, not builtins, self or cls; the caller keeps those that are parameters. The cap applies after that
+    filter. A changed statement's own condition is left out (its
+    constants are already among the edit's literals)."""
+    tree = _dedent_parse(text)
+    if tree is None:
+        return []
+    import textwrap
+    spans = _changed_spans(textwrap.dedent(text), changed)
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+    tests: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt) or not _in_spans(node, spans):
+            continue
+        child, parent = node, parents.get(id(node))
+        while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if isinstance(parent, (ast.If, ast.While)) and child is not parent.test and parent.test not in tests:
+                tests.append(parent.test)
+            child, parent = parent, parents.get(id(parent))
+    found: dict[str, list] = {}
+    for test in sorted(tests, key=lambda t: (t.lineno, t.col_offset)):
+        for atom in _guard_atoms(test):
+            names = [n.id for n in ast.walk(atom) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                     and n.id not in GUARD_SKIP]
+            consts = []
+            # A constant is taken only from a comparison with no call on either side: in `len(x) > 0` the 0 is
+            # compared to len(x), not to x.
+            if isinstance(atom, ast.Compare) and not any(isinstance(n, ast.Call) for n in ast.walk(atom)):
+                consts = [c.value for c in ast.walk(atom) if isinstance(c, ast.Constant)
+                          and (c.value is None or isinstance(c.value, (str, int, float, bool)))
+                          and not (isinstance(c.value, str) and len(c.value) > 40)]
+            for name in dict.fromkeys(names):
+                have = found.setdefault(name, [])
+                for c in consts:
+                    if not any(type(c) is type(h) and c == h for h in have):
+                        have.append(c)
+    return [(name, consts[:MAX_GUARD_CONSTS]) for name, consts in list(found.items())[:MAX_GUARDS]]
+
+
 def edit_info(old_text: str, new_text: str) -> dict:
     """What an edit changed, from the two versions of one function's text.
 
     {"literals": str/int/float/bool/None constants in the changed statements of either version,
      "fragments": text one changed string literal has and its counterpart lacks,
      "numbers": [old, new] pairs of numeric constants that changed,
-     "regexes": [{"fn", "old", "new", "flags"}] re calls whose pattern literal changed}"""
+     "regexes": [{"fn", "old", "new", "flags"}] re calls whose pattern literal changed,
+     "guards": [{"name", "consts"}] names tested by the if/elif/while conditions enclosing a changed statement, with the
+               constants they are compared to (Sprint 6 task 6.4),
+     "dates": whether either version looks like it handles dates (DATE_LIKE, a heuristic)}"""
     old_lines = old_text.splitlines()
     new_lines = new_text.splitlines()
     changed_old: set[int] = set()
@@ -1256,4 +1323,10 @@ def edit_info(old_text: str, new_text: str) -> dict:
         if a["pattern"] != b["pattern"]:
             # The semantics come from the new call (the same as the old one unless the edit changed both).
             regexes.append({"fn": b["fn"], "old": a["pattern"], "new": b["pattern"], "flags_old": a["flags"], "flags_new": b["flags"]})
-    return {"literals": literals, "fragments": _unique(fragments)[:MAX_FRAGMENTS], "numbers": numbers[:6], "regexes": regexes[:4]}
+    guards: dict[str, list] = {}
+    for name, consts in _edit_guards(old_text, changed_old) + _edit_guards(new_text, changed_new):
+        have = guards.setdefault(name, [])
+        have += [c for c in consts if not any(type(c) is type(h) and c == h for h in have)]
+    return {"literals": literals, "fragments": _unique(fragments)[:MAX_FRAGMENTS], "numbers": numbers[:6], "regexes": regexes[:4],
+            "guards": [{"name": n, "consts": c[:MAX_GUARD_CONSTS]} for n, c in list(guards.items())[:MAX_GUARDS]],
+            "dates": bool(DATE_LIKE.search(old_text) or DATE_LIKE.search(new_text))}
