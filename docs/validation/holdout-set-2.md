@@ -98,6 +98,26 @@ Source root: ansible imports from `lib/` (BugsInPy's `pythonpath="ansible/build/
   install requirements but are not in the import chain. Python-2 names in the chain (`cStringIO`, `urlparse`,
   `collections.Mapping`, `inspect.getargspec`) sit only in `six.PY2` or `try` branches.
 
+## Setup changes before the run (2026-11-18, task 6.8f step 2)
+
+Made at `--check-setup` time, before any guard run on this set (`tools/validation/holdout2.yaml`; machine: macOS arm64,
+Python 3.10.22 from Homebrew, wheels only except starlette 0.12.9).
+
+1. **ansible 4 replaced by ansible 5** (replacement rule, next reserve of the same project). `--check-setup` could not
+   import `ansible.playbook.collectionsearch` on either tree: its import chain loads `ansible.constants`, which at import
+   time creates `DEFAULT_LOCAL_TMP` (`~/.ansible/tmp`); the sandbox refuses the write (`AnsibleError: Invalid settings
+   supplied for DEFAULT_LOCAL_TMP: Unable to create local directories(~/.ansible/tmp): [Errno 1] Operation not permitted`).
+   No pin can change that. ansible 5 (`check_required_arguments`) imports on both trees. The set stays at 9 counted bugs.
+   The error text above was copied from the output of the first setup check. That check's log and `setup-check.json`
+   were overwritten by the next check, so they were not kept.
+2. **Pin `lxml==4.6.4` -> `lxml==5.1.0`** (scrapy 1, 2, 3). lxml 4.6.4 has no wheel for macOS arm64 cp310; with wheels
+   only, pip offers 5.1.0 as the lowest version. All three rows import with it.
+3. **Pin `zope.interface==5.5.0` -> `zope.interface==5.5.2`** (scrapy 1, 2, 3). Same reason: 5.5.2 is the lowest
+   version with a macOS arm64 cp310 wheel.
+
+Transitive dependencies are pinned in the manifest to the versions pip resolved on 2026-11-18. After these changes
+`--check-setup` reported all 9 rows ready, and across the three sets 28 counted cases plus the control.
+
 ## Rejected (walk order, first failed criterion)
 
 - **ansible 1** (C4): `verify_collections` reaches the changed line only when a `<search_path>/<namespace>/<name>`

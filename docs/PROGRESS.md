@@ -87,3 +87,11 @@ until the reviewer passes it. Newest entries at the bottom.
 - Task 6.8c (stand-in `self`): review REVISE (search not cached and time-dependent; bypass policy; harness counted placeholder results as detections; CI policy), PASS in round 2. 325 tests on Python 3.12 and 3.10.
 - Task 6.8d (name the cause of old-vs-old disagreement; freeze benign noise): review REVISE (frozen monotonic deadline loops regressed, cause labels too confident, added clock read false-alarm class), PASS in round 2. 339 tests on Python 3.12 and 3.10.
 - Task 6.8e (diagnose unreached changed lines, second pass of inputs aimed at their conditions): built, review REVISE in round 1 (unbounded value building, run limit, uncompared lines counted), corrections made, review PASS in round 2. 381 tests on Python 3.12 and 3.10.
+- Task 6.8f (held-out set 2 and validation run 4): set chosen and reviewer-checked before any run (`holdout-set-2.md`;
+  9 bugs in ansible, fastapi, scrapy). At setup, ansible-4 was replaced by ansible-5 under the replacement rule (it
+  cannot import in the sandbox because `~/.ansible/tmp` is created at import), and lxml/zope.interface pins were raised
+  to the lowest arm64 cp310 wheels. `tools/validate.py` gained a `holdout2` set, and its summary names both held-out
+  sets. Run 4 (all three sets, both modes, 203 s): held-out set 2 had 8 of 9 unchecked without fix tests (7 of 9 with)
+  and found 1 of 9 (2 of 9). Held-out set 1 had 7 of 10 unchecked (run 3: 8) and found 2 of 10 (black-17 is new).
+  Tuning found 8 of 9; thefuck-1 regressed to unchecked because of 6.8d's frozen pid. Write-up:
+  docs/validation/2026-11-run4.md; README headline now uses held-out set 2. 382 tests on Python 3.12 and 3.10.

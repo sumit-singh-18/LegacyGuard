@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 381 tests after Task 6.8e). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 382 tests after Task 6.8f). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -224,6 +224,13 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   round costs its import time again unless warm workers are on). Cannot aim at: `self` attributes, results of other
   calls, globals, files or other external data; conditions with more than 3 tested parameters are only built step by
   step, not searched.
+- **6.8f** held-out set 2 (`docs/validation/holdout-set-2.md`, 9 BugsInPy bugs in ansible, fastapi, scrapy, chosen
+  before any run) and validation run 4 (`docs/validation/2026-11-run4.md`). `tools/validate.py` has a third set,
+  `holdout2` (`HOLDOUT2`, "Held-out set 2"; `HELD_OUT` = both held-out sets), reported apart in metrics, tables and the
+  top summary lines. Run 4: held-out set 2 had 8 of 9 unchecked without fix tests and found 1 of 9 (2 of 9 with fix
+  tests). Open findings: the 6.8d frozen pid (4242) breaks `psutil.Process(os.getpid())` (a regression on thefuck-1);
+  home-directory writes at import that are not cache-like are still refused; one function was "verified" on a
+  placeholder `self`, possibly without the input that shows the bug (not checked). Do not tune on set 2 without a set 3.
 
 ## Known gaps still open
 

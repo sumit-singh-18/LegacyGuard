@@ -1,0 +1,124 @@
+# Held-out BugsInPy set 2 (docs/validation/holdout-set-2.md): 9 counted bugs, no control.
+# Chosen 2026-11-18, before any LegacyGuard run on these bugs, and NEVER used to tune the guard: do not change the guard
+# or this manifest's scoring because of what these cases show. Reported apart from the tuning set and held-out set 1.
+#
+# Hashes: BugsInPy bug.info (BugsInPy snapshot 11c5f1e, checked against holdout-set-2.md). Patches: BugsInPy
+# bug_patch.txt, in patches/. ansible imports from lib/ (source_roots); fastapi and scrapy from the repository root.
+# Environment (holdout-set-2.md, "Environment"): Python 3.10 for every case. One venv per project (two for fastapi,
+# because fastapi 4 needs starlette 0.12.9 and fastapi 2 and 3 need 0.13.2), from /opt/homebrew/bin/python3.10, with
+# the project's runtime dependencies only (never the project itself, never -e: the guard imports the checkout). Wheels
+# only (--only-binary=:all:), except starlette 0.12.9, a pure-Python sdist accepted by the user's C2 decision.
+# Pin changes at setup (holdout-set-2.md, Setup changes before the run): lxml 4.6.4 -> 5.1.0 and zope.interface
+# 5.5.0 -> 5.5.2 (no wheel of the listed version for macOS arm64 cp310; each is the lowest that installs without
+# compiling). ansible-4 replaced by ansible-5 (ansible-4 cannot import in the sandbox). Pinned to
+# the versions resolved on 2026-11-18 (transitive ones included) so run 4 can be repeated.
+#
+# Run 4, all three sets, both fix-test modes:
+#   .venv-dev/bin/python tools/validate.py tools/validation/manifest.yaml tools/validation/holdout.yaml \
+#       tools/validation/holdout2.yaml --fix-tests both --workdir /private/tmp/claude-501/lg-validation \
+#       --out /private/tmp/claude-501/lg-validation/out-run4
+# Readiness only (no guard run): add --check-setup.
+set: holdout2
+cases:
+  - name: ansible-2
+    note: "lib/ansible/utils/version.py _Alpha.__gt__, _Numeric.__gt__ (equal values compare as greater); reached by _Alpha('a') > _Alpha('a'), _Numeric(1) > _Numeric(1), _Alpha('a') > 'a', _Numeric(1) > 1 (buggy True, fixed False). The __ge__ edits are equivalent rewrites."
+    repo: https://github.com/ansible/ansible
+    kind: bug
+    buggy: de59b17c7f69d5cfb72479b71776cc8b97e29a6b
+    fixed: 5b9418c06ca6d51507468124250bb58046886be6
+    files: [lib/ansible/utils/version.py]
+    patch: patches/ansible-2.patch
+    source_roots: [lib]
+    setup: &ansible_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q --only-binary=:all: "Jinja2==3.0.3" "MarkupSafe==2.0.1" "PyYAML==6.0"'
+
+  - name: ansible-3
+    note: "lib/ansible/module_utils/facts/system/distribution.py DistributionFiles.parse_distribution_file_Debian (Kali in /etc/os-release); reached by DistributionFiles(None).parse_distribution_file_Debian('Debian', 'Kali\\nDISTRIB_RELEASE=2020.1', '/etc/os-release', {}) (data and path are plain strings)"
+    repo: https://github.com/ansible/ansible
+    kind: bug
+    buggy: 70219df9056ffb1e2766f572fbe71f7a1800c9f5
+    fixed: 9d48884e36fb4fd9551f000b87d264383de74e75
+    files: [lib/ansible/module_utils/facts/system/distribution.py]
+    patch: patches/ansible-3.patch
+    source_roots: [lib]
+    setup: *ansible_setup
+
+  - name: ansible-5
+    note: "Replaces ansible-4 under the replacement rule (holdout-set-2.md, Setup changes before the run: ansible-4's import chain runs ansible.constants, which creates ~/.ansible/tmp at import, refused in the sandbox). lib/ansible/module_utils/common/validation.py check_required_arguments (missing names not sorted); reached by check_required_arguments({'b': {'required': True}, 'a': {'required': True}}, {}) (buggy message 'b, a', fixed 'a, b'). The patch also fixes a test file, which the harness treats as a fix test."
+    repo: https://github.com/ansible/ansible
+    kind: bug
+    buggy: 2af76f16be8cf2239daaec4c2f31c3dcb4e3469e
+    fixed: 3c3ffc09c203d1b2262f6a319cceadd727749761
+    files: [lib/ansible/module_utils/common/validation.py]
+    patch: patches/ansible-5.patch
+    source_roots: [lib]
+    setup: *ansible_setup
+
+  - name: fastapi-2
+    note: "fastapi/routing.py APIRouter.add_api_websocket_route (does not pass dependency_overrides_provider); reached by r = APIRouter(dependency_overrides_provider=p); r.add_api_websocket_route('/ws', endpoint), then await r.routes[-1].app(scope, receive, send) with an in-memory websocket scope and p.dependency_overrides = {dep: other} (buggy runs dep, fixed runs other). The difference is not visible in the return value or a route attribute. Scored like any other row."
+    repo: https://github.com/tiangolo/fastapi
+    kind: bug
+    buggy: 210af1fd3dc0f612a08fa02a0cb3f5adb81e5bfb
+    fixed: 02441ff0313d5b471b662293244c53e712f1243f
+    files: [fastapi/routing.py]
+    patch: patches/fastapi-2.patch
+    setup: &fastapi_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q --only-binary=:all: "starlette==0.13.2" "pydantic==1.9.0" "typing_extensions==4.16.0"'
+
+  - name: fastapi-3
+    note: "fastapi/routing.py serialize_response (async; exclude_unset drops by_alias and skips lists/dicts of models); reached by await serialize_response(field=create_cloned_field(create_response_field('r', List[M])), response_content=[M(aliased_name='x')], exclude_unset=True), with M having name: str = Field(..., alias='aliased_name'); also the single-model and Dict[str, M] forms"
+    repo: https://github.com/tiangolo/fastapi
+    kind: bug
+    buggy: 869c7389e22dc9ad659940fa271da76c4f3ba3b1
+    fixed: aea04ee32ee1942e6e1a904527bb8da6ba76abd9
+    files: [fastapi/routing.py]
+    patch: patches/fastapi-3.patch
+    setup: *fastapi_setup
+
+  - name: fastapi-4
+    note: "fastapi/openapi/utils.py get_openapi_path (duplicate parameters when a path parameter is also declared in a dependency); reached by an app with @app.get('/{id}') whose dependency also takes id, then get_openapi(title='t', version='1', routes=app.routes). Needs starlette==0.12.9 (pure-Python sdist, own venv)."
+    repo: https://github.com/tiangolo/fastapi
+    kind: bug
+    buggy: 7ccd81f70653857bd8f3a15ee946aa3fb0edc2cb
+    fixed: 74c4d1c1dbe6bfdb05d6e4fc767ffe062398f0a3
+    files: [fastapi/openapi/utils.py]
+    patch: patches/fastapi-4.patch
+    env: starlette-0.12.9
+    setup:
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q --only-binary=:all: "pydantic==1.9.0" "typing_extensions==4.16.0"'
+      - '"$LG_VENV/bin/pip" install -q --no-deps "starlette==0.12.9"'
+
+  - name: scrapy-1
+    note: "scrapy/spidermiddlewares/offsite.py OffsiteMiddleware.get_host_regex (URL entries in allowed_domains warned about but still used); reached by OffsiteMiddleware(None).get_host_regex(spider) with allowed_domains = ['a.com', 'http://b.com'] (buggy keeps the URL entry), and with None added (buggy raises TypeError, fixed skips it)"
+    repo: https://github.com/scrapy/scrapy
+    kind: bug
+    buggy: c57512fa669e6f6b1b766a7639206a380f0d10ce
+    fixed: 9d9dea0d69709ef0f7aef67ddba1bd7bda25d273
+    files: [scrapy/spidermiddlewares/offsite.py]
+    patch: patches/scrapy-1.patch
+    setup: &scrapy_setup
+      - /opt/homebrew/bin/python3.10 -m venv "$LG_VENV"
+      - '"$LG_VENV/bin/pip" install -q --only-binary=:all: "Twisted==22.1.0" "lxml==5.1.0" "parsel==1.6.0" "w3lib==1.22.0" "cssselect==1.1.0" "queuelib==1.5.0" "PyDispatcher==2.0.7" "Protego==0.2.1" "zope.interface==5.5.2" "six==1.15.0" "service-identity==18.1.0" "Automat==25.4.16" "Incremental==24.11.0" "attrs==26.1.0" "cffi==2.1.1" "constantly==23.10.4" "cryptography==50.0.2" "hyperlink==21.0.0" "idna==3.20" "packaging==26.3" "pyasn1==0.6.5" "pyasn1_modules==0.4.2" "pycparser==3.11" "tomli==2.5.0" "typing_extensions==4.16.0"'
+
+  - name: scrapy-2
+    note: "scrapy/utils/datatypes.py LocalCache.__setitem__ (limit=None raises TypeError); reached by c = LocalCache(); c['k'] = 1"
+    repo: https://github.com/scrapy/scrapy
+    kind: bug
+    buggy: f02c3d1dcf3e4880388d19e961e7911be5dc54ff
+    fixed: 439a3e59b8e858441f8d97dbc32f398db392330d
+    files: [scrapy/utils/datatypes.py]
+    patch: patches/scrapy-2.patch
+    setup: *scrapy_setup
+
+  - name: scrapy-3
+    note: "scrapy/downloadermiddlewares/redirect.py RedirectMiddleware.process_response (Location with three leading slashes); reached by RedirectMiddleware(Settings()).process_response(Request('https://a.com/x'), Response('https://a.com/x', status=302, headers={'Location': '///b.com/y'}), Spider('s')) (buggy redirects to https://a.com/b.com/y, fixed to https://b.com/y)"
+    repo: https://github.com/scrapy/scrapy
+    kind: bug
+    buggy: be2e910dd06ba4904e7b10eb5a7e3251e8dab099
+    fixed: 66cbceeb0a9104fc0fa238898e38d0d9ce9cbcf6
+    files: [scrapy/downloadermiddlewares/redirect.py]
+    patch: patches/scrapy-3.patch
+    setup: *scrapy_setup

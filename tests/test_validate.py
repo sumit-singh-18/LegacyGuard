@@ -428,6 +428,34 @@ def test_sets_control_and_outcome_type_scoring(tmp_path, capsys):
     assert "Note: expected unchecked by design" in md
 
 
+def test_second_holdout_set_is_reported_apart(tmp_path):
+    """Task 6.8f: a manifest with `set: holdout2` loads, and its cases get their own by_set entry and rows,
+    never pooled with the first held-out set."""
+    m2 = tmp_path / "h2.json"
+    m2.write_text(json.dumps({"set": "holdout2", "cases": [{"name": "x", "repo": "r", "kind": "bug", "fixed": "a", "buggy": "b"}]}))
+    assert validate.load_manifest(m2)[0]["set"] == "holdout2"
+    rec = lambda name, s, verdict: {  # noqa: E731
+        "name": name, "set": s, "kind": "bug", "expect": "detected", "verdict": verdict, "match": verdict == "detected",
+        "seconds": 1.0, "functions": [{"status": "untested"}], "mutants_killed": 0, "mutants_total": 0, "fix_tests": "with"}
+    records = [rec("t", "tuning", "detected"), rec("h1", "holdout", "quiet"), rec("h2a", "holdout2", "detected"),
+               rec("h2b", "holdout2", "unchecked")]
+    m = validate.metrics_by_mode(records, ["with"])["with"]
+    assert m["by_set"]["holdout"]["detection"] == {"detected": 0, "total": 1, "rate": 0.0}
+    assert m["by_set"]["holdout2"]["detection"] == {"detected": 1, "total": 1, "rate": 1.0}
+    assert m["by_set"]["holdout2"]["unchecked_cases"] == ["h2b"]
+    text = validate.metrics_text(m)
+    assert "Held-out set 2: detection rate 100.0% (1 of 1 checked), 1 unchecked, 0 errors (the number to publish)" in text
+    rows = "\n".join(validate.comparison_table({"with": m}))
+    assert "Detection rate, held-out set 2 (publish) | 100.0% (1 of 1; 1 unchecked)" in rows
+    # the top summary line names both held-out sets, unchecked count first, set 1 before set 2
+    both = records + [dict(r, fix_tests="without") for r in records]
+    top = validate.summary_text(validate.metrics_by_mode(both, ["without", "with"])).splitlines()
+    assert top[0] == ("Held-out set (the number to publish): without fix tests 0 unchecked, 0.0% (0 of 1 checked); "
+                      "with fix tests 0 unchecked, 0.0% (0 of 1 checked)")
+    assert top[1] == ("Held-out set 2 (the number to publish): without fix tests 1 unchecked, 100.0% (1 of 1 checked); "
+                      "with fix tests 1 unchecked, 100.0% (1 of 1 checked)")
+
+
 def test_duplicate_case_names_across_manifests(tmp_path):
     one, two = tmp_path / "a.json", tmp_path / "b.json"
     for p in (one, two):

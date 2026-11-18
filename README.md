@@ -169,21 +169,22 @@ claude plugin marketplace remove turnback-lab
 ## How well it works (measured on real bugs)
 
 Real bugs from [BugsInPy](https://github.com/soarsmu/BugsInPy) were put back into their fixed code, and the guard
-was asked whether the code still behaves the same ([write-up](docs/validation/2026-11-run3.md)). The headline is
-the **held-out** set: ten bugs in tornado, black, httpie, cookiecutter and luigi that the guard was never tuned on.
+was asked whether the code still behaves the same ([write-up](docs/validation/2026-11-run4.md)). The headline is
+**held-out set 2**: nine bugs in ansible, fastapi and scrapy, chosen before the run and never tuned on.
 
-| Held-out set (10 bugs, not tuned on) | Caught |
-|---|---|
-| Without the regression test the fix added (the realistic case) | 1 of the 2 it could check; **8 of the 10 it could not check** |
-| With that test present | 1 of the 3 it could check; 7 could not be checked (1 of 10 either way) |
-| False alarms | not measured in this run |
+| Held-out set 2 (9 bugs, not tuned on) | Could not check | Caught |
+|---|---|---|
+| Without the regression test the fix added (the realistic case) | **8 of 9** | **1 of 9** |
+| With that test present | 7 of 9 | 2 of 9 |
+| False alarms | not measured in this run | |
 
-So on code it had never seen, the guard found 1 bug in 10. In most cases it could not run the changed code at all
-(a module that writes a cache file on import, objects it could not build, code that gave different answers
-between two identical runs). It says so instead of reporting "no difference". On the nine bugs it was built
-against (youtube-dl, tqdm, thefuck) it catches 8 without the fix's test and 9 with it, but that number reflects
-tuning and does not predict unseen code. These numbers come from a small sample. Fixing the failure classes
-listed in the write-up is the next work.
+So on code it had never seen, the guard could not check most of the bugs. The most common reasons were
+conditions that depend on an object's state and functions whose arguments it could not build. It reports these
+cases as "not checked", with the reason, instead of reporting "no difference". On the earlier held-out set (tornado, black,
+httpie, cookiecutter, luigi) it caught 2 of 10, with 7 of 10 not checked. That set shaped the last round of work
+indirectly, so it is weaker evidence. On the nine bugs it was built against (youtube-dl, tqdm, thefuck) it catches 8
+of the 9 and could not check 1 (thefuck-1, a regression from the 6.8d frozen pid that is still being looked at), but
+that number reflects tuning and does not predict unseen code. These numbers come from small samples.
 
 ## What it does not do
 

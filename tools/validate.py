@@ -22,7 +22,7 @@ Usage:
     python tools/validate.py MANIFEST.yaml [MANIFEST2.yaml ...] [--workdir DIR] [--out DIR] [--only NAME ...]
                              [--fix-tests with|without|both] [--check-setup]
 
-Several manifests run as one (case names must be unique). A manifest's top-level `set` (tuning, holdout, control) is
+Several manifests run as one (case names must be unique). A manifest's top-level `set` (tuning, holdout, holdout2, control) is
 the default for its cases: the report gives each set's detection rate apart, and a control case is reported on its own
 line and never counted. Per case: `score: outcome_type` credits only differences where one side raises and the other
 returns; `env` names a venv of its own; `direct_call_only` and `note` are shown in the report. --check-setup gets the
@@ -67,9 +67,10 @@ MAX_DIFFERING = 50
 SETUP_TIMEOUT = 1800
 # Case sets. "tuning": the bugs the guard was developed against. "holdout": never used to tune it; its rate is the one to
 # publish. "control": a case with a known expected verdict that is reported on its own line and never counted in any rate.
-TUNING, HOLDOUT, CONTROL = "tuning", "holdout", "control"
-SETS = (TUNING, HOLDOUT, CONTROL)
-SET_LABEL = {TUNING: "Tuning set", HOLDOUT: "Held-out set", CONTROL: "Control"}
+TUNING, HOLDOUT, HOLDOUT2, CONTROL = "tuning", "holdout", "holdout2", "control"
+SETS = (TUNING, HOLDOUT, HOLDOUT2, CONTROL)
+SET_LABEL = {TUNING: "Tuning set", HOLDOUT: "Held-out set", HOLDOUT2: "Held-out set 2", CONTROL: "Control"}
+HELD_OUT = (HOLDOUT, HOLDOUT2)  # each reported apart; neither is ever tuned on
 OUTCOME_TYPE = "outcome_type"   # case `score:` value: credit only differences where one side raises and the other returns
 
 
@@ -77,7 +78,7 @@ OUTCOME_TYPE = "outcome_type"   # case `score:` value: credit only differences w
 
 def load_manifest(path: Path) -> list[dict]:
     """The cases of a YAML or JSON manifest: a list, or a mapping with a `cases` list and an optional `set`
-    (the default set of its cases: "tuning", "holdout" or "control"; a case's own `set` wins)."""
+    (the default set of its cases: "tuning", "holdout", "holdout2" or "control"; a case's own `set` wins)."""
     text = path.read_text()
     if path.suffix.lower() == ".json":
         data = json.loads(text)
@@ -681,12 +682,12 @@ def _sources_text(ds: dict) -> str:
 
 def metrics_by_mode(records: list[dict], modes: list[str]) -> dict:
     """Per mode: the metrics over every counted case (controls never count), then `by_set` with the same metrics
-    for each set present (tuning, holdout), and `controls`: each control case's verdict against its expectation."""
+    for each set present (tuning, holdout, holdout2), and `controls`: each control case's verdict against its expectation."""
     out = {}
     for mode in modes:
         rs = in_mode(records, mode)
         counted = [r for r in rs if r.get("set", TUNING) != CONTROL]
-        sets = [s for s in (TUNING, HOLDOUT) if any(r.get("set", TUNING) == s for r in counted)]
+        sets = [s for s in (TUNING, HOLDOUT, HOLDOUT2) if any(r.get("set", TUNING) == s for r in counted)]
         out[mode] = {**metrics(counted), "deciding_sources": deciding_sources(counted),
                      "by_set": {s: {**metrics([r for r in counted if r.get("set", TUNING) == s]),
                                     "deciding_sources": deciding_sources([r for r in counted if r.get("set", TUNING) == s])}
@@ -704,7 +705,7 @@ def _set_lines(m: dict) -> list[str]:
             d = sm["detection"]
             lines.append(f"{SET_LABEL[s]}: detection rate {_pct(d['rate'])} ({d['detected']} of {d['total']} checked), "
                          f"{sm['unchecked']} unchecked, {sm['errors']} errors"
-                         + (" (the number to publish)" if s == HOLDOUT else ""))
+                         + (" (the number to publish)" if s in HELD_OUT else ""))
     for c in m.get("controls") or []:
         lines.append(f"Control (never counted in any rate): {c['name']}: {c['verdict']}, expected {c['expect']}"
                      + (" (as expected)" if c["match"] else " (NOT as expected)") + (f"; {c['error']}" if c["error"] else ""))
@@ -759,11 +760,13 @@ def summary_text(by_mode: dict) -> str:
     head = (f"Detection rate without fix tests (headline): {_pct(d[WITHOUT]['rate'])} ({d[WITHOUT]['detected']} of "
             f"{d[WITHOUT]['total']}); with fix tests: {_pct(d[WITH]['rate'])} ({d[WITH]['detected']} of {d[WITH]['total']})")
     parts = [head]
-    if all(HOLDOUT in (by_mode[mode].get("by_set") or {}) for mode in modes):
-        h = {mode: by_mode[mode]["by_set"][HOLDOUT]["detection"] for mode in modes}
-        parts.insert(0, f"Held-out set (the number to publish): without fix tests {_pct(h[WITHOUT]['rate'])} "
-                        f"({h[WITHOUT]['detected']} of {h[WITHOUT]['total']}); with fix tests {_pct(h[WITH]['rate'])} "
-                        f"({h[WITH]['detected']} of {h[WITH]['total']})")
+    held = [s for s in HELD_OUT if all(s in (by_mode[mode].get("by_set") or {}) for mode in modes)]
+    for s in reversed(held):  # one line per held-out set, set 1 first; each is a number to publish
+        h = {mode: by_mode[mode]["by_set"][s] for mode in modes}
+        parts.insert(0, f"{SET_LABEL[s]} (the number to publish): "
+                        + "; ".join(f"{label} {h[m]['unchecked']} unchecked, {_pct(h[m]['detection']['rate'])} "
+                                    f"({h[m]['detection']['detected']} of {h[m]['detection']['total']} checked)"
+                                    for m, label in ((WITHOUT, "without fix tests"), (WITH, "with fix tests"))))
     for mode in modes:
         parts += ["", f"== {MODE_LABEL[mode].capitalize()}" + (" (headline)" if mode == WITHOUT else ""), metrics_text(by_mode[mode])]
     return "\n".join(parts)
@@ -779,12 +782,12 @@ def comparison_table(by_mode: dict) -> list[str]:
             ("Mutation score", lambda m: f"{_pct(m['mutation']['score'])} ({m['mutation']['killed']} of {m['mutation']['total']})"),
             ("Time per case (median / p95 s)", lambda m: f"{m['seconds']['median']} / {m['seconds']['p95']}"),
             ("Detected cases by input source", lambda m: _sources_text(m.get("deciding_sources", {})))]
-    present = [s for s in (HOLDOUT, TUNING) if all(s in (by_mode[x].get("by_set") or {}) for x in modes)]
+    present = [s for s in (HOLDOUT, HOLDOUT2, TUNING) if all(s in (by_mode[x].get("by_set") or {}) for x in modes)]
     if len(present) > 1:
         def set_rate(s):
             return lambda m: (f"{_pct(m['by_set'][s]['detection']['rate'])} ({m['by_set'][s]['detection']['detected']} of "
                               f"{m['by_set'][s]['detection']['total']}; {m['by_set'][s]['unchecked']} unchecked)")
-        rows[1:1] = [(f"Detection rate, {SET_LABEL[s].lower()}" + (" (publish)" if s == HOLDOUT else ""), set_rate(s)) for s in present]
+        rows[1:1] = [(f"Detection rate, {SET_LABEL[s].lower()}" + (" (publish)" if s in HELD_OUT else ""), set_rate(s)) for s in present]
     if any(by_mode[x].get("controls") for x in modes):
         rows.append(("Control (not counted)", lambda m: "; ".join(f"{c['name']}: {c['verdict']} (expected {c['expect']})"
                                                                   for c in m.get("controls") or []) or "-"))
