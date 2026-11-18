@@ -259,14 +259,20 @@ def on_queue(x: int):
 
 
 def on_join(x: int):
+    # The thread stays alive until the loop is over (it waits for `done`, set after the loop), so every join(0.01)
+    # times out and the round count depends on the frozen clocks only. A thread that ends on its own after a real
+    # delay would race the loop's real duration, which is not repeatable on a slow machine.
     n = x
-    t = threading.Thread(target=time.sleep, args=(0.3,))
+    done = threading.Event()
+    t = threading.Thread(target=done.wait, daemon=True)
     t.start()
     rounds = 0
     deadline = time.monotonic() + LIMIT
     while time.monotonic() < deadline and t.is_alive():
         t.join(0.01)
         rounds += 1
+    done.set()
+    t.join()
     return rounds, n
 
 
