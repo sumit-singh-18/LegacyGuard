@@ -471,11 +471,13 @@ def _span(fn):
     return code.co_filename, min(lines), max(lines)
 
 
-def _tracer(span, hits: set, gate=None, gate_hits: set | None = None):
+def _tracer(span, hits: set, gate=None, gate_hits: set | None = None, per_call: list | None = None):
     """Record executed lines inside the function's span only. Every other frame is left untraced, so the cost stays small.
 
     gate: (real file path, set of line numbers) of an edited function's changed statements, for a caller that is run
-    because it calls that function. Frames in that file record only those lines, into gate_hits."""
+    because it calls that function. Frames in that file record only those lines, into gate_hits.
+    per_call: a one-item list holding a set that also receives the function's own lines; the caller swaps in a fresh
+    set before each input, so it holds that input's lines (Task 6.8e)."""
     filename, first, last = span if span else ("", 0, -1)
     gate_file, gate_lines = gate if gate else ("", frozenset())
     real: dict = {}
@@ -490,17 +492,32 @@ def _tracer(span, hits: set, gate=None, gate_hits: set | None = None):
                 real[name] = False
         return real[name]
 
-    def local(frame, event, arg):
-        if event == "line":
-            hits.add(frame.f_lineno)
-        return local
+    if per_call is None:
+        def local(frame, event, arg):
+            if event == "line":
+                hits.add(frame.f_lineno)
+            return local
 
-    def local_both(frame, event, arg):
-        if event == "line":
-            hits.add(frame.f_lineno)
-            if frame.f_lineno in gate_lines:
-                gate_hits.add(frame.f_lineno)
-        return local_both
+        def local_both(frame, event, arg):
+            if event == "line":
+                hits.add(frame.f_lineno)
+                if frame.f_lineno in gate_lines:
+                    gate_hits.add(frame.f_lineno)
+            return local_both
+    else:
+        def local(frame, event, arg):
+            if event == "line":
+                hits.add(frame.f_lineno)
+                per_call[0].add(frame.f_lineno)
+            return local
+
+        def local_both(frame, event, arg):
+            if event == "line":
+                hits.add(frame.f_lineno)
+                per_call[0].add(frame.f_lineno)
+                if frame.f_lineno in gate_lines:
+                    gate_hits.add(frame.f_lineno)
+            return local_both
 
     def local_gate(frame, event, arg):
         if event == "line" and frame.f_lineno in gate_lines:
@@ -1443,7 +1460,9 @@ def run_function(spec, root_real):
     span = _span(fn)
     hits: set = set()
     gate, gate_hits = _gate_spec(spec, root_real), set()
-    trace = _tracer(span, hits, gate, gate_hits) if span or gate else None
+    # Task 6.8e: each input's own lines, so a second pass can start from the inputs that got furthest.
+    per_call = [set()] if spec.get("input_lines") and span else None
+    trace = _tracer(span, hits, gate, gate_hits, per_call) if span or gate else None
     freeze_references(root_real)
     if STUBS["on"]:
         lg_stubs.patch_loaded()
@@ -1454,7 +1473,10 @@ def run_function(spec, root_real):
                 make_self, recipe, no_self = _instance_maker(owner, spec)
         except GuardBlocked as exc:
             no_self = f"building a {owner.__name__} was blocked: {exc}"
-    fn_deadline = _monotonic() + FUNCTION_BUDGET_S
+    # A second pass (Task 6.8e) gets what the first left of the function's time and carries its timeouts over.
+    fn_deadline = _monotonic() + min(FUNCTION_BUDGET_S, float(spec.get("budget") or FUNCTION_BUDGET_S))
+    timeouts_before = int(spec.get("timeouts_before") or 0)
+    input_lines: list = []
     # Per input: the seconds the call itself took and the time limit it ran under (None when it did not run). They sit
     # beside the outcomes, not in them, so outcomes stay what the comparison reads. A slowdown check (Task 6.6) re-runs
     # single inputs with "full_limit" (never the reduced limit) and "indexes" (each input's position in the first run,
@@ -1467,21 +1489,28 @@ def run_function(spec, root_real):
         seconds.append(None)
         limits.append(None)
         clock_reads.append(None)
+        input_lines.append(None)
         if owner is not None and make_self is None and not item.get("has_self"):
             results.append({"outcome": "setup_failed", "detail": no_self})
             continue
         # After two inputs time out, the rest get a short limit: one slow function must not use up the whole check.
         # After MAX_TIMEOUTS the rest are skipped, not run: they are almost surely as slow, and are reported as such.
-        timeouts = sum(1 for r in results if r.get("outcome") in ("timeout", "skipped_slow"))
+        timeouts = timeouts_before + sum(1 for r in results if r.get("outcome") in ("timeout", "skipped_slow"))
         if timeouts >= MAX_TIMEOUTS or _monotonic() > fn_deadline:
             results.append({"outcome": "skipped_slow"})
             continue
         limit = CALL_TIMEOUT_S if timeouts < 2 or spec.get("full_limit") else SHORT_TIMEOUT_S
         position = indexes[index] if index < len(indexes) else index
+        if per_call is not None:
+            per_call[0] = set()
         results.append(_call_once(fn, item, make_self, position, trace, limit))
         seconds[-1], limits[-1], clock_reads[-1] = LAST_CALL["seconds"], limit, LAST_CALL.get("clock_reads")
+        if per_call is not None:
+            input_lines[-1] = sorted(per_call[0])
     out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None, "seconds": seconds, "limits": limits,
            "clock_reads": clock_reads, "env": env_snapshot()}
+    if per_call is not None:
+        out["input_lines"] = input_lines
     if gate:
         out["gate_lines"] = sorted(gate_hits)
     if recipe:

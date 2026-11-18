@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 339 tests after Task 6.8d). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 381 tests after Task 6.8e). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -194,6 +194,36 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   selectors, socket timeouts (a timed-out call after 200+ frozen readings is reported as a deadline loop on a
   frozen clock). An edit that only adds or removes a clock read stays a difference with a `clock_note` hedge.
   `id()` values and the order of id-hashed sets are classified but not normalised.
+- **6.8e** unreached changed statements are diagnosed and fed back into inputs (`runner/feedback.py`, guard side).
+  `diagnose` walks the function's ast from each unreached statement up to its def: if/elif/else, while, for (iterable
+  not empty), except, try-else, match case, nested defs, and the early exits before it (`if c: return`, `assert`); a
+  line after an unconditional return/raise, or under `if False`, is named dead. Comprehension filters are not
+  diagnosed: the line gate is per statement, so the tracer cannot tell whether a filter inside one ran. The untested reason gets the chain in
+  words, plus where the inputs stopped ("line 7 only runs when the `if not table` on line 2 does not return and ...; the
+  inputs reached line 4 but the early `return` there always happened"). `diff.second_pass` then runs one bounded extra round (at most
+  `feedback.MAX_FEEDBACK_ITEMS`=40 inputs per edited function, not callers or routes) when the result is untested for
+  an unreached reason and the check's limit (3 s floor to build, 1.5 s left after building to run; the run limit is
+  what the check's limit has left, never more) and the function's own 10 s budget have time left: bases are the
+  first-pass inputs that got furthest along the chain (the worker reports each input's own lines, spec `input_lines`),
+  and each new input changes the tested parameters to values built to meet the whole chain, then one parameter at a
+  time (compared constants and neighbours, None, truthiness, isinstance samples, `in`/`not in`, len, str methods,
+  startswith/endswith, regex strings from a walk of the pattern, dict keys, two-parameter relations, defaults).
+  Conditions over parameters, literals and whitelisted builtins/str methods are evaluated in the guard process on
+  plain decoded values only (never project code; no growing operators on large operands; values over
+  `feedback.MAX_SIZE`=10,000 items are neither read nor built, and a condition needing one is skipped with a note;
+  the regex walk stops past `MAX_REGEX_TEXT`; regex off the main thread only on short text; the 2 s build deadline is
+  checked inside each plan too) to rank candidates. Inputs are source "feedback", weak; outcomes are appended and
+  `compare_one` runs again (`diff._second_compare`), so status rules are unchanged: a changed statement counts as
+  reached by the second pass only when a second-pass input that `compare_one` compared ran it (`Result.compared`);
+  both-raise guesses, timeouts, set-up failures and old-vs-old disagreements do not count, and are named in the
+  reason (`feedback_raised`, `feedback_dropped`). A difference only on second-pass inputs (`feedback_only`) still
+  wakes and fails CI like other edit guesses, with a hedge in the wake and ledger, and is listed apart by
+  `tools/validate.py`. Result fields `unreached_chains`, `feedback_tried/reached/seconds/note` (also in
+  `tools/validate.py` records). Fixtures: about
+  0.11 to 0.28 s added per check (one more round of the three worker processes; on a project with slow imports that
+  round costs its import time again unless warm workers are on). Cannot aim at: `self` attributes, results of other
+  calls, globals, files or other external data; conditions with more than 3 tested parameters are only built step by
+  step, not searched.
 
 ## Known gaps still open
 

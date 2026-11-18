@@ -370,6 +370,15 @@ def _function(r) -> dict:
         # Task 6.8d: why the old code disagreed with itself, per cause: the number of inputs dropped for it.
         out["dropped_nondeterministic"] = r.dropped_nondeterministic
         out["nondeterministic_causes"] = dict(r.nondeterministic_causes)
+    if getattr(r, "feedback_tried", 0) or getattr(r, "feedback_note", ""):
+        # Task 6.8e: the second pass aimed at unreached changed lines, and what it reached.
+        out["second_pass"] = {"tried": r.feedback_tried, "reached": r.feedback_reached,
+                              "raised": getattr(r, "feedback_raised", 0), "dropped": getattr(r, "feedback_dropped", 0),
+                              "seconds": round(r.feedback_seconds, 2), "note": r.feedback_note}
+    if getattr(r, "unreached_chains", None):
+        out["unreached_chains"] = list(r.unreached_chains)
+    if getattr(r, "feedback_only", False):
+        out["feedback_only"] = True  # every difference is on a second-pass guess: a detection, listed apart
     carved = {k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}
     if carved["captured"] or carved["unstored"] or carved["note"]:
         out["carved"] = carved
@@ -466,8 +475,11 @@ def classify(kind: str, functions: list[dict], bug_files: list[str], score: str 
         placeholder_verdict = DETECTED if on_placeholder else QUIET
     # A slowdown (an input that timed out only in the new code) is evidence, not a detection: listed apart, never in the verdict.
     slowdowns = [f for f in functions if f.get("slowdowns")]
+    # Task 6.8e: a detection resting only on second-pass guesses stays a detection, but is listed apart.
+    feedback_only = verdict == DETECTED and all(f.get("feedback_only") for f in different)
     return {"verdict": verdict, "different": different, "other_different": other, "slowdowns": slowdowns,
-            "placeholder_different": on_placeholder, "placeholder_verdict": placeholder_verdict}
+            "placeholder_different": on_placeholder, "placeholder_verdict": placeholder_verdict,
+            "feedback_only_detection": feedback_only}
 
 
 def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WITH) -> dict:
@@ -478,7 +490,7 @@ def run_case(case: dict, workdir: Path, manifest_dir: Path, fix_tests: str = WIT
     rec = {"name": case.get("name") or "?", "kind": case.get("kind"), "repo": case.get("repo"), "expect": None,
            "set": case.get("set") or TUNING, "score": case.get("score") or None,
            "direct_call_only": bool(case.get("direct_call_only")), "note": str(case.get("note") or ""),
-           "value_only_different": [], "placeholder_different": [], "placeholder_verdict": None,
+           "value_only_different": [], "placeholder_different": [], "placeholder_verdict": None, "feedback_only_detection": False,
            "fix_tests": fix_tests if case.get("kind") == "bug" else None, "synthetic_base": None,
            "fix_tests_restored": [], "deciding_input": None,
            "verdict": ERROR, "match": False, "error": "", "warnings": [], "seconds": 0.0, "prep_seconds": 0.0,
@@ -596,6 +608,8 @@ def metrics(records: list[dict]) -> dict:
         "slowdown_cases": [r["name"] for r in ran if r.get("slowdowns")],  # Task 6.6: listed apart, never a detection
         # Task 6.8c: unchecked cases whose only comparison ran on a placeholder `self`, by what it showed. Never in a rate.
         "placeholder_cases": {v: [r["name"] for r in ran if r.get("placeholder_verdict") == v] for v in (DETECTED, QUIET)},
+        # Task 6.8e: detections whose every difference is on a second-pass guess. Counted as detections, listed apart.
+        "feedback_only_cases": [r["name"] for r in checked if r["verdict"] == DETECTED and r.get("feedback_only_detection")],
         "matched": sum(1 for r in checked if r["match"]),
         "detection": {"detected": found, "total": len(want), "rate": _rate(found, len(want))},
         "false_alarm": {"alarms": alarms, "total": len(calm), "rate": _rate(alarms, len(calm))},
@@ -706,7 +720,9 @@ def metrics_text(m: dict) -> str:
     lines = [
         f"Cases: {m['cases']} ({m['checked']} checked, {m['unchecked']} unchecked, {m['errors']} errors; "
         f"{m['matched']} matched the expectation)",
-        f"Detection rate: {_pct(d['rate'])} ({d['detected']} of {d['total']} checked cases expected to be detected)",
+        f"Detection rate: {_pct(d['rate'])} ({d['detected']} of {d['total']} checked cases expected to be detected)"
+        + (f"; of all detections, {len(m['feedback_only_cases'])} only on second-pass guesses ({', '.join(m['feedback_only_cases'])})"
+           if m.get("feedback_only_cases") else ""),
         f"False-alarm rate: {_pct(f['rate'])} ({f['alarms']} of {f['total']} checked change cases expected quiet)",
         f"Untested share: {_pct(u['share'])} ({u['functions']} of {u['total']} functions)",
         f"Mutation score: {_pct(m['mutation']['score'])} ({m['mutation']['killed']} of {m['mutation']['total']} planted bugs caught)",

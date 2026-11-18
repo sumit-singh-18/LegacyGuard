@@ -15,6 +15,7 @@ from guardlib import config as cfgmod
 from guardlib import symbol_diff, symbols
 from indexer.coverage_map import clean_env, load_harvest
 from runner import examples
+from runner import feedback
 from runner import inputs as input_lib
 from runner import lg_codec
 from runner import mutants
@@ -45,6 +46,7 @@ class Target:
     via: str = ""                                  # not edited itself: "calls states_in_range" (FR-41)
     via_file: str = ""                             # the file whose edit made this function worth running
     source_start: int = 0                          # first line of `source` in the baseline file
+    new_source_start: int = 0                      # first line of `new_source` in the edited file (Task 6.8e)
     requests: list = field(default_factory=list)   # kind "route": the HTTP requests to send (roadmap C3)
     declared: list = field(default_factory=list)   # inputs with an "expect" from declare_change (roadmap D1)
     # A caller (via) passes only if its inputs ran the edited function's changed statements. Two steps away, that is
@@ -107,6 +109,19 @@ class Result:
     # the result is already different or broken.
     slowdown_candidates: list = field(default_factory=list)
     slowdowns: list = field(default_factory=list)
+    # Task 6.8e: changed statements no input ran ([first, last, in the old tree]); for each, what must hold for it to
+    # run, in words; and the second pass aimed at those conditions: inputs added, changed statements it reached that the
+    # first pass had not, seconds it took, and why there was none when there was none.
+    unreached_ranges: list = field(default_factory=list)
+    unreached_chains: list = field(default_factory=list)
+    feedback_tried: int = 0
+    feedback_reached: int = 0
+    feedback_seconds: float = 0.0
+    feedback_note: str = ""
+    feedback_raised: int = 0        # changed statements only second-pass inputs ran, on which both versions raised (not counted)
+    feedback_dropped: int = 0       # ... ran only by second-pass inputs dropped otherwise (old disagreed with itself, set-up failed)
+    feedback_only: bool = False     # every difference is on a second-pass input (a guess); CI still fails, the wake hedges
+    compared: list = field(default_factory=list)  # positions of the inputs that were compared (compare_one's own drops left out)
 
     @property
     def subject(self) -> str:
@@ -167,7 +182,7 @@ def changed_targets(rel: str, before: str | None, after: str | None) -> list[Tar
             old_gate, new_gate = examples.gates(before, after, c.before, c.after)
             out[c.qualname] = Target(rel, c.qualname, c.after.kind, old.params, symbols.sha(c.after.node_text),
                                      old_gate=old_gate, new_gate=new_gate, source=old.node_text, source_start=old.line_start,
-                                     new_source=c.after.node_text)
+                                     new_source=c.after.node_text, new_source_start=c.after.line_start)
         elif c.kind in ("renamed", "visibility_changed") and c.before.kind != "class":
             pass  # the old name is gone; static checks report it, and callers show up at Stop
     changed_names = _changed_constants(before, after)
@@ -527,6 +542,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                 _note_disagreement(r, ca, cb, a.get("env"), (b or {}).get("env"))
                 continue
         r.inputs_compared += 1
+        r.compared.append(i)
         r.placeholder_inputs += on_placeholder
         if ca.get("io"):
             r.inputs_with_io += 1
@@ -552,6 +568,7 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             hit += h
             (missed_old if old_tree else missed).extend(m)
         r.statements_reached, r.statements_total = len(hit), sum(len(g) for g, _, _ in parts)
+        r.unreached_ranges = [[s, e, False] for s, e in missed] + [[s, e, True] for s, e in missed_old]
     if r.declared_failures and not r.differences:
         r.status = DIFFERENT
         return r
@@ -1194,8 +1211,247 @@ def _finish_specs(specs: list[dict], runnable: dict, results: dict) -> tuple[lis
     return out_specs, out_runnable
 
 
+# ---- second pass (Task 6.8e): inputs aimed at the conditions around changed statements the first inputs missed ----
+FEEDBACK_MIN_S = 3.0          # seconds of the check's limit a second pass needs left to start building inputs
+FEEDBACK_RUN_MIN_S = 1.5      # seconds it needs left, once they are built, to run them
+FEEDBACK_ONLY_TEXT = ("The difference shows only on second-pass guesses (inputs built to reach changed lines the first "
+                      "inputs missed), not on any input from tests, examples or callers; confirm with a realistic input")
+FEEDBACK_BUILD_S = 2.0        # diagnosing and building the second pass's inputs, all functions together
+FEEDBACK_MIN_FN_S = 0.5       # of a function's own time (lg_worker FUNCTION_BUDGET_S) still left to run it again
+FUNCTION_BUDGET_S = 10.0      # matches lg_worker.FUNCTION_BUDGET_S
+# Untested reasons a second pass can help with: some changed statement never ran, or no input ran to completion (the
+# guesses all raised before it); not a blocked call, a setup failure or non-determinism.
+REACH_REASONS = ("none of the ", "inputs reached ", "no input ran to completion")
+
+
+def _with_input_lines(specs: list[dict], runnable: dict) -> list[dict]:
+    """Specs where each edited function (not a caller or a route) also reports every input's own traced lines."""
+    out = []
+    for spec in specs:
+        t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
+        out.append({**spec, "input_lines": True} if not t.via and t.kind != "route" and spec.get("kind") != "http" else spec)
+    return out
+
+
+def _wants_second_pass(t: Target, r: Result) -> bool:
+    return (not t.via and t.kind != "route" and r.status == UNTESTED and bool(r.unreached_ranges)
+            and r.reason.startswith(REACH_REASONS))
+
+
+def _merge_run(first: dict | None, second: dict | None, keep: list | None = None) -> dict | None:
+    """One function's first-pass run with its second-pass run appended: outcomes and per-input facts in order, traced
+    lines joined. The first run stands alone when the second did not run the same way (status, or `self` built
+    differently).
+
+    keep: per second-pass input, whether its lines count. Only second-pass inputs that compare_one compared count:
+    one it dropped (both versions raised on a guess, no comparable outcome such as a timeout, old disagreed with itself,
+    set-up failed) never makes a changed statement reached. When keep is missing or its length, or that of the
+    per-input lines, does not match the second pass's inputs, no second-pass line counts."""
+    if not first or not second or first.get("status") != "ran" or second.get("status") != "ran" \
+            or first.get("self_recipe") != second.get("self_recipe") or bool(first.get("self_weak")) != bool(second.get("self_weak")):
+        return first
+    out = dict(first)
+    k1, k2 = len(first.get("results") or []), len(second.get("results") or [])
+    for k in ("results", "seconds", "limits", "clock_reads", "input_lines"):
+        if k in first or k in second:
+            out[k] = list(first.get(k) or [None] * k1) + list(second.get(k) or [None] * k2)
+    if first.get("lines") is not None and second.get("lines") is not None:
+        per = second.get("input_lines")
+        if keep is not None and len(keep) == k2 and isinstance(per, list) and len(per) == k2:
+            counted = {x for i, lines in enumerate(per) if keep[i] for x in (lines or [])}
+        else:
+            counted = set()
+        out["lines"] = sorted(set(first["lines"]) | counted)
+    if first.get("gate_lines") is not None and second.get("gate_lines") is not None:
+        out["gate_lines"] = sorted(set(first["gate_lines"]) | set(second["gate_lines"]))
+    return out
+
+
+def _second_compare(t: Target, items: list, fb_items: list, a_runs: tuple, b_runs: tuple, n_runs: tuple, use_self: bool):
+    """compare_one on the first and second pass joined, with a changed statement counted as reached only when some
+    second-pass input that compare_one actually compared ran it. First every second-pass line counts, to learn which
+    second-pass positions compare_one compares (it leaves out both-raise guesses, inputs without a comparable outcome
+    such as timeouts, set-up failures, placeholder mismatches and old-vs-old disagreements); then only those count.
+    Returns (result, result with every second-pass line, keep, (merged a, b, n)), or None when the runs do not join."""
+    every = [True] * len(fb_items)
+    use_b = use_self and b_runs[0] is not None and b_runs[1] is not None
+    ma, mn = _merge_run(*a_runs, every), _merge_run(*n_runs, every)
+    mb = _merge_run(*b_runs, every) if use_b else None
+    if ma is a_runs[0] or mn is n_runs[0] or (use_b and mb is b_runs[0]):
+        return None
+    joined = items + fb_items
+    ran_all = compare_one(t, joined, ma, mb, mn, use_self)
+    done = set(ran_all.compared)
+    keep = [len(items) + i in done for i in range(len(fb_items))]
+    ma, mn = _merge_run(*a_runs, keep), _merge_run(*n_runs, keep)
+    mb = _merge_run(*b_runs, keep) if use_b else None
+    return compare_one(t, joined, ma, mb, mn, use_self), ran_all, keep, (ma, mb, mn)
+
+
+def _reached_count(t: Target, a: dict | None, n: dict | None) -> int:
+    """Changed statements the traced lines of these runs reached (the gate of compare_one, without comparing)."""
+    total = 0
+    for gate, executed, _ in gate_parts(t, a or {}, n or {}):
+        got = examples.coverage(gate, executed)
+        total += len(got[0]) if got else 0
+    return total
+
+
+def _spent(runs: list, key: str) -> tuple[float, int]:
+    """(seconds the function's calls took in the slowest first-pass run, timeouts in the run with most)."""
+    secs, outs = 0.0, 0
+    for run in runs:
+        got = (run or {}).get(key) or {}
+        secs = max(secs, sum(s for s in got.get("seconds") or [] if s))
+        outs = max(outs, sum(1 for o in got.get("results") or [] if o.get("outcome") in ("timeout", "skipped_slow")))
+    return secs, outs
+
+
+def _explain_unreached(r: Result, t: Target, run: dict | None) -> None:
+    """Add to an untested reason what keeps each unreached changed statement from running (Task 6.8e)."""
+    if not r.unreached_ranges or not r.reason.startswith(REACH_REASONS):
+        return
+    old = all(o for _, _, o in r.unreached_ranges)
+    source, start = (t.source, t.source_start) if old else (t.new_source, t.new_source_start)
+    ranges = [[s, e] for s, e, o in r.unreached_ranges if o == old]
+    try:
+        plans = feedback.diagnose(source, start, ranges, (run or {}).get("lines"))
+    except Exception:  # noqa: BLE001 - the reason stays as it was
+        plans = []
+    r.unreached_chains = [p["text"] for p in plans]
+    if r.unreached_chains:
+        r.reason += "; " + "; ".join(r.unreached_chains)
+    if r.feedback_tried:
+        parts = [f"reached {r.feedback_reached} more of them"] if r.feedback_reached or not (r.feedback_raised or r.feedback_dropped) else []
+        if r.feedback_raised:
+            parts.append(f"ran {r.feedback_raised} more but both versions raised there, so "
+                         f"{'it does' if r.feedback_raised == 1 else 'they do'} not count")
+        if r.feedback_dropped:
+            parts.append(f"ran {r.feedback_dropped} more only on inputs that were not compared (the old code disagreed with "
+                         f"itself, or set-up failed), so {'it does' if r.feedback_dropped == 1 else 'they do'} not count")
+        r.reason += f"; a second pass of {r.feedback_tried} inputs aimed at these conditions " + "; it ".join(parts)
+    if r.feedback_note:
+        r.reason += f"; {r.feedback_note}"
+
+
+def second_pass(cfg, py: str, baseline_root: str, work_root: str, paths_old: list[str], paths_new: list[str],
+                specs_old: list[dict], specs_n: list[dict], runnable: dict, syms: dict, results: dict,
+                a: dict, b: dict | None, n: dict, use_self: bool, left_s: float, warm_names: list[str], parse_cache: dict) -> None:
+    """Task 6.8e. For each edited function left untested because some changed statement never ran: work out what must
+    hold for it to run (feedback.diagnose), build at most feedback.MAX_FEEDBACK_ITEMS inputs aimed at that, starting
+    from the first-pass inputs that got furthest (feedback.build), and run them once more in all three runs, within
+    what the check's limit and the function's own time limit left. The second pass's outcomes are appended to the first
+    pass's and compared again by compare_one, so the status rules are unchanged: verified only when every changed
+    statement was run. specs_old, specs_n and runnable are updated in place to the joined inputs. Every untested
+    result whose statements were not all reached gets the conditions in its reason."""
+    started = time.monotonic()
+    build_deadline = started + FEEDBACK_BUILD_S
+    planned: dict = {}  # key -> second-pass inputs
+    for key, (t, items) in runnable.items():
+        r = results.get(t.qualname)
+        if r is None or not _wants_second_pass(t, r):
+            continue
+        old = all(o for _, _, o in r.unreached_ranges)
+        run = (a if old else n).get(key) or {}
+        source, start = (t.source, t.source_start) if old else (t.new_source, t.new_source_start)
+        if left_s < FEEDBACK_MIN_S:
+            r.feedback_note = f"no second pass: {max(left_s, 0):.1f} s of the check's limit were left"
+            continue
+        secs, outs = _spent([a, b, n], key)
+        if FUNCTION_BUDGET_S - secs < FEEDBACK_MIN_FN_S:
+            r.feedback_note = "no second pass: the first inputs used up the function's time"
+            continue
+        plans: list = []
+        notes: list = []
+        try:
+            plans = feedback.diagnose(source, start, [[s, e] for s, e, o in r.unreached_ranges if o == old], run.get("lines"))
+            got = _parsed(parse_cache, baseline_root if old else work_root, t.file)
+            fb_items = feedback.build(syms.get(key) or {"params": t.params}, items, run.get("input_lines"), plans,
+                                      got[0] if got else None, feedback.MAX_FEEDBACK_ITEMS, build_deadline, notes)
+        except Exception:  # noqa: BLE001
+            fb_items = []
+        if notes:
+            r.feedback_note = "; ".join(dict.fromkeys(notes))
+        if not fb_items:
+            r.feedback_note = ("no second pass: the unreached lines cannot run" if plans and all(p.get("dead") for p in plans)
+                               else f"no second pass: {r.feedback_note}" if notes
+                               else "no second pass: no input could be aimed at these conditions")
+            continue
+        planned[key] = (fb_items, secs, outs)
+    # What the check's limit has left once the inputs are built: the extra round never runs past it.
+    limit = left_s - (time.monotonic() - started)
+    if planned and limit < FEEDBACK_RUN_MIN_S:
+        for key, (fb_items, _, _) in planned.items():
+            note = f"no second pass: {max(limit, 0):.1f} s of the check's limit were left to run its {len(fb_items)} inputs"
+            r = results[runnable[key][0].qualname]
+            r.feedback_note = f"{r.feedback_note}; {note}" if r.feedback_note else note
+        planned = {}
+    if planned:
+        def second(specs: list[dict]) -> list[dict]:
+            out = []
+            for spec in specs:
+                key = f"{spec['module']}:{spec['qualname']}"
+                if key in planned:
+                    fb_items, secs, outs = planned[key]
+                    first = len(runnable[key][1])
+                    out.append({**{k: v for k, v in spec.items() if k != "mutants"}, "inputs": fb_items,
+                                "indexes": list(range(first, first + len(fb_items))),
+                                "budget": max(FEEDBACK_MIN_FN_S, FUNCTION_BUDGET_S - secs), "timeouts_before": outs})
+            return out
+        s_old, s_new = second(specs_old), second(specs_n)
+        with cf.ThreadPoolExecutor(3) as pool:
+            fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_old, s_old, limit, warm_names)
+            fn = pool.submit(_run_worker, cfg, py, work_root, paths_new, s_new, limit, warm_names)
+            fb = pool.submit(_run_worker, cfg, py, baseline_root, paths_old, s_old, limit, warm_names) if use_self else None
+            a2, n2 = fa.result(), fn.result()
+            b2 = fb.result() if fb else None
+        failed = next((x[FAILED] for x in (a2, n2, b2) if x and FAILED in x), None) if a2 and n2 else "no result"
+        elapsed = time.monotonic() - started
+        by_old = {f"{s['module']}:{s['qualname']}": s for s in specs_old}
+        by_new = {f"{s['module']}:{s['qualname']}": s for s in specs_n}
+        for key, (fb_items, _, _) in planned.items():
+            t, items = runnable[key]
+            r1 = results[t.qualname]
+            if failed:
+                r1.feedback_note = f"a second pass of {len(fb_items)} inputs did not finish ({failed})"
+                continue
+            joined = items + fb_items
+            got = _second_compare(t, items, fb_items, (a.get(key), a2.get(key)), (b.get(key) if b else None, b2.get(key) if b2 else None),
+                                  (n.get(key), n2.get(key)), use_self)
+            if got is None:
+                r1.feedback_note = f"a second pass of {len(fb_items)} inputs could not be run the same way as the first"
+                continue
+            r2, ran_all, keep, (ma, mb, mn) = got
+            r2.feedback_tried = len(fb_items)
+            r2.feedback_reached = max(0, r2.statements_reached - r1.statements_reached)
+            # Statements only dropped second-pass inputs ran: both versions raised (a guess neither accepts), or dropped
+            # for another reason (old code disagreed with itself, set-up failed). Named apart in the reason.
+            outs = [(x or {}).get("results") or [] for x in (a2.get(key), n2.get(key))]
+            raised = [all(i < len(o) and o[i].get("outcome") == "raise" for o in outs) for i in range(len(fb_items))]
+            with_raised = _reached_count(t, _merge_run(a.get(key), a2.get(key), [k or z for k, z in zip(keep, raised)]),
+                                         _merge_run(n.get(key), n2.get(key), [k or z for k, z in zip(keep, raised)]))
+            r2.feedback_raised = max(0, with_raised - r2.statements_reached)
+            r2.feedback_dropped = max(0, ran_all.statements_reached - max(with_raised, r2.statements_reached))
+            r2.feedback_note = r1.feedback_note
+            r2.feedback_seconds = elapsed
+            r2.feedback_only = bool(r2.differences) and all(d.get("source") == "feedback" for d in r2.differences)
+            results[t.qualname] = r2
+            runnable[key] = (t, joined)
+            by_old[key]["inputs"] = joined
+            by_new[key]["inputs"] = joined
+            a[key], n[key] = ma, mn
+            if mb is not None:
+                b[key] = mb
+    for key, (t, _) in runnable.items():
+        r = results.get(t.qualname)
+        if r is not None and not t.via and t.kind != "route" and r.status == UNTESTED:
+            old = bool(r.unreached_ranges) and all(o for _, _, o in r.unreached_ranges)
+            _explain_unreached(r, t, (a if old else n).get(key))
+
+
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
     """Run old twice and new once, in parallel subprocesses, on the same inputs."""
+    check_started = time.monotonic()
     # The test-file list is cached per root for one check; a long-lived caller (backtest, the validation
     # harness) may have checked out another commit since, so every check starts from a fresh list.
     examples._TEST_FILES.clear()
@@ -1212,6 +1468,8 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
     edit_cache: dict = {}
     regex_caches: dict = {}  # (file, qualname) of an edited function -> its regex samples, shared with its callers
     seeds: dict = {}  # an edited function's key -> what its edit inputs were built from, for carved bases (task 6.1)
+    syms: dict = {}   # key -> the signature its inputs were built for (Task 6.8e builds second-pass inputs for it)
+    recorded_s = 0.0
     for t in targets[:MAX_FUNCTIONS]:
         if t.kind == "route":
             app = cfg.raw.get("app") or ""
@@ -1262,6 +1520,7 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             spec["self_types"] = self_types
         specs.append(spec)
         runnable[f"{module}:{t.qualname}"] = (t, items)
+        syms[f"{module}:{t.qualname}"] = sym
         roots.add(sys_rel)
         if not t.via and edit:
             seeds[f"{module}:{t.qualname}"] = {"sym": sym, "edit": edit, "deadline": (ex or {}).get("seed_deadline"), "cache": regex_cache}
@@ -1292,9 +1551,9 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
         _add_carved_edit_items(cfg, specs, carved, seeds, int(bd["max_inputs"]))
         specs, runnable = _finish_specs(specs, runnable, results)
     if specs:
-        specs_old = _tree_specs(specs, runnable, old=True)
+        specs_old = _with_input_lines(_tree_specs(specs, runnable, old=True), runnable)
         specs_a = _with_mutants(specs_old, runnable, int(bd.get("mutants", 8)), baseline_root)
-        specs_n = _tree_specs(specs, runnable, old=False)
+        specs_n = _with_input_lines(_tree_specs(specs, runnable, old=False), runnable)
         with cf.ThreadPoolExecutor(3) as pool:
             fa = pool.submit(_run_worker, cfg, py, baseline_root, paths_for(baseline_root), specs_a, deadline, warm_names)
             fn = pool.submit(_run_worker, cfg, py, work_root, paths_for(work_root), specs_n, deadline, warm_names)
@@ -1315,6 +1574,14 @@ def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest:
             if setup_note and results[t.qualname].status == UNTESTED:
                 results[t.qualname].reason += f" (the project's Django settings did not load: {setup_note})"
         if not failed and a and n:
+            # Task 6.8e: a bounded second pass aimed at the changed statements no input ran, within the check's limit.
+            # Everything so far counts: building inputs, recording callers' calls, and the three runs.
+            left = float(bd["timeout_s"]) - (time.monotonic() - check_started)
+            try:
+                second_pass(cfg, py, baseline_root, work_root, paths_for(baseline_root), paths_for(work_root), specs_old, specs_n,
+                            runnable, syms, results, a, b, n, use_self, left, warm_names, parse_cache)
+            except Exception:  # noqa: BLE001 - a second pass that cannot run leaves the first results as they were
+                pass
             confirm_slowdowns(cfg, py, baseline_root, work_root, paths_for(baseline_root), paths_for(work_root), specs_old, specs_n, runnable, results)
     for t in targets:
         results[t.qualname].via, results[t.qualname].via_file = t.via, t.via_file
@@ -1438,6 +1705,9 @@ def format_note(results: list[Result]) -> str:
             io = (f"Database and HTTP calls were answered by stand-ins (no rows, HTTP 200 with an empty body), so for "
                   f"{r.inputs_with_io} inputs what agreed is the calls made, not their real results. ") if r.inputs_with_io else ""
             reach = f"; the inputs {reached_text(r)}" if r.statements_total else ""
+            if r.feedback_reached:
+                reach += (f", {r.feedback_reached} of them only by {r.feedback_tried} inputs from a second pass aimed at the "
+                          "conditions around lines the first inputs missed")
             carved = carved_text(r)
             lines.append(f"LegacyGuard ran {r.subject} before and after this edit: no difference on {r.inputs_compared} inputs "
                          f"({r.inputs_completed} returned a value{reach}). " + (f"{carved}. " if carved else "") + (f"{conf}. " if conf else "") + io +
@@ -1480,6 +1750,11 @@ def format_wake(result: Result, finding_id: str) -> str:
         lines.append(f"{d['call']}  before {d['before']}  after {d['after']}  [{d['source']}]")
     if any(d.get("source") == "carved" for d in result.differences[:MAX_SHOWN]):
         lines.append("Inputs marked [carved] are calls a caller of this function made on the code before the edit, recorded and replayed.")
+    if any(d.get("source") == "feedback" for d in result.differences[:MAX_SHOWN]):
+        lines.append("Inputs marked [feedback] were built in a second pass aimed at the conditions guarding changed lines the first "
+                     "inputs never ran; they are guesses, so values the function would never get in real use are possible.")
+    if result.feedback_only:
+        lines.append(FEEDBACK_ONLY_TEXT + ".")
     if result.only_special:
         lines.append("Every differing input contains NaN or infinity. On the ordinary values tried, old and new code agree.")
     if result.only_float_noise:

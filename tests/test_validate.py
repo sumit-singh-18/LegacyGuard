@@ -501,3 +501,24 @@ def test_nondeterministic_causes_counted():
     m = validate.metrics(records)
     assert m["nondeterministic_causes"] == {noise.TIME: 2, noise.THREAD_IDS: 1}
     assert "Untested as non-deterministic, by cause (functions): time readings 2, thread ids 1" in validate.metrics_text(m)
+
+
+def test_feedback_only_detections_are_counted_but_listed_apart():
+    """Task 6.8e: a difference only on second-pass guesses is still a detection, listed apart in the metrics text."""
+    from runner import diff
+    r = diff.Result("a.py", "f", diff.DIFFERENT, "h", inputs_compared=3, feedback_tried=4, feedback_only=True,
+                    differences=[{"call": "f(xs=[1, 2, 3])", "before": "4", "after": "3", "source": "feedback"}])
+    rec = validate._function(r)
+    assert rec["feedback_only"] and rec["second_pass"]["tried"] == 4
+    got = validate.classify("bug", [rec], ["a.py"])
+    assert got["verdict"] == "detected" and got["feedback_only_detection"]
+    other = validate._function(diff.Result("a.py", "g", diff.DIFFERENT, "h", inputs_compared=1,
+                                           differences=[{"call": "g(1)", "before": "1", "after": "2", "source": "tests"}]))
+    assert not validate.classify("bug", [rec, other], ["a.py"])["feedback_only_detection"]
+    records = [{"name": "p", "kind": "bug", "expect": "detected", "verdict": "detected", "match": True, "seconds": 1.0,
+                "functions": [rec], "mutants_killed": 0, "mutants_total": 0, "feedback_only_detection": True},
+               {"name": "q", "kind": "bug", "expect": "detected", "verdict": "detected", "match": True, "seconds": 1.0,
+                "functions": [other], "mutants_killed": 0, "mutants_total": 0, "feedback_only_detection": False}]
+    m = validate.metrics(records)
+    assert m["detection"]["detected"] == 2 and m["feedback_only_cases"] == ["p"]
+    assert "of all detections, 1 only on second-pass guesses (p)" in validate.metrics_text(m)

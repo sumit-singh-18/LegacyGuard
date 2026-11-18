@@ -401,11 +401,15 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                 evidence += f". {r.placeholder_note}"
             if getattr(r, "clock_note", ""):
                 evidence += f". {r.clock_note}"
+            if getattr(r, "feedback_only", False):
+                evidence += f". {differ.FEEDBACK_ONLY_TEXT}"
             state = "waived" if waived else "intended" if intended else "open"
             extra = {"counterexamples": r.differences[:differ.MAX_SHOWN], "inputs_compared": r.inputs_compared,
                      "statements": [r.statements_reached, r.statements_total], **via}
             if r.self_placeholder and r.placeholder_note:
                 extra["placeholder_self"] = r.self_placeholder
+            if getattr(r, "feedback_only", False):
+                extra["feedback_only"] = True  # Task 6.8e: still a finding (CI fails as for other edit guesses), hedged
             if r.carved_captured or r.carved_unstored:
                 extra["carved"] = {"captured": r.carved_captured, "added": r.carved_added, "replayed": r.carved_replayed,
                                    "already": r.carved_already, "unstored": r.carved_unstored}
@@ -434,6 +438,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                                                   if r.dropped_nondeterministic else "") +
                                                  (f"; {differ.reached_text(r)}" + (f" of {differ.callee_names(r.callees)}" if r.via and r.callees else "")
                                                   if r.statements_total else "") +
+                                                 (f" ({r.feedback_reached} of them only by {r.feedback_tried} second-pass inputs aimed at "
+                                                  "the conditions around them)" if getattr(r, "feedback_reached", 0) else "") +
                                                  (f"; {differ.confidence_text(r)}" if r.mutants_total else "") +
                                                  (f"; {differ.carved_text(r)}" if differ.carved_text(r) else "") +
                                                  (f"; {differ.placeholder_text(r)}" if r.placeholder_inputs else ""),
