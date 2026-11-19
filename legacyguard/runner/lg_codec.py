@@ -32,8 +32,38 @@ class Unencodable(Exception):
 IN_TARGET = __name__ == "lg_codec"
 
 
+# Process ids (Task 6.8d, reworked after validation run 4). The worker gives the project's code its real pid and ppid,
+# so every OS lookup on them works (C extensions included), and registers them here; canon then writes them as
+# "<pid>"/"<parent pid>", so OLD-A, OLD-B and NEW (three processes) agree on a stored or printed pid. Empty in the guard
+# and when determinism is off. Ids below PID_MASK_MIN are never masked: small numbers are common constants (200, 404,
+# 500), and a pid left unmasked only makes the old code disagree with itself (untested, with its cause), never hides
+# a difference.
+PID_MASK_MIN = 1000
+PIDS: dict = {}
+_PID_RE: dict = {}
+
+
+def set_pids(pid: int, ppid: int, also=()) -> None:
+    """Mask pid and ppid in canon. `also`: earlier pids of the same process tree that the project saw as its own (a
+    warm server's pid, read by modules it imported before forking this child).
+
+    Known limit: in a warm child the server is also the real parent, so `also` makes os.getppid() read "<pid>" too.
+    Under warm workers an edit from `return os.getpid()` to `return os.getppid()` is then verified (cold: different).
+    The swap is hidden whenever the new side runs warm (both warm, or only the old side fell back to cold); an
+    unchanged os.getppid() with one side warm and the other cold gives a false "different"."""
+    PIDS.clear()
+    _PID_RE.clear()
+    for value, label in [(pid, "<pid>"), *((p, "<pid>") for p in also), (ppid, "<parent pid>")]:
+        if isinstance(value, int) and value >= PID_MASK_MIN and value not in PIDS:
+            PIDS[value] = label
+    if PIDS:
+        _PID_RE["re"] = re.compile(r"(?<![0-9])(" + "|".join(str(v) for v in PIDS) + r")(?![0-9])")
+
+
 def _scrub(text: str) -> str:
-    return _ADDR.sub("0x…", text)
+    text = _ADDR.sub("0x…", text)
+    pid_re = _PID_RE.get("re")
+    return pid_re.sub(lambda m: PIDS[int(m.group(1))], text) if pid_re is not None else text
 
 
 def _simple(value):
@@ -214,6 +244,8 @@ def decode(enc):
 def canon(value, depth: int = 0, seen=None):
     """Deterministic comparable form. Sets and dicts are order-independent; object ids are scrubbed."""
     seen = seen if seen is not None else set()
+    if PIDS and type(value) is int and value in PIDS:
+        return {"t": "procid", "v": PIDS[value]}
     simple = _simple(value)
     if simple is not None:
         if simple["t"] == "v" and isinstance(simple["v"], str):

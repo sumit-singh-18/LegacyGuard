@@ -29,7 +29,7 @@ if HERE not in sys.path:
 import lg_worker as W  # noqa: E402
 
 IDLE_S = 20 * 60
-STATE = {"warm": set(), "runs": 0, "mode": "work", "root_real": "", "setup_error": None}
+STATE = {"warm": set(), "runs": 0, "mode": "work", "root_real": "", "setup_error": None, "server_pid": 0, "server_ppid": 0}
 
 
 def _warm(names: list[str]) -> None:
@@ -63,6 +63,10 @@ def _run(msg: dict) -> dict:
             # A fresh scratch folder per check: what this check writes during setup is not seen by the next one.
             # Files the server wrote while warming stay readable (their SHADOW entries are inherited), never changed.
             W.use_scratch(request.get("scratch"))
+            # Determinism on: this child's pid, plus the server's, which modules warmed there read. Known limit: the
+            # server is this child's real parent, so os.getppid() is masked as "<pid>" too (see lg_codec.set_pids).
+            if W.DET["on"]:
+                W.lg_codec.set_pids(os.getpid(), STATE["server_ppid"], also=(STATE["server_pid"],))
             setup_error = STATE["setup_error"]
             if STATE["mode"] == "work" and request.get("django_settings"):
                 W.GUARD_WRITES["allowed"] = False
@@ -97,6 +101,7 @@ def serve(sock_path: str, init_path: str, mode: str) -> None:
     server.listen(8)
     server.settimeout(IDLE_S)
     STATE["mode"] = mode
+    STATE["server_pid"], STATE["server_ppid"] = os.getpid(), os.getppid()
     # The server's own scratch folder (the init request's belongs to the first check and is deleted after it).
     STATE["root_real"], STATE["setup_error"] = W.prepare({**init, "scratch": None}, with_django=(mode == "baseline"))
     W.GUARD_WRITES["allowed"] = True  # the server's own bookkeeping; children turn the blocks back on

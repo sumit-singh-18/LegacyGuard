@@ -1,6 +1,9 @@
 """Task 6.8d: old code that disagrees with itself. The cause is named in the untested reason, and common benign
-sources (clocks other than time.time, thread and process ids, default thread names) are frozen for the project's own
-code, so such functions can be compared. Real differences next to them must still be found."""
+sources (clocks other than time.time, thread ids, default thread names) are frozen for the project's own code, and
+process ids stay real but are written as <pid> when compared, so such functions can be compared. Real differences next
+to them must still be found."""
+import re
+
 from runner import diff, lg_codec, noise
 
 from conftest import call, write_tree
@@ -120,7 +123,9 @@ def test_changed_value_next_to_noise_is_still_found(tmp_path, make_cfg):
     got = _run(tmp_path, make_cfg, SRC, new)
     for name in ("with_address", "Tracker.start", "timed", "thread_name"):
         assert got[name].status == diff.DIFFERENT, (name, got[name].reason)
-    assert "self.pid=4243" in got["Tracker.start"].differences[0]["after"]
+    # The pid itself is real (the OS knows it) and shown as <pid>; pid + 1 is just a number, so it differs.
+    first = got["Tracker.start"].differences[0]
+    assert "self.pid=<pid>" in first["before"] and re.search(r"self\.pid=\d+", first["after"]), first
     assert "0x…" in got["with_address"].differences[0]["before"]
 
 
@@ -148,8 +153,8 @@ def test_library_clocks_stay_real(run_worker, tmp_path):
     first, second = (r["value"] for r in out["results"])
     assert first == second
     mono, lib_real, ident, pid, name = (lg_codec.display(v) for v in first["v"])
-    assert mono == "1000.001" and ident == "1" and pid == "4242" and name == "'Thread-1'"
-    assert out["env"]["pid"] != 4242 and out["env"]["threads"]
+    assert mono == "1000.001" and ident == "1" and pid == "<pid>" and name == "'Thread-1'"
+    assert isinstance(out["env"]["pid"], int) and out["env"]["pid"] > 0 and out["env"]["threads"]
 
 
 def _ret(v, state=None):
@@ -352,3 +357,35 @@ def test_added_clock_read_is_a_hedged_difference(tmp_path, make_cfg):
     # A value change that does not touch the clock gets no such note.
     plain = _run(tmp_path / "plain", make_cfg, CLOCKED, CLOCKED.replace("range(x % 50)", "range(x % 49)"))["measure"]
     assert plain.status == diff.DIFFERENT and not plain.clock_note
+
+
+def test_pid_given_to_project_code_works_with_the_os(run_worker, tmp_path):
+    # The pid the project's code reads must be one the OS knows: code (or a C extension) that asks the OS about its own
+    # process, at import time or during a call, gets the same answer as outside the guard.
+    root = write_tree(tmp_path / "p", {"m.py": '''
+        import os
+        AT_IMPORT = os.getpgid(os.getpid()) == os.getpgrp()
+        def probe():
+            return AT_IMPORT, os.getpgid(os.getpid()) == os.getpgrp(), os.getsid(os.getpid()) == os.getsid(0)
+    '''})
+    out = run_worker(root, [{"module": "m", "qualname": "probe", "inputs": [call()]}])["m:probe"]
+    assert out.get("status") == "ran", out
+    result = out["results"][0]
+    assert result["outcome"] == "return", result
+    assert lg_codec.display(result["value"]) == "(True, True, True)"
+
+
+def test_pid_masking_in_canon():
+    # Guard side (nothing registered): numbers stay numbers.
+    assert lg_codec.PIDS == {} and lg_codec.canon(54321) == {"t": "v", "v": 54321}
+    try:
+        lg_codec.set_pids(54321, 777, also=(54000,))
+        assert lg_codec.canon(54321) == lg_codec.canon(54000) == {"t": "procid", "v": "<pid>"}
+        assert lg_codec.display(lg_codec.canon(54321)) == "<pid>"
+        assert lg_codec.canon(777) == {"t": "v", "v": 777}  # below PID_MASK_MIN: a common constant, never masked
+        assert lg_codec.canon(54322) == {"t": "v", "v": 54322} and lg_codec.canon(True) == {"t": "v", "v": True}
+        assert lg_codec.canon("worker-54321 of 154321 at 543210")["v"] == "worker-<pid> of 154321 at 543210"
+        assert lg_codec.canon(RuntimeError) != lg_codec.canon(54321)
+    finally:
+        lg_codec.PIDS.clear()
+        lg_codec._PID_RE.clear()

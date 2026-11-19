@@ -1127,7 +1127,8 @@ def _fake_uuid1(node=None, clock_seq=None):
     return uuid.UUID(int=_IDS.getrandbits(128), version=1)
 
 
-# Task 6.8d: clocks, thread ids and process ids read by the project's own code. Two runs of the same old code read
+# Task 6.8d: clocks and thread ids read by the project's own code (process ids: see install_determinism and
+# lg_codec.set_pids; they stay real so the OS can be asked about them). Two runs of the same old code read
 # different values from them (they are not seeded), so a method that stores time.monotonic() or threading.get_ident()
 # on self disagreed with itself and was never checked. They are frozen only for callers in the project (and the
 # TIME_HELPERS modules): asyncio, threading, queue and other libraries keep the real values, so their own timers and
@@ -1135,7 +1136,6 @@ def _fake_uuid1(node=None, clock_seq=None):
 PROJECT = {"root": ""}
 _FROM_PROJECT: dict = {}
 _OWN_MODULES = {"__main__", "lg_worker", "lg_codec", "lg_stubs", "lg_server", "legacyguard_harvest"}
-FAKE_PID, FAKE_PPID = 4242, 4241
 _THREAD_IDS: dict = {}  # real ident or native id -> a small stable number, in the order the project's code first read it
 
 
@@ -1251,14 +1251,6 @@ def _fake_get_native_id():
     return _stable_thread_id(real, "native") if _from_project() else real
 
 
-def _fake_getpid():
-    return FAKE_PID if _from_project() else _REAL["getpid"]()
-
-
-def _fake_getppid():
-    return FAKE_PPID if _from_project() else _REAL["getppid"]()
-
-
 def _thread_ident(self):
     real = _REAL["ident"].fget(self)
     return _stable_thread_id(real, "ident") if _from_project() else real
@@ -1310,8 +1302,8 @@ class FrozenDate(_dt.date, metaclass=_SameAsReal):
 _SWAPS = {id(_REAL["dt"]): FrozenDatetime, id(_REAL["date"]): FrozenDate, id(_REAL["time"]): _fake_time,
           id(_REAL["time_ns"]): _fake_time_ns, id(_REAL["uuid4"]): _fake_uuid4, id(_REAL["uuid1"]): _fake_uuid1,
           id(_REAL["sleep"]): _fake_sleep, id(_REAL["get_ident"]): _fake_get_ident,
-          id(_REAL["get_native_id"]): _fake_get_native_id, id(_REAL["getpid"]): _fake_getpid,
-          id(_REAL["getppid"]): _fake_getppid, id(_REAL["select"]): _fake_select, **{id(_REAL[n]): fake for n, fake in _CLOCKS.items()}}
+          id(_REAL["get_native_id"]): _fake_get_native_id,
+          id(_REAL["select"]): _fake_select, **{id(_REAL[n]): fake for n, fake in _CLOCKS.items()}}
 _SCANNED: set = set()
 
 
@@ -1323,7 +1315,9 @@ def install_determinism() -> None:
         setattr(time, name, fake)
     time.sleep = _fake_sleep
     threading.get_ident, threading.get_native_id = _fake_get_ident, _fake_get_native_id
-    os.getpid, os.getppid = _fake_getpid, _fake_getppid
+    # Process ids are not faked: the project's code (and any C extension) may hand its pid to the OS. canon writes the
+    # real ids as "<pid>"/"<parent pid>" instead, so the three runs agree on them (lg_codec.set_pids).
+    lg_codec.set_pids(_REAL["getpid"](), _REAL["getppid"]())
     threading.Thread.ident = property(_thread_ident, doc=_REAL["ident"].__doc__)
     threading.Thread.native_id = property(_thread_native_id, doc=_REAL["native_id"].__doc__)
     threading.Event.wait, threading.Condition.wait, threading.Thread.join = _event_wait, _condition_wait, _thread_join

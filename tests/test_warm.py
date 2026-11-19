@@ -60,3 +60,63 @@ def test_warm_matches_cold_and_is_reused(tmp_path, make_cfg):
 def test_third_party_imports(tmp_path):
     root = write_tree(tmp_path, {"app/__init__.py": "", "app/a.py": "import os, json\nimport requests\nfrom app import b\nfrom yaml import safe_load\nfrom . import c\n", "app/b.py": ""})
     assert warm.third_party_imports(str(root), ["app/a.py"], []) == ["requests", "yaml"]
+
+
+PID_SRC = '''
+import os
+
+AT_IMPORT = os.getpid()
+
+
+def who(x: int):
+    n = x
+    return AT_IMPORT, os.getpid(), f"worker-{os.getpid()}", n
+'''
+
+
+def test_process_ids_agree_across_warm_children(tmp_path, make_cfg):
+    # The baseline server imports the module before forking, so its children read the server's pid at import and their
+    # own pid in the call; the working-tree children read their own pid for both. All of these are "<pid>" when
+    # compared, so a refactor next to them is verified, not reported as non-deterministic or different.
+    new = PID_SRC.replace("    n = x\n", "    n = x + 0\n")
+    root = write_tree(tmp_path / "proj", {"pkg/__init__.py": "", "pkg/m.py": new})
+    c = make_cfg(root, behavioral_diff={"warm": True, "mutants": 0})
+    base = write_tree(c.state_dir / "baseline", {"pkg/__init__.py": "", "pkg/m.py": PID_SRC})
+    targets = diff.changed_targets("pkg/m.py", (base / "pkg/m.py").read_text(), (root / "pkg/m.py").read_text())
+    try:
+        for _ in range(2):  # the second round runs on servers that already hold the module
+            got = diff.run(c, str(base), str(root), targets, harvest={})[0]
+            assert got.status == diff.DONE, (got.status, got.reason, got.differences[:1])
+    finally:
+        stop(c, str(base), str(root))
+
+
+PPID_SRC = '''
+import os
+
+
+def mine(x: int):
+    n = x
+    return os.getpid(), n
+'''
+
+
+def test_known_limit_warm_child_ppid_reads_as_pid(tmp_path, make_cfg):
+    # KNOWN LIMIT, pinned on purpose (see lg_codec.set_pids): a warm child masks the server's pid as "<pid>" for modules
+    # imported before the fork, and the server is also the child's real parent, so os.getppid() reads "<pid>" as well.
+    # An edit from getpid to getppid is therefore verified under warm workers and a difference under cold ones. If this
+    # test starts failing, the limit changed: update the docs (CLAUDE.md 6.8d, HANDOFF follow-ups) with it.
+    new = PPID_SRC.replace("return os.getpid(), n", "return os.getppid(), n")
+    root = write_tree(tmp_path / "proj", {"pkg/__init__.py": "", "pkg/m.py": new})
+    c = make_cfg(root, behavioral_diff={"warm": True, "mutants": 0})
+    base = write_tree(c.state_dir / "baseline", {"pkg/__init__.py": "", "pkg/m.py": PPID_SRC})
+    targets = diff.changed_targets("pkg/m.py", (base / "pkg/m.py").read_text(), (root / "pkg/m.py").read_text())
+    try:
+        warm_got = diff.run(c, str(base), str(root), targets, harvest={})[0]
+        assert warm_got.status == diff.DONE, (warm_got.status, warm_got.reason, warm_got.differences[:1])
+        cold = make_cfg(root, behavioral_diff={"warm": False, "mutants": 0})
+        cold_got = diff.run(cold, str(base), str(root), targets, harvest={})[0]
+        assert cold_got.status == diff.DIFFERENT, (cold_got.status, cold_got.reason)
+        assert "<pid>" in cold_got.differences[0]["before"] and "<parent pid>" in cold_got.differences[0]["after"]
+    finally:
+        stop(c, str(base), str(root))

@@ -95,3 +95,7 @@ until the reviewer passes it. Newest entries at the bottom.
   and found 1 of 9 (2 of 9). Held-out set 1 had 7 of 10 unchecked (run 3: 8) and found 2 of 10 (black-17 is new).
   Tuning found 8 of 9; thefuck-1 regressed to unchecked because of 6.8d's frozen pid. Write-up:
   docs/validation/2026-11-run4.md; README headline now uses held-out set 2. 382 tests on Python 3.12 and 3.10.
+- Fix for the 6.8d frozen-pid regression found in run 4 (thefuck-1): project code now gets its real pid and ppid,
+  so OS lookups work (C extensions too), and `lg_codec.canon` writes pids as `<pid>`/`<parent pid>` so the three
+  runs still agree; warm-server children also mask the server's pid. thefuck-1 is back to run 3's outcome (quiet
+  without fix tests, detected with). 386 tests on Python 3.12 and 3.10. Reviewer PASS.

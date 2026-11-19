@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 382 tests after Task 6.8f). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 386 tests after the 6.8f pid fix). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -188,7 +188,19 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   in the return value (2)"; causes are also in the ledger evidence and `tools/validate.py` records and metrics.
   Benign noise is frozen at the source, identically for old and new, only when the caller is project code
   (`lg_worker._from_project`): `time.monotonic`, `perf_counter`, `process_time`, `thread_time` (+ `_ns`; 1 ms per
-  reading from 1000.0), thread ids and default thread names, `os.getpid`/`getppid`. `time.sleep` and timed waits
+  reading from 1000.0), thread ids and default thread names. Process ids are **not** faked (a fake pid 4242 broke code
+  that asks the OS about its own process, e.g. `psutil.Process(os.getpid())`, found in run 4): the project gets the
+  real pid and ppid, and `lg_codec.canon` writes them as `<pid>`/`<parent pid>` (`lg_codec.set_pids`, set by
+  `install_determinism`; ints equal to a pid and whole-number occurrences in strings, reprs and exception messages;
+  only ids >= `PID_MASK_MIN`=1000, since smaller ones are common constants and an unmasked pid only makes old disagree
+  with itself). A warm-server child also masks the server's pid, which modules imported before the fork read; known
+  limit: the server is the child's real parent, so under warm workers `os.getppid()` also reads `<pid>` (a getpid ->
+  getppid edit is hidden whenever the new side runs warm, even if the old side fell back to cold; an unchanged
+  `getppid()` with one side warm and the other cold gives a false "different"). In
+  containers with pids below 1000 (e.g. Docker CI) stored pids are not masked, so those functions are untested again
+  (process-ids cause). Caveat: thread ids are still faked, and they carry the same OS-handoff risk the fake pid had
+  (see HANDOFF follow-ups).
+  `time.sleep` and timed waits
   that run out (`Event.wait`, `Condition.wait`, `Queue.get`, `Thread.join`, `select.select`) advance the frozen
   clocks by the requested timeout, so deadline loops end. Not covered: `Lock`/`Semaphore.acquire(timeout)`,
   selectors, socket timeouts (a timed-out call after 200+ frozen readings is reported as a deadline loop on a
@@ -228,8 +240,7 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   before any run) and validation run 4 (`docs/validation/2026-11-run4.md`). `tools/validate.py` has a third set,
   `holdout2` (`HOLDOUT2`, "Held-out set 2"; `HELD_OUT` = both held-out sets), reported apart in metrics, tables and the
   top summary lines. Run 4: held-out set 2 had 8 of 9 unchecked without fix tests and found 1 of 9 (2 of 9 with fix
-  tests). Open findings: the 6.8d frozen pid (4242) breaks `psutil.Process(os.getpid())` (a regression on thefuck-1);
-  home-directory writes at import that are not cache-like are still refused; one function was "verified" on a
+  tests). The frozen-pid regression it found (thefuck-1) is fixed; see 6.8d. Open findings: home-directory writes at import that are not cache-like are still refused; one function was "verified" on a
   placeholder `self`, possibly without the input that shows the bug (not checked). Do not tune on set 2 without a set 3.
 
 ## Known gaps still open
