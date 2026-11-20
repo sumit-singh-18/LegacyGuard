@@ -43,6 +43,35 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 
 **After Sprint 6.8: Sprint 7.** Run 4's unchecked reason groups should inform the order: on held-out set 2, conditions on `self`, object attributes or argument contents never met (3 cases); signatures nothing could be built for (3); and placeholder-only `self` (2). See the run 4 write-up. The order agreed earlier with the reviewer (see ROADMAP 3d): 7.4 (A2 throwaway cwd; acceptance includes "black-style import with absolute-path write is handled", note 6.8a already redirects cache-like writes) and 7.2 (route correctness: a route is not "verified" when every request returned the same early 4xx; "reached N of M" rule) first; 7.1 (impact skill and MCP tool on the resolved call graph) last; 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`) wait for the runnability and determinism fixes; 7.6 (contract tools) independent, split into oasdiff and `makemigrations --check` first. Research is in `docs/research/2026-11-sprint7.md`; its web-sourced claims are unverified (bwrap `--tmp-overlay` flag and version, oasdiff JSON fields, `cp -c`): confirm them before building. Then Sprint 8 (A3 daemon, C1/C2 recorded DB answers).
 
+### Sprint 7.4 Part A (A2 throwaway working folder), built 2026-11-20, reviewer PASS, committed
+Plan: `docs/research/2026-11-sprint7-4-plan.md` (updated with the reviewer's round-2 corrections). New
+`legacyguard/runner/scratch.py`; wiring in `runner/diff.py`, `lg_worker.py` (`use_cwd`), `lg_server.py`,
+`affected_tests.py` (launcher, absolute paths, `--rootdir`), `os_sandbox.active`, `scripts/post_edit.py`,
+`guardlib/audit.py`, `guardlib/ci.py`, `guardlib/engine.py` (`record_isolation`), `guardlib/report.py` (Isolation
+line), config defaults `cwd_mode: auto`, `cwd: null`. Tests: `tests/test_throwaway_cwd.py`, additions to
+`tests/test_affected_tests.py` and `tests/test_warm.py`. Review round 1 REVISE (sub-folder `cwd:` protected only
+the sub-folder); fixed with `cwd_root`, plus the optional items (fail-open `sandboxed`, base-36 pid in folder names,
+top-level-only build/dist/_build pruning, `.git` pointer files left out). 423 tests pass on Python 3.12 and 3.10.
+Tuning-set run after the fix: 8 of 9 / 9 of 9, thefuck-1 quiet without fix tests and detected with, no verdict or
+function status/reason changed against run 4 plus the thefuck-1 fix; every case used `clone` under sandbox-exec.
+The temp cleanup at midnight also gutted the cached thefuck venv in the validation workdir (moved aside as
+`envs/thefuck-1848729c.broken-20261120`, rebuilt). Known limits added: one folder per tree shared across all files
+of an audit or `ci.run`; the Isolation line is in the Markdown report only; `_sweep` can misjudge pids across
+containers that share /tmp with separate pid namespaces. The 3.10 venv had lost
+its `pyvenv.cfg` (temp cleanup) and was recreated; the broken one is at `/private/tmp/claude-501/venv310.broken-20261120`.
+
+7.4 follow-ups, in order:
+1. **Part B: baseline folder once per session** (first follow-up). Reuse the baseline's clone across checks; only the
+   working tree is cloned per check. Tests to write: staleness keys (baseline commit, `warm._generation`, realpath,
+   devices, mode, subdir, `LIST_VERSION`, folder gone); fingerprint re-clone (entry count, size, max mtime); `flock`
+   with overlapping hooks (replace into a new folder, retire the old path); retired-folder cleanup at SessionStart.
+2. **7.4b bwrap overlay** (`--overlay-src` + `--tmp-overlay`): needs bwrap 0.11+ (CI's Ubuntu 24.04 has 0.9.0) and
+   Linux 5.11+; changes the readonly rule (writes into the tree succeed into tmpfs).
+3. **Phase 2: imports from the folder** (moves `__file__`-relative absolute writes into the folder).
+4. **Empty-mode relative-read rule** (Q4): mark a relative read in an empty cwd as untested.
+5. **Masking cwd/tree paths in `lg_codec.canon`** (the folder name also carries the hook pid, which canon may show as
+   `<parent pid>` in the cold worker).
+
 ## Known open follow-ups (small)
 - Pid fix, known limit (documented, pinned by `test_warm.py::test_known_limit_warm_child_ppid_reads_as_pid`): a warm child masks the server's pid as `<pid>`, which it needs for module-level pids captured before the fork. The server is also the child's real parent, so `os.getppid()` reads `<pid>` too. An edit from `return os.getpid()` to `return os.getppid()` is "verified" under warm workers and "different" under cold. The swap is hidden whenever the new side runs warm (both warm, or only the old side fell back to cold); an unchanged `getppid()` with one side warm and the other cold gives a false "different".
 - Thread ids are still faked (6.8d: `threading.get_ident`, `get_native_id`, `Thread.ident`/`native_id` return small stable numbers to project code), so they carry the same OS-handoff risk as the old fake pid. Failure modes:
@@ -60,7 +89,7 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - 6.8a: `os.path.exists`/`stat`/`listdir` do not see redirected (shadow) files; `_cache_like` is a name heuristic; a SIGKILLed warm server leaks its scratch folder in temp.
 - 6.8c: bypass instance copies only top-level `__init__` assignments; the harvested `__init__` types path is untested end to end; the warm-server path has no dedicated test.
 - Callers do not get guard or date inputs: `diff._merged_edit` merges only literals, fragments, numbers and regexes.
-- Not verified on Linux bubblewrap or on a Django project.
+- Not verified on Linux bubblewrap or on a Django project. The 7.4 FICLONE clone path is untested on a real reflink file system (CI's ext4 picks copy).
 - Untracked `.legacyguard/` and `.claude/worktrees/` are runtime state; do not commit them.
 - Several untested-reason texts were never re-run by hand (run 4's groups were read from the raw reasons).
 

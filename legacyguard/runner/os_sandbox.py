@@ -76,6 +76,11 @@ def available(python: str) -> bool:
     return _PROBED[python]
 
 
+def active(python: str, mode: str = "auto") -> bool:
+    """Whether wrap() would put an OS sandbox around this interpreter's processes, known before wrap runs."""
+    return mode != "off" and available(python)
+
+
 def wrap(cmd: list[str], python: str, writable: list[str], readonly: list[str], mode: str = "auto", long_lived: bool = False) -> list[str]:
     """cmd inside the OS sandbox when one is available and mode is not "off"; otherwise cmd unchanged."""
     name, build = _builder()

@@ -21,6 +21,7 @@ from runner import lg_codec
 from runner import mutants
 from runner import noise
 from runner import os_sandbox
+from runner import scratch
 from runner import warm
 
 WORKER = Path(__file__).resolve().parent / "lg_worker.py"
@@ -266,10 +267,12 @@ FAILED = "__failed__"
 
 def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[dict], timeout: float, warm_names: list[str] | None = None) -> dict:
     bd = cfg.behavioral_diff
-    with tempfile.TemporaryDirectory(prefix="lgrun") as tmp:
+    # Task 7.4: the working folder is a throwaway one per tree per check (scratch.for_trees in run), shared by every
+    # run on that tree, so OLD-A and OLD-B see the same os.getcwd().
+    with scratch.current(cfg, root) as cwd, tempfile.TemporaryDirectory(prefix="lgrun") as tmp:
         req, res = Path(tmp) / "req.json", Path(tmp) / "res.json"
         # scratch: where writes during import and input setup are redirected for this run; deleted with tmp.
-        request = {"root": root, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
+        request = {"root": root, "cwd": cwd.path, "cwd_root": cwd.folder or cwd.tree or cwd.path, "sys_path": sys_path, "protect": [str(cfg.root)], "functions": functions,
                    "scratch": str(Path(tmp) / "scratch"),
                    "django_settings": cfg.raw.get("django_settings"), "deterministic": bool(bd.get("deterministic", True)),
                    "io": str(bd.get("io", "stub")),
@@ -281,10 +284,11 @@ def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[di
         fast = warm.run(cfg, py, root, mode, request, str(res), timeout, env)
         if fast is not None:
             return fast
-        cmd = os_sandbox.wrap([py, "-B", str(WORKER), str(req), str(res)], py, writable=[tempfile.gettempdir(), tmp],
+        writable = [tempfile.gettempdir(), tmp] + ([cwd.path] if cwd.strategy != "off" else [])
+        cmd = os_sandbox.wrap([py, "-B", str(WORKER), str(req), str(res)], py, writable=writable,
                               readonly=[str(cfg.root), root], mode=str(bd.get("os_sandbox", "auto")))
         try:
-            done = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True, timeout=timeout)
+            done = subprocess.run(cmd, cwd=cwd.path, env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return {FAILED: "timed out"}
         except OSError as exc:
@@ -1450,7 +1454,13 @@ def second_pass(cfg, py: str, baseline_root: str, work_root: str, paths_old: lis
 
 
 def run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
-    """Run old twice and new once, in parallel subprocesses, on the same inputs."""
+    """Run old twice and new once, in parallel subprocesses, on the same inputs. Each tree gets one throwaway working
+    folder for the whole check (Task 7.4), or the enclosing for_trees block's when the caller opened one."""
+    with scratch.for_trees(cfg, baseline_root, work_root):
+        return _run(cfg, baseline_root, work_root, targets, harvest)
+
+
+def _run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest: dict | None = None) -> list[Result]:
     check_started = time.monotonic()
     # The test-file list is cached per root for one check; a long-lived caller (backtest, the validation
     # harness) may have checked out another commit since, so every check starts from a fresh list.

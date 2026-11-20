@@ -32,20 +32,24 @@ def handle(event: dict):
         targets = engine.targets_for(cfg, rel, data, skipped=skipped)
     if not targets:
         return None
-    results = differ.run(cfg, str(baseline.baseline_dir(cfg)), root, targets)
-    if virtual.read_current(file_path) != text:
-        return None  # a newer edit landed while this ran; its own check covers the current code
-    with ledger.locked(cfg.state_dir) as data:
-        wake = engine.record(cfg, data, results)
-        if wake:
-            data["wakeups"] += 1
-    texts = [differ.format_wake(r, f["id"]) for f, r in wake[:2]]
-    # The project's own tests that reach the changed code, baseline against now (roadmap C4).
-    try:
-        texts += engine.affected_tests(cfg, rel, targets, file_hash)[:2]
-    except Exception as exc:  # noqa: BLE001 - a test run that cannot start must not hide the diff's result
-        from _common import log_error
-        log_error(root, f"affected tests: {type(exc).__name__}: {exc}")
+    from runner import scratch
+    # Task 7.4: one throwaway working folder per tree for the diff and the affected tests together.
+    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root):
+        results = differ.run(cfg, str(baseline.baseline_dir(cfg)), root, targets)
+        if virtual.read_current(file_path) != text:
+            return None  # a newer edit landed while this ran; its own check covers the current code
+        with ledger.locked(cfg.state_dir) as data:
+            wake = engine.record(cfg, data, results)
+            engine.record_isolation(data)
+            if wake:
+                data["wakeups"] += 1
+        texts = [differ.format_wake(r, f["id"]) for f, r in wake[:2]]
+        # The project's own tests that reach the changed code, baseline against now (roadmap C4).
+        try:
+            texts += engine.affected_tests(cfg, rel, targets, file_hash)[:2]
+        except Exception as exc:  # noqa: BLE001 - a test run that cannot start must not hide the diff's result
+            from _common import log_error
+            log_error(root, f"affected tests: {type(exc).__name__}: {exc}")
     skipped_text = engine.skipped_note(skipped)
     if texts:
         raise Wake("\n\n".join(texts + ([skipped_text] if skipped_text else [])))

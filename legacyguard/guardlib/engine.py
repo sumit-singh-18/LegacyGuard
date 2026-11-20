@@ -460,6 +460,15 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
     return wake
 
 
+def record_isolation(data: dict) -> None:
+    """What isolated the last check's processes, for the session report (Task 7.4): the OS sandbox and the working
+    folders. Left as it was when nothing ran."""
+    from runner import os_sandbox, scratch
+    cwd = scratch.describe()
+    if cwd != "not used":
+        data["isolation"] = {"os_sandbox": os_sandbox.describe(), "cwd": cwd}
+
+
 def affected_tests(cfg, rel: str, targets: list[differ.Target], code_hash: str | None) -> list[str]:
     """Run the project's tests that reach the changed functions on the baseline and on the edited code, record
     regressions, and return the wake texts for new ones (roadmap C4). Returns [] when there is no coverage map."""

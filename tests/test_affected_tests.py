@@ -111,3 +111,62 @@ def test_disabled_or_no_index(tmp_path, make_cfg):
     assert engine.affected_tests(cfg, "bank/core.py", targets_for(root, "withdraw"), "h") == []
     other = write_tree(tmp_path / "noindex", {"a.py": ""})
     assert engine.affected_tests(make_cfg(other), "a.py", targets_for(other, "x"), "h") == []
+
+
+# ---- Task 7.4: pytest runs in a throwaway working folder, imports from the real tree ----
+
+def test_no_ini_file_keys_stay_relative_and_equal_across_trees(tmp_path, make_cfg):
+    """No pytest.ini, pyproject or setup.cfg, and tests/ is not a package: without --rootdir the rootdir would be
+    tests/ (the common ancestor of the args), junit classnames would lose the "tests." prefix and results would drop."""
+    broken = BANK.replace("if amount > balance:", "if amount >= balance:")
+    root, cfg = project(tmp_path, make_cfg, broken)
+    for tree in (root, cfg.state_dir / "baseline"):
+        (tree / "tests/__init__.py").unlink()
+    nodeids = ["tests/test_core.py::test_withdraw", "tests/test_core.py::test_limits"]
+    regs, old, new = at.compare(cfg, str(cfg.state_dir / "baseline"), str(root), nodeids, {})
+    assert set(old) == set(new) == set(nodeids)
+    assert [r["nodeid"] for r in regs] == ["tests/test_core.py::test_limits"]
+
+
+def test_relative_read_from_the_tree_root_passes_on_both_trees(tmp_path, make_cfg):
+    reader = "import json\n\ndef test_reads():\n    assert json.load(open('tests/data/x.json')) == {'a': 1}\n"
+    root, cfg = project(tmp_path, make_cfg, BANK)
+    for tree in (root, cfg.state_dir / "baseline"):
+        write_tree(tree, {"tests/test_read.py": reader, "tests/data/x.json": '{"a": 1}'})
+    _, old, new = at.compare(cfg, str(cfg.state_dir / "baseline"), str(root), ["tests/test_read.py::test_reads"], {})
+    assert old["tests/test_read.py::test_reads"]["outcome"] == new["tests/test_read.py::test_reads"]["outcome"] == "passed"
+
+
+def test_ignored_in_place_module_imports_from_the_real_tree(tmp_path, make_cfg, monkeypatch):
+    """pkg/_gen.py stands for a git-ignored in-place build or generated module. It is left out of the working
+    folder, so the folder and the real tree differ. The test must still pass: imports come from the real tree. With
+    `-m pytest` instead of the launcher, '' (the working folder) would come first on sys.path, bank would import from
+    the folder, and the import of bank._gen would fail."""
+    from runner import scratch
+    root, cfg = project(tmp_path, make_cfg, BANK)
+    (root / "tests/__init__.py").unlink()  # else pytest's rootdir insertion puts the real tree first and hides the issue
+    write_tree(root, {"bank/_gen.py": "VALUE = 3\n", "tests/test_gen.py": "from bank._gen import VALUE\n\ndef test_gen():\n    assert VALUE == 3\n"})
+    real = scratch._list_tree
+    monkeypatch.setattr(scratch, "_list_tree", lambda tree, limit: (lambda e: ([x for x in e[0] if x[0] != "bank/_gen.py"], *e[1:]))(real(tree, limit)))
+    out = at.run(cfg, str(root), ["tests/test_gen.py::test_gen"], 60)
+    assert out["tests/test_gen.py::test_gen"]["outcome"] == "passed", out
+
+
+def test_cwd_mode_off_still_imports_the_project(tmp_path, make_cfg):
+    """With cwd_mode off the cwd is the tree root, which PYTHONPATH carries: the launcher must not drop it."""
+    root, cfg = project(tmp_path, make_cfg, BANK)
+    (root / "tests/__init__.py").unlink()  # else pytest's rootdir insertion would put the tree on sys.path anyway
+    cfg.raw["behavioral_diff"]["cwd_mode"] = "off"
+    out = at.run(cfg, str(root), ["tests/test_core.py::test_withdraw"], 60)
+    assert out["tests/test_core.py::test_withdraw"]["outcome"] == "passed", out
+
+
+def test_launcher_drops_only_the_current_folder_markers(tmp_path):
+    import os
+    import subprocess
+    import sys
+    code = at.LAUNCH.replace("import pytest; sys.exit(pytest.main(sys.argv[1:]))", "print(repr(sys.path))")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    out = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, env=env, capture_output=True, text=True, check=True).stdout
+    path = eval(out)  # noqa: S307 - our own repr of a list of strings
+    assert "" not in path and "." not in path and str(tmp_path) in path

@@ -142,11 +142,28 @@ STORY_LABEL = {"asked": "You asked", "broke": "What broke", "fixed": "What fixed
                "unchecked": "Not checked", "asked_you": "Asked you", "blocked": "Blocked", "slowdown": "Slower"}
 
 
+OS_SANDBOXES = ("sandbox-exec", "bubblewrap")
+
+
+def isolation_line(data: dict) -> str:
+    """What isolated the processes that ran project code in the last check (Task 7.4), or "" when none ran."""
+    iso = data.get("isolation") or {}
+    if not iso:
+        return ""
+    sandbox = iso.get("os_sandbox") or "not used"
+    line = f"Isolation: OS sandbox **{sandbox}**; working folder **{iso.get('cwd') or 'not used'}**."
+    if sandbox not in OS_SANDBOXES:
+        line += " **No OS sandbox: absolute-path writes are stopped only by the in-process guards.**"
+    return line
+
+
 def render(data: dict, cfg) -> str:
     c = counts(data)
     lines = [f"# LegacyGuard session report", "",
              f"Session `{data.get('session_id')}`. Mode **{cfg.mode}**. Baseline `{(data.get('baseline_commit') or 'none')[:10]}`.",
-             f"Prompts used **{data['prompts_used']} of {cfg.budget}**. Claude wake-ups **{data['wakeups']}**. Edits seen {data.get('edits', 0)}.", ""]
+             f"Prompts used **{data['prompts_used']} of {cfg.budget}**. Claude wake-ups **{data['wakeups']}**. Edits seen {data.get('edits', 0)}."]
+    iso = isolation_line(data)
+    lines += ([iso] if iso else []) + [""]
     steps = story(data)
     if steps:
         lines += ["## What happened", ""] + [f"- **{STORY_LABEL[st['kind']]}:** {st['text']}" for st in steps] + ["", "## Findings", ""]

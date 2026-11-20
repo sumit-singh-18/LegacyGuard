@@ -119,28 +119,31 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
         except Exception:  # noqa: BLE001
             http = {}
     contract_files = [f for f in _git(root, "diff", "--name-only", base).splitlines() if f and f not in changed]
-    for rel in changed + contract_files:
-        before = baseline.read_baseline(cfg, rel)
-        after_path = Path(root) / rel
-        after = after_path.read_text(errors="replace") if after_path.exists() else ""
-        for b in checks.run_checks(cfg, rel, before, after, http):
-            if not waivers.is_waived(cfg, "contract_break", rel, b.item, symbols.sha(after)):
-                out.breaks.append((rel, b))
-        if rel not in changed or not engine.is_guarded_source(cfg, rel) or before is None or not after:
-            continue
-        targets = diff.changed_targets(rel, before, after)
-        targets += engine.dependents(cfg, rel, targets, {t.qualname for t in targets}, skipped=out.skipped,
-                                     limit=diff.MAX_FUNCTIONS - len(targets))
-        targets += engine.route_targets(cfg, targets)
-        seen = {(r.file, r.qualname) for r in out.results}
-        targets = [t for t in targets if (t.file, t.qualname) not in seen]
-        if not targets:
-            continue
-        out.results += diff.run(cfg, str(base_dir), root, targets)
-        for t in targets:
-            text = (Path(root) / t.file).read_text(errors="replace") if (Path(root) / t.file).exists() else ""
-            sym = next((s for s in symbols.extract(text)[0] if s.qualname == t.qualname), None)
-            out.lines[f"{t.file}::{t.qualname}"] = sym.line_start if sym else 1
+    from runner import scratch
+    # Task 7.4: one throwaway working folder per tree for every check of this run.
+    with scratch.for_trees(cfg, str(base_dir), root):
+        for rel in changed + contract_files:
+            before = baseline.read_baseline(cfg, rel)
+            after_path = Path(root) / rel
+            after = after_path.read_text(errors="replace") if after_path.exists() else ""
+            for b in checks.run_checks(cfg, rel, before, after, http):
+                if not waivers.is_waived(cfg, "contract_break", rel, b.item, symbols.sha(after)):
+                    out.breaks.append((rel, b))
+            if rel not in changed or not engine.is_guarded_source(cfg, rel) or before is None or not after:
+                continue
+            targets = diff.changed_targets(rel, before, after)
+            targets += engine.dependents(cfg, rel, targets, {t.qualname for t in targets}, skipped=out.skipped,
+                                         limit=diff.MAX_FUNCTIONS - len(targets))
+            targets += engine.route_targets(cfg, targets)
+            seen = {(r.file, r.qualname) for r in out.results}
+            targets = [t for t in targets if (t.file, t.qualname) not in seen]
+            if not targets:
+                continue
+            out.results += diff.run(cfg, str(base_dir), root, targets)
+            for t in targets:
+                text = (Path(root) / t.file).read_text(errors="replace") if (Path(root) / t.file).exists() else ""
+                sym = next((s for s in symbols.extract(text)[0] if s.qualname == t.qualname), None)
+                out.lines[f"{t.file}::{t.qualname}"] = sym.line_start if sym else 1
     return cfg, out
 
 

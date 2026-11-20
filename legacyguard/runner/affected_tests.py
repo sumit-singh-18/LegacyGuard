@@ -18,8 +18,16 @@ from pathlib import Path
 from guardlib import config as cfgmod
 from indexer.coverage_map import clean_env
 from runner import os_sandbox
+from runner import scratch
 
 PARAMS = re.compile(r"\[.*\]$")
+# Task 7.4: pytest runs in a throwaway working folder, but must import the project from the real tree. `python -m pytest`
+# and `-c` put the current folder ('' under -c) first on sys.path, which would import the project from the working
+# folder, where in-place builds and generated modules may be missing (the folder is a pruned walk), and -P needs 3.11.
+# So a launcher drops only '' and '.'. It never drops os.getcwd(): with cwd_mode off the cwd is the tree root, which
+# PYTHONPATH carries, and removing that entry would break `import pkg` from the tests.
+LAUNCH = ("import sys; sys.path[:] = [p for p in sys.path if p not in ('', '.')]; import pytest; "
+          "sys.exit(pytest.main(sys.argv[1:]))")
 
 
 def settings(cfg) -> dict:
@@ -84,17 +92,23 @@ def run(cfg, tree_root: str, nodeids: list[str], timeout: float) -> dict[str, di
     if not nodeids:
         return {}
     py = cfgmod.target_python(cfg)
-    with tempfile.TemporaryDirectory(prefix="lgtests") as tmp:
+    with scratch.current(cfg, tree_root) as cwd, tempfile.TemporaryDirectory(prefix="lgtests") as tmp:
         report = Path(tmp) / "junit.xml"
         env = clean_env(cfg)
         extra = [str(Path(tree_root) / r) for r in cfg.raw.get("source_roots") or []]
         env["PYTHONPATH"] = os.pathsep.join([tree_root, *extra])
-        cmd = [py, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header", f"--junitxml={report}",
-               "-o", "junit_family=xunit2", *nodeids]
-        cmd = os_sandbox.wrap(cmd, py, writable=[tempfile.gettempdir(), tmp], readonly=[str(cfg.root), tree_root],
+        # Absolute test paths and an explicit rootdir: the cwd is not the tree any more, and without an ini file the
+        # rootdir would be the common ancestor of the args (e.g. <tree>/tests), so junit classnames would lose their
+        # "tests." prefix and to_nodeid would drop the results. Results stay keyed by relative nodeids, which the
+        # baseline cache compares across trees.
+        args = [str(Path(tree_root) / n) for n in nodeids]
+        cmd = [py, "-B", "-c", LAUNCH, "-q", "-p", "no:cacheprovider", "--no-header", f"--junitxml={report}",
+               "-o", "junit_family=xunit2", f"--rootdir={tree_root}", *args]
+        writable = [tempfile.gettempdir(), tmp] + ([cwd.path] if cwd.strategy != "off" else [])
+        cmd = os_sandbox.wrap(cmd, py, writable=writable, readonly=[str(cfg.root), tree_root],
                               mode=str(cfg.behavioral_diff.get("os_sandbox", "auto")))
         try:
-            subprocess.run(cmd, cwd=tree_root, env=env, capture_output=True, text=True, timeout=timeout)
+            subprocess.run(cmd, cwd=cwd.path, env=env, capture_output=True, text=True, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError):
             return {}
         return _parse_junit(report, tree_root)

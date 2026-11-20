@@ -1826,12 +1826,27 @@ def prepare(request, with_django: bool = True) -> tuple[str, str | None]:
     if sys.path and sys.path[0] in ("", HERE):
         sys.path.pop(0)
     root = request["root"]
-    os.chdir(root)
     add_paths(request)
     root_real = os.path.realpath(root) + os.sep
     PROJECT["root"] = root_real
     SCRATCH["protect"] = [root_real] + [os.path.realpath(p) + os.sep for p in request.get("protect") or []]
+    use_cwd(request.get("cwd") or root, request.get("cwd_root"))
     return root_real, (setup_django(request) if with_django else None)
+
+
+def use_cwd(path: str, folder_root: str | None = None) -> None:
+    """Make path the working folder (Task 7.4: a throwaway folder per tree per check, or the tree itself) and protect
+    it like the tree: writes there during a call are refused, cache-like writes during setup are redirected. The
+    entry has the realpath + os.sep form _is_scratch compares against, so cold and warm refuse the same writes.
+    folder_root: the whole throwaway folder when path is a configured sub-folder of it (`behavioral_diff.cwd`), so
+    `../x.txt` is refused as it was when the cwd was inside the tree."""
+    os.chdir(path)
+    for p in (path, folder_root):
+        if not p:
+            continue
+        real = os.path.realpath(p) + os.sep
+        if real not in SCRATCH["protect"]:
+            SCRATCH["protect"].append(real)
 
 
 def add_paths(request) -> None:

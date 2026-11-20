@@ -53,7 +53,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 386 tests after the 6.8f pid fix). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 423 tests after Sprint 7.4 Part A). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -243,13 +243,60 @@ Plan in docs/ROADMAP.md section 3d. Success metric: the unchecked share on both 
   tests). The frozen-pid regression it found (thefuck-1) is fixed; see 6.8d. Open findings: home-directory writes at import that are not cache-like are still refused; one function was "verified" on a
   placeholder `self`, possibly without the input that shows the bug (not checked). Do not tune on set 2 without a set 3.
 
+## Sprint 7.4 Part A (on main, 2026-11-20), A2 throwaway working folder
+
+Plan: docs/research/2026-11-sprint7-4-plan.md (with the reviewer's round-2 corrections).
+- `runner/scratch.py` (guard side): every process that runs project code for a check (cold worker, warm-server child,
+  affected-tests pytest) gets a working folder in the system temp folder, never the real tree as a writable cwd.
+  `behavioral_diff.cwd_mode: auto|clone|copy|empty|off` (default auto) and `behavioral_diff.cwd: <subdir>`. Auto: a
+  copy-on-write clone file by file (`clonefile(2)` via ctypes on macOS, the FICLONE ioctl on Linux; never `cp -c`,
+  whose fallback is silent) when a probe clone works and the tree has at most `MAX_CLONE_FILES`=20,000 files; else a
+  copy when at most `MAX_COPY_FILES`=2,000 files and `MAX_COPY_BYTES`=50 MB; else `off` (the real tree, read-only
+  under the OS sandbox) when an OS sandbox is active, else `empty`. A clone that fails on one file after a good probe
+  copies that file, but the copied bytes are capped at 50 MB, then off/empty with the reason; there is no uncapped
+  copy. Only the probe result is cached (`.legacyguard/cwd_strategy.json`, keyed by tree, devices, platform, mode).
+- Listing rule, both trees: walk the tree; prune `.git` (folders, and a worktree's `.git` pointer file), caches,
+  `node_modules`, `.eggs`, `*.egg-info`, `htmlcov`, `build`/`dist`/`_build` at the tree's top level only (`pkg/build/`
+  stays), folders holding `pyvenv.cfg` or `conda-meta`, nested `.git` folders, and sub-folders on another device
+  (mount points). The working tree's folder has git-ignored files; the baseline never
+  had them (as before).
+- Phase 1 is safety only: imports still come from the real tree (absolute `sys_path`), and the worker adds the folder
+  to `SCRATCH["protect"]` (`lg_worker.use_cwd`, also in the warm child; with `cwd: <subdir>` the whole folder root
+  is protected too, request `cwd_root`, so `../x.txt` is refused as it was in the tree), so writes there during a call are refused
+  and setup cache writes redirected, exactly as for the tree. pytest has no in-process guard, so a test's relative
+  writes land in the folder. pytest runs through a launcher (`affected_tests.LAUNCH`) that drops only `''` and `.`
+  from `sys.path`, with absolute test paths and `--rootdir=<tree>`; results stay keyed by relative nodeids.
+- One folder per tree per check: `scratch.for_trees` (re-entrant, prepares on first use, releases at the outermost
+  exit); `post_edit` opens it once around `differ.run` and `engine.affected_tests`; the Stop audit and `ci.run` (so
+  `tools/validate.py`) open one block for their whole run; `scratch.current` prepares on demand only for direct
+  callers. OLD-A and OLD-B share the baseline's folder. Part A clones both trees per check (2k-file fixture: clone
+  0.27 s, copy 0.42 s per tree on this Mac).
+- The Markdown session report (not the session-map HTML) has an "Isolation" line (OS sandbox and working-folder labels with file and byte counts); without
+  an OS sandbox it says absolute-path writes are stopped only by the in-process guards. A cwd change does nothing for
+  absolute-path writes: 6.8a's redirect/refusal and the OS sandbox handle those.
+- The working folder has no `.git`, so project code (or a test) that runs `git` from the cwd finds no repository.
+- Limits: a write that gets past the in-process layers in OLD-A can be seen by OLD-B; in a Stop audit or a `ci.run`
+  (so `tools/validate.py`) one folder per tree is shared across all files of the run, so such a write can also be
+  seen by later files' checks; `lg_codec.canon` does not mask the folder path (a result holding the cwd differs
+  between trees, as tree paths already did; the hook pid in the folder name is base 36, so pid masking leaves it
+  alone); `_sweep` can misjudge pids across containers that share /tmp with separate pid namespaces; the warm server itself keeps the tree as its cwd, so a module storing
+  `os.getcwd()` at import gives untested or a difference on a warm/cold mix, never a hidden one; `empty` mode makes
+  relative reads fail (if old and new raise the same error, no difference is seen); `indexer/routes.py` and
+  `coverage_map.py` still run in the tree; target code calling `os.chdir` changes the cwd for later inputs.
+- Tuning-set run after 7.4 (`--fix-tests both`, 2026-11-20): 8 of 9 detected without the fix's tests, 9 of 9 with
+  them; thefuck-1 quiet without, detected with; every function's status and reason identical to run 4 plus the
+  thefuck-1 fix. Every case used `clone` (clonefile, 18 to 927 files) under sandbox-exec, one folder per tree per
+  case and mode. Held-out sets not run.
+- Follow-ups: Part B (baseline folder once per session), 7.4b bwrap overlay, phase 2 imports from the folder, the
+  empty-mode relative-read rule, masking cwd paths in `lg_codec.canon` (see HANDOFF).
+
 ## Known gaps still open
 
 - `ARCHITECTURE.md` and `TESTING.md` from the hackathon are still missing. `docs/ARCHITECTURE.md` is the new
   design. IDs like FR-xx, D-0xx and NFR-xx point into the old docs.
 - MAX_FUNCTIONS=12 targets per edit (routes and callers included). `/legacyguard:impact` and the MCP `impact` tool still use name edges.
 - Hooks are still short-lived processes (no daemon yet). With Django, the working-tree server still runs `django.setup()` cold in every check.
-- Not yet verified on Linux bubblewrap or on a Django project. The worker has no throwaway cwd yet.
+- Not yet verified on Linux bubblewrap or on a Django project. Throwaway cwd: see Sprint 7.4 (phase 1, safety only).
 
 ## Conventions
 

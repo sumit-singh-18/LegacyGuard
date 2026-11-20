@@ -120,3 +120,49 @@ def test_known_limit_warm_child_ppid_reads_as_pid(tmp_path, make_cfg):
         assert "<pid>" in cold_got.differences[0]["before"] and "<parent pid>" in cold_got.differences[0]["after"]
     finally:
         stop(c, str(base), str(root))
+
+
+CWD_SRC = '''
+import os
+
+def where(n: int) -> str:
+    return os.path.realpath(os.getcwd())
+
+def scribble(n: int) -> int:
+    with open("scribble.txt", "w") as fh:
+        fh.write("x")
+    return n
+'''
+
+
+def test_warm_child_runs_in_the_checks_working_folder_and_refuses_relative_writes(tmp_path, make_cfg):
+    """Task 7.4: the warm child chdirs into the folder the hook made, and protects it like the cold worker does."""
+    from conftest import call
+    from runner import scratch
+    from guardlib import config as cfgmod
+    root = write_tree(tmp_path / "proj", {"pkg/__init__.py": "", "pkg/m.py": CWD_SRC})
+    spec = [{"module": "pkg.m", "qualname": "where", "inputs": [call(1)]},
+            {"module": "pkg.m", "qualname": "scribble", "inputs": [call(1)]}]
+    got = {}
+    for is_warm in (True, False):
+        c = make_cfg(root, behavioral_diff={"warm": is_warm, "os_sandbox": "off"})
+        py = cfgmod.target_python(c)
+        with scratch.for_trees(c, str(tmp_path / "nothing"), str(root)):
+            with scratch.current(c, str(root)) as cwd:
+                out = diff._run_worker(c, py, str(root), [str(root)], spec, 60)
+        got[is_warm] = (out, cwd)
+        if is_warm:  # the warm server really ran the request
+            assert (warm._send(warm.socket_path(c, py, str(root), "work"), {"cmd": "ping"}, 2) or {}).get("runs", 0) >= 1
+    try:
+        for is_warm, (out, cwd) in got.items():
+            assert cwd.strategy in ("clone", "copy")
+            # The hook's pid in the folder name may read as <parent pid> (lg_codec.canon masks it in the cold worker).
+            value = out["pkg.m:where"]["results"][0]["value"]["v"]
+            real = os.path.realpath(cwd.path)
+            assert value.split(scratch.PREFIX)[0] == real.split(scratch.PREFIX)[0]
+            assert value.rsplit("-", 1)[1] == real.rsplit("-", 1)[1]
+            assert out["pkg.m:scribble"]["results"][0]["outcome"] != "return"
+        assert got[True][0]["pkg.m:scribble"]["results"][0] == got[False][0]["pkg.m:scribble"]["results"][0]
+        assert not (root / "scribble.txt").exists()
+    finally:
+        warm.stop_all(make_cfg(root), cfgmod.target_python(make_cfg(root)), [(str(root), "work")])

@@ -6,6 +6,7 @@ from pathlib import Path
 from guardlib import baseline, checks, contracts_parse as cp, engine, ledger, paths, symbol_diff, symbols, virtual, waivers
 from indexer import db as idb
 from runner import diff as differ
+from runner import scratch
 
 BLOCKING_STATUS = (ledger.FAILURE, ledger.DIFFERENCE)
 
@@ -61,15 +62,18 @@ def _contract_findings(cfg, data, changed):
 def _behavior_findings(cfg, data, changed):
     root = cfg.root
     engine.prune_skipped(data, changed)  # callers skipped for an edit that is no longer in the tree (roadmap 6.5)
-    for rel in changed:
-        if not engine.is_guarded_source(cfg, rel):
-            continue
-        targets = engine.targets_for(cfg, rel, data)
-        checked = {(f["item"], f["code_hash"]) for f in data["findings"] if f["file"] == rel and f["kind"] in ("verified", "untested", "behavior_difference", "slowdown")
-                   and f["state"] in ("open", "recorded", "waived")}
-        todo = [t for t in targets if (t.qualname, t.code_hash) not in checked]
-        if todo:
-            engine.record(cfg, data, differ.run(cfg, str(baseline.baseline_dir(cfg)), root, todo))
+    # Task 7.4: one throwaway working folder per tree for the whole audit, prepared only if some check runs.
+    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root):
+        for rel in changed:
+            if not engine.is_guarded_source(cfg, rel):
+                continue
+            targets = engine.targets_for(cfg, rel, data)
+            checked = {(f["item"], f["code_hash"]) for f in data["findings"] if f["file"] == rel and f["kind"] in ("verified", "untested", "behavior_difference", "slowdown")
+                       and f["state"] in ("open", "recorded", "waived")}
+            todo = [t for t in targets if (t.qualname, t.code_hash) not in checked]
+            if todo:
+                engine.record(cfg, data, differ.run(cfg, str(baseline.baseline_dir(cfg)), root, todo))
+        engine.record_isolation(data)
 
 
 def _test_with_code(cfg, data, changed):

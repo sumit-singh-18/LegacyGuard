@@ -99,3 +99,29 @@ until the reviewer passes it. Newest entries at the bottom.
   so OS lookups work (C extensions too), and `lg_codec.canon` writes pids as `<pid>`/`<parent pid>` so the three
   runs still agree; warm-server children also mask the server's pid. thefuck-1 is back to run 3's outcome (quiet
   without fix tests, detected with). 386 tests on Python 3.12 and 3.10. Reviewer PASS.
+- Task 7.4 Part A (A2 throwaway working folder): every process that runs project code for a check (cold worker,
+  warm-server child, affected-tests pytest) now runs in a throwaway folder in the temp folder (`runner/scratch.py`):
+  a copy-on-write clone (clonefile/FICLONE, at most 20,000 files), else a copy (at most 2,000 files and 50 MB), else
+  the real tree read-only when an OS sandbox is active (`off`), else an empty folder. Phase 1 is safety only: imports
+  still come from the real tree, and the folder is protected like the tree, so in-process statuses do not change.
+  One folder per tree per check, prepared on first use and shared by the diff and the affected tests (post_edit opens
+  `scratch.for_trees` once); the Stop audit and `ci.run` (and so `tools/validate.py`) open one block for their whole
+  run. The per-file copy fallback after a failed clone is capped at 50 MB. The report shows an "Isolation" line.
+  Part B (baseline cloned once per session) split out as the first 7.4 follow-up. Built after the reviewer's round-2
+  corrections to the plan. 420 tests on Python 3.12 and 3.10 (the 3.10 venv had lost its `pyvenv.cfg` to temp
+  cleanup and was recreated; the old one is kept as `/private/tmp/claude-501/venv310.broken-20261120`).
+  Timings on this Mac (APFS), test fixture of 2,000 files (1.3 MB) in 40 x 7 folders, three runs:
+  clone (clonefile) 0.27 s each run; copy 0.42 to 0.43 s. Part A clones both trees per check, so up to about 0.55 s
+  per check at 2k files (about 5 s at the 20k cap, per the plan's measurement).
+- Task 7.4 review round 1: REVISE. Fixed: with `cwd: <subdir>` the whole throwaway folder is protected (request
+  `cwd_root`, cold and warm; `../x.txt` during a call is refused as before). Also: `sandboxed()` fails open to "not
+  sandboxed"; the hook pid in the folder name is base 36 (pid masking leaves it alone); `build`/`dist`/`_build`
+  pruned only at the top level; a worktree's `.git` pointer file is left out of the folder (found in the tuning run:
+  the baseline clone had one file more than the working tree's). 423 tests on Python 3.12 and 3.10.
+  Tuning-set run (tools/validate.py, tuning manifest only, `--fix-tests both`, workdir
+  /private/tmp/claude-501/lg-validation, out `out-run74`): 8 of 9 detected without the fix's tests, 9 of 9 with;
+  thefuck-1 quiet without, detected with; 0 changes in any verdict or any function's status or reason against run 4
+  plus the thefuck-1 fix (52 functions, untested share 71.2% in both modes). Every case used `clone` (clonefile) under
+  sandbox-exec, 18 to 927 files per tree, 0.01 to 0.13 s, one folder per tree per case and mode (36 for 18 runs).
+  The cached thefuck venv had been gutted by the midnight temp cleanup (setup failed); it was moved aside to
+  `envs/thefuck-1848729c.broken-20261120` and rebuilt by the harness. Held-out sets not run.

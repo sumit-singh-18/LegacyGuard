@@ -63,6 +63,10 @@ def _run(msg: dict) -> dict:
             # A fresh scratch folder per check: what this check writes during setup is not seen by the next one.
             # Files the server wrote while warming stay readable (their SHADOW entries are inherited), never changed.
             W.use_scratch(request.get("scratch"))
+            # Task 7.4: this check's working folder (made by the hook, deleted after the check). The server itself
+            # keeps the tree as its cwd.
+            if request.get("cwd"):
+                W.use_cwd(request["cwd"], request.get("cwd_root"))
             # Determinism on: this child's pid, plus the server's, which modules warmed there read. Known limit: the
             # server is this child's real parent, so os.getppid() is masked as "<pid>" too (see lg_codec.set_pids).
             if W.DET["on"]:
@@ -103,7 +107,7 @@ def serve(sock_path: str, init_path: str, mode: str) -> None:
     STATE["mode"] = mode
     STATE["server_pid"], STATE["server_ppid"] = os.getpid(), os.getppid()
     # The server's own scratch folder (the init request's belongs to the first check and is deleted after it).
-    STATE["root_real"], STATE["setup_error"] = W.prepare({**init, "scratch": None}, with_django=(mode == "baseline"))
+    STATE["root_real"], STATE["setup_error"] = W.prepare({**init, "scratch": None, "cwd": None}, with_django=(mode == "baseline"))
     W.GUARD_WRITES["allowed"] = True  # the server's own bookkeeping; children turn the blocks back on
     _warm(list(init.get("warm") or []))
     while True:
