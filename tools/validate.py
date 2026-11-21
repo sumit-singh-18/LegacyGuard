@@ -378,6 +378,12 @@ def _function(r) -> dict:
                               "seconds": round(r.feedback_seconds, 2), "note": r.feedback_note}
     if getattr(r, "unreached_chains", None):
         out["unreached_chains"] = list(r.unreached_chains)
+    if getattr(r, "statements_total", 0):
+        out["statements"] = [r.statements_reached, r.statements_total]
+    if getattr(r, "route", False):
+        # Sprint 7.2a: how far the compared requests got, and what the code before the edit answered them.
+        out["route"] = {"requests_compared": r.inputs_compared, "requests_reached": r.requests_reached,
+                        "requests_entered": r.requests_entered, "status_counts": dict(r.status_counts)}
     if getattr(r, "feedback_only", False):
         out["feedback_only"] = True  # every difference is on a second-pass guess: a detection, listed apart
     carved = {k: getattr(r, f"carved_{k}", 0) for k in ("captured", "added", "replayed", "already", "unstored", "note")}

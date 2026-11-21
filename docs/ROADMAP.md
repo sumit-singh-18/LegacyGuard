@@ -326,6 +326,13 @@ runnability and determinism fixes; contract tools (7.6) are independent and may 
 oasdiff and `makemigrations --check` first, squawk and buf optional. Unverified research claims (bwrap
 `--tmp-overlay` flag and version, oasdiff JSON fields, `cp -c` behaviour) must be confirmed before building.
 
+**7.2 decisions (2026-11-20, plan `docs/research/2026-11-sprint7-2-plan.md` section 0):** split into 7.2a (Flask
+`.route` parser, decorator edits as code, route gates and early answers, factory apps) and 7.2b (deleted and renamed
+handlers, which needs baseline routes in CI). "Reached N of M" counts changed statements, with request counts in the
+text; decorator edits are their own `decorators_changed` kind (not in the signature hash); index introspection runs
+under the OS sandbox with the worker's set-up. Follow-ups: "only compared inputs count" for functions and callers;
+harvesting literal test-client `headers=` (header names only in printed text).
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; `/legacyguard:impact` and the MCP `impact` tool on the
 resolved call graph; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff

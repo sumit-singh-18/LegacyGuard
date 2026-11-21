@@ -211,13 +211,22 @@ def route_targets(cfg, targets: list[differ.Target]) -> list[differ.Target]:
         return []
     conn = db.connect(cfg.root)
     try:
-        handlers = {(t.file, t.qualname) for t in targets if t.kind != "route"}
-        hashes = {(t.file, t.qualname): t.code_hash for t in targets}
+        by_key = {(t.file, t.qualname): t for t in targets if t.kind != "route"}
         out = []
-        for method, path, file, qualname in routes_diff.routes_for(conn, handlers):
+        for method, path, file, qualname in routes_diff.routes_for(conn, set(by_key)):
+            h = by_key[(file, qualname)]
             requests = routes_diff.requests_for(cfg.root, method, path, routes_diff.handler_params(conn, file, qualname))
-            out.append(differ.Target(file, f"{method} {path}", "route", [], symbols.sha(f"{method} {path}|{hashes[(file, qualname)]}"),
-                                     requests=requests))
+            # Sprint 7.2a: a route is judged by the changed statements its requests ran, like a caller: the handler's own
+            # (its entry gate after a decorator-only edit), or, when the handler is only a caller, the edited function's.
+            # A route never gets `via`: that drives caller-only logic (carving, the caller hedge, ledger "via" text).
+            if h.via:
+                gate = {"callees": list(h.callees), "callee_file": h.callee_file, "callee_new_gate": list(h.callee_new_gate),
+                        "callee_old_gate": list(h.callee_old_gate), "entry_gate": h.entry_gate}
+            else:
+                gate = differ.caller_gate([h]) if (h.new_gate or h.old_gate) else {"callees": [h.qualname]}
+            handler = {"module": differ.module_for(file, cfg.root)[0], "qualname": qualname}
+            out.append(differ.Target(file, f"{method} {path}", "route", [], symbols.sha(f"{method} {path}|{h.code_hash}"),
+                                     requests=requests, handler=handler, **gate))
         return out
     except Exception:  # noqa: BLE001 - a route that cannot be planned is skipped, never a failed check
         return []
@@ -442,7 +451,8 @@ def record(cfg, data: dict, results: list[differ.Result]) -> list[tuple[dict, di
                                                   "the conditions around them)" if getattr(r, "feedback_reached", 0) else "") +
                                                  (f"; {differ.confidence_text(r)}" if r.mutants_total else "") +
                                                  (f"; {differ.carved_text(r)}" if differ.carved_text(r) else "") +
-                                                 (f"; {differ.placeholder_text(r)}" if r.placeholder_inputs else ""),
+                                                 (f"; {differ.placeholder_text(r)}" if r.placeholder_inputs else "") +
+                                                 (f"; {r.reason}" if getattr(r, "route", False) and r.reason else ""),
                                         code_hash=r.code_hash, state="recorded",
                                         extra={"inputs_compared": r.inputs_compared, "mutants": [r.mutants_killed, r.mutants_total],
                                                "statements": [r.statements_reached, r.statements_total], **via})

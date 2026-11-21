@@ -58,6 +58,12 @@ class Target:
     callee_file: str = ""                          # their file
     callee_old_gate: list = field(default_factory=list)
     callee_new_gate: list = field(default_factory=list)
+    # Sprint 7.2a: the gate is the first body statement because only the decorators changed ("got past the decorators").
+    # A difference with that gate unreached comes from the decorators themselves, so it carries no "may come from
+    # elsewhere" hedge. For a caller or a route, true when every gated edited function it reaches has such a gate.
+    entry_gate: bool = False
+    # Sprint 7.2a, kind "route": {"module", "qualname"} of the handler, traced to tell whether a request entered it.
+    handler: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -123,6 +129,12 @@ class Result:
     feedback_dropped: int = 0       # ... ran only by second-pass inputs dropped otherwise (old disagreed with itself, set-up failed)
     feedback_only: bool = False     # every difference is on a second-pass input (a guess); CI still fails, the wake hedges
     compared: list = field(default_factory=list)  # positions of the inputs that were compared (compare_one's own drops left out)
+    # Sprint 7.2a, routes: compared requests that ran at least one changed statement, compared requests that entered the
+    # handler in the edited code, and the compared requests' status codes in the code before the edit ({"401": 4}).
+    route: bool = False
+    requests_reached: int = 0
+    requests_entered: int = 0
+    status_counts: dict = field(default_factory=dict)
 
     @property
     def subject(self) -> str:
@@ -176,14 +188,21 @@ def changed_targets(rel: str, before: str | None, after: str | None) -> list[Tar
     now = {s.qualname: s for s in symbols.extract(after)[0]}
     out: dict[str, Target] = {}
     for c in symbol_diff.diff(before, after):
-        if c.kind in ("body_changed", "signature_changed") and c.after.kind != "class":
+        if c.kind in ("body_changed", "signature_changed", "decorators_changed") and c.after.kind != "class":
             if same_code(before, after, c.before, c.after):
                 continue  # comments, whitespace or the docstring only: running it cannot show anything
             old = c.before
             old_gate, new_gate = examples.gates(before, after, c.before, c.after)
-            out[c.qualname] = Target(rel, c.qualname, c.after.kind, old.params, symbols.sha(c.after.node_text),
+            entry = False
+            if not old_gate and not new_gate and c.before.decorators != c.after.decorators:
+                # Sprint 7.2a: only the decorators changed. A pass needs some input that got through them into the body.
+                new_gate = examples.entry_gate(after, c.after)
+                entry = bool(new_gate)
+            out[c.qualname] = Target(rel, c.qualname, c.after.kind, old.params,
+                                     symbols.sha(c.after.node_text + ("|decorators|" + c.after.decorators_hash
+                                                                      if c.before.decorators != c.after.decorators else "")),
                                      old_gate=old_gate, new_gate=new_gate, source=old.node_text, source_start=old.line_start,
-                                     new_source=c.after.node_text, new_source_start=c.after.line_start)
+                                     new_source=c.after.node_text, new_source_start=c.after.line_start, entry_gate=entry)
         elif c.kind in ("renamed", "visibility_changed") and c.before.kind != "class":
             pass  # the old name is gone; static checks report it, and callers show up at Stop
     changed_names = _changed_constants(before, after)
@@ -563,7 +582,8 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     # A pass must rest on inputs that ran every changed statement (D-043). Guessed values for an untyped parameter often
     # leave by an early return or an error, and old and new code then agree without the edit ever being exercised.
     # A caller is held to the edited functions' statements: agreeing on inputs that never reach them says nothing.
-    parts = gate_parts(target, a, n)
+    route = target.kind == "route"
+    parts = gate_parts(target, a, n, r.compared if route else None)
     untraced = any(executed is None for _, executed, _ in parts)
     hit, missed, missed_old = [], [], []
     if parts and not untraced:
@@ -573,14 +593,32 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
             (missed_old if old_tree else missed).extend(m)
         r.statements_reached, r.statements_total = len(hit), sum(len(g) for g, _, _ in parts)
         r.unreached_ranges = [[s, e, False] for s, e in missed] + [[s, e, True] for s, e in missed_old]
+    facts = _route_facts(r, target, a, n, parts) if route else None
+    if facts and facts["new_route"]:
+        # The code before the edit answered every request 404/405 before any handler ran, and the edited code enters the
+        # handler: the route is new in this edit (a path changed in its decorator). An addition is not a finding.
+        r.differences = []
+        r.reason = (f"the route is new in this edit: the code before it answered all {r.inputs_compared} requests "
+                    f"{facts['codes_old']} before any handler ran, so there is no old behaviour to compare")
+        return r
     if r.declared_failures and not r.differences:
         r.status = DIFFERENT
         return r
     if r.differences:
         r.status = DIFFERENT
-        if target.via and r.statements_total and not r.statements_reached:
-            r.unreached_note = (f"The inputs never ran the changed statements of {callee_names(target.callees)} (reached 0 of {r.statements_total}), "
-                                "so this difference may come from elsewhere: an earlier edit this session, another function, or non-determinism")
+        # No hedge for a route whose gate is its own handler's entry gate after a decorator-only edit: requests that never
+        # got past the changed decorators show what the decorators do. A caller, or a route whose handler only calls the
+        # edited function, may never have called it at all, so the note stays, worded for decorators.
+        own_entry = route and target.entry_gate and not _route_via(target)
+        if (target.via or route) and not own_entry and r.statements_total and not r.statements_reached:
+            who = "requests" if route else "inputs"
+            if target.entry_gate:
+                r.unreached_note = (f"The {who} never got past the changed decorators of {callee_names(target.callees)}, or never "
+                                    f"called it (reached 0 of {r.statements_total}), so this difference may come from those "
+                                    "decorators or from elsewhere: an earlier edit this session, another function, or non-determinism")
+            else:
+                r.unreached_note = (f"The {who} never ran the changed statements of {callee_names(target.callees)} (reached 0 of {r.statements_total}), "
+                                    "so this difference may come from elsewhere: an earlier edit this session, another function, or non-determinism")
         # The example a person reads first: from real tests or real calls recorded from callers, then the repo's own examples, ordinary values before
         # NaN and infinity, a returned value before an error, and short before long.
         on_ph = sum(1 for d in r.differences if d.get("placeholder_self"))
@@ -621,6 +659,8 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
                if item.get("expect") is None and item.get("source") != "carved" and not _is_guess(item)]
         r.baseline_unrunnable = bool(old) and all(o in ("raise", "setup_failed") for o in old)
         return r
+    if route:
+        return _route_verdict(r, target, facts, untraced, missed, missed_old)
     where = f" of {callee_names(target.callees)}" if target.via and target.callees else ""
     if untraced and target.via:
         r.reason = f"the changed lines{where} could not be traced while it ran"
@@ -644,6 +684,110 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
     return r
 
 
+EARLY_STATUS = range(400, 500)
+
+
+def _route_via(target: Target) -> bool:
+    """A route whose handler is only a caller of the edited function (its gate is that function's), not the handler."""
+    handler = (target.handler or {}).get("qualname", "")
+    return not (target.callee_file == target.file and list(target.callees) == [handler])
+
+
+def _codes(counts: dict) -> str:
+    """'401' when every request got one code, else '401 x3, 403 x1'."""
+    if len(counts) == 1:
+        return next(iter(counts))
+    return ", ".join(f"{k} x{v}" for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _route_facts(r: Result, target: Target, a: dict, n: dict, parts: list) -> dict:
+    """Sprint 7.2a: what the compared requests of a route did in each tree. Fills r.route, r.status_counts,
+    r.requests_entered and r.requests_reached. An early response is one produced while no line of the handler ran in
+    that tree (validation, dependencies, before-request hooks, decorators, routing, middleware); entry is None when the
+    handler could not be resolved."""
+    r.route = True
+    sa, sn = a.get("statuses") or [], n.get("statuses") or []
+    ea, en = a.get("entered"), n.get("entered")
+    pairs = [(i, sa[i] if i < len(sa) else None, sn[i] if i < len(sn) else None,
+              ea[i] if ea is not None and i < len(ea) else None, en[i] if en is not None and i < len(en) else None) for i in r.compared]
+    counts: dict = {}
+    for _, so, _, _, _ in pairs:
+        if so is not None:
+            counts[str(so)] = counts.get(str(so), 0) + 1
+    r.status_counts = counts
+    r.requests_entered = sum(1 for p in pairs if p[4] is True)
+    gate_new = [x for g, _, old in parts if not old for x in g]
+    gate_old = [x for g, _, old in parts if old for x in g]
+
+    def ran_any(run: dict, gate: list, i: int) -> bool:
+        per = run.get("request_gate") or []
+        lines = set(per[i]) if i < len(per) else set()
+        return any(line in lines for s, e in gate for line in range(s, e + 1))
+    r.requests_reached = sum(1 for p in pairs if (gate_new and ran_any(n, gate_new, p[0])) or (gate_old and ran_any(a, gate_old, p[0])))
+    known = bool(pairs) and all(p[3] is not None and p[4] is not None for p in pairs)
+    same_early = bool(pairs) and all(so is not None and so == sn_ and so in EARLY_STATUS and (not known or (ea_ is False and en_ is False))
+                                     for _, so, sn_, ea_, en_ in pairs)
+    # The new-route rule needs the old 404/405 to come from routing itself: no route of the old app matched the method
+    # and path (the worker's per-request "routed"). A 404 from a dependency, hook or decorator the edit removed is a
+    # real change, never an addition.
+    ra = a.get("routed") or []
+    unrouted = all(i < len(ra) and ra[i] is False for i, *_ in pairs)
+    new_route = bool(pairs) and known and unrouted and all(so in (404, 405) and ea_ is False and en_ is True
+                                                           for _, so, _, ea_, en_ in pairs)
+    return {"same_early": same_early, "known": known, "new_route": new_route, "codes_old": _codes(counts) if counts else "",
+            "any_entered_new": any(p[4] is True for p in pairs), "entry_unknown": not pairs or any(p[4] is None for p in pairs)}
+
+
+def _route_verdict(r: Result, target: Target, facts: dict, untraced: bool, missed: list, missed_old: list) -> Result:
+    """Sprint 7.2a: the status of a route with no difference. With changed statements to reach (M > 0) the statement rule
+    decides: verified only when the compared requests ran every one of them; the early-4xx wording is added to the text
+    when they ran none. Gate lines can run outside the handler (a dependency or before-request hook calling the edited
+    function) while the handler is never entered, so "early" alone never decides when M > 0. With no gate (M == 0: the
+    handler only reads a changed constant) the same-early-4xx rule decides, then some compared request must have entered
+    the handler in the edited code."""
+    name = callee_names(target.callees) if target.callees else (target.handler or {}).get("qualname", "the handler").rsplit(".", 1)[-1]
+    count = r.inputs_compared
+    early = (f"; every request was answered {facts['codes_old']} before the handler ran, in both versions"
+             + ("" if facts["known"] else "; the handler could not be traced, so it may never have run")) if facts["same_early"] else ""
+    if untraced and (target.callee_new_gate or target.callee_old_gate):
+        r.reason = f"the changed lines of {name} could not be traced while the requests ran"
+        return r
+    if r.statements_total:
+        if not r.statements_reached:
+            r.reason = (f"none of the {count} requests reached the changed lines of {name}, so the edit itself was not "
+                        f"exercised (reached 0 of {r.statements_total} changed statements)" + early)
+            if not early and facts["codes_old"]:
+                r.reason += f"; responses before the edit: {_codes(r.status_counts)}"
+            return r
+        if missed or missed_old:
+            never = []
+            if missed:
+                never.append(f"{_lines_word(missed)} {examples.show_ranges(missed)} never ran")
+            if missed_old:
+                never.append(f"{_lines_word(missed_old)} {examples.show_ranges(missed_old)} (in the code before the edit) never ran")
+            r.reason = (f"requests reached {r.statements_reached} of {r.statements_total} changed statements of {name}; "
+                        + "; ".join(never) + f" ({r.requests_reached} of {count} requests reached any)")
+            return r
+    else:
+        if facts["same_early"]:
+            r.reason = f"every request was answered {facts['codes_old']} before the handler ran, in both versions" + \
+                       ("" if facts["known"] else "; the handler could not be traced, so it may never have run")
+            return r
+        if not facts["entry_unknown"] and not facts["any_entered_new"]:
+            r.reason = (f"no request reached the handler {name} in the edited code"
+                        + (f" (responses before the edit: {_codes(r.status_counts)})" if r.status_counts else ""))
+            return r
+        if facts["entry_unknown"]:
+            # Passed on responses alone: whether any request ran the handler is not known.
+            r.status = DONE
+            r.reason = (f"entry unknown: the handler {name} could not be traced, so whether any request ran it is not "
+                        f"known (responses before the edit: {_codes(r.status_counts)})" if r.status_counts else
+                        f"entry unknown: the handler {name} could not be traced")
+            return r
+    r.status = DONE
+    return r
+
+
 def _lines_word(ranges: list) -> str:
     return "lines" if len(ranges) > 1 or ranges[0][0] != ranges[0][1] else "line"
 
@@ -659,14 +803,35 @@ def caller_gate(edited: list[Target]) -> dict:
     edited = [t for t in edited if t is not None]
     if not edited:
         return {}
+    gated = [t for t in edited if t.new_gate or t.old_gate]
     return {"callees": [t.qualname for t in edited], "callee_file": edited[0].file,
             "callee_new_gate": [g for t in edited for g in t.new_gate],
-            "callee_old_gate": [g for t in edited if not t.new_gate for g in t.old_gate]}
+            "callee_old_gate": [g for t in edited if not t.new_gate for g in t.old_gate],
+            "entry_gate": bool(gated) and all(t.entry_gate for t in gated)}
 
 
-def gate_parts(target: Target, a: dict, n: dict) -> list[tuple[list, list | None, bool]]:
+def _request_lines(run: dict, compared: list | None) -> list | None:
+    """Sprint 7.2a, routes: the gate lines run by the compared requests only (each request's own lines are traced), so a
+    request dropped as non-deterministic or failed cannot make a statement count as reached. None when not traced."""
+    per = run.get("request_gate")
+    if per is None:
+        return None
+    keep = range(len(per)) if compared is None else compared
+    return sorted({line for i in keep if i < len(per) for line in per[i]})
+
+
+def gate_parts(target: Target, a: dict, n: dict, compared: list | None = None) -> list[tuple[list, list | None, bool]]:
     """[(gate, executed lines, gate is in the old tree)]. A function's own gate is in the new tree, or the old one when
-    the edit only deleted code. A caller is judged by the edited functions' statements, traced while it ran."""
+    the edit only deleted code. A caller is judged by the edited functions' statements, traced while it ran. A route
+    (Sprint 7.2a) is judged like a caller, by the handler's changed statements or the edited function it reaches: the
+    new-tree statements by the new tree's requests and, for a deleted-code gate (callee_old_gate), the old tree's."""
+    if target.kind == "route":
+        parts = []
+        if target.callee_new_gate:
+            parts.append((target.callee_new_gate, _request_lines(n, compared), False))
+        if target.callee_old_gate:
+            parts.append((target.callee_old_gate, _request_lines(a, compared), True))
+        return parts
     if target.via:
         parts = []
         if target.callee_new_gate:
@@ -685,7 +850,10 @@ def reached_text(r: Result) -> str:
     """'reached 2 of 2 changed statements', or '' without a gate."""
     if not r.statements_total:
         return ""
-    return f"reached {r.statements_reached} of {r.statements_total} changed statements"
+    text = f"reached {r.statements_reached} of {r.statements_total} changed statements"
+    if r.route and r.inputs_compared:
+        text += f" ({r.requests_reached} of {r.inputs_compared} requests reached them)"
+    return text
 
 
 def _tree_specs(specs: list[dict], runnable: dict, old: bool) -> list[dict]:
@@ -693,7 +861,7 @@ def _tree_specs(specs: list[dict], runnable: dict, old: bool) -> list[dict]:
     out = []
     for spec in specs:
         t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
-        ranges = (t.callee_old_gate if old else t.callee_new_gate) if t.via and t.callee_file else []
+        ranges = (t.callee_old_gate if old else t.callee_new_gate) if (t.via or t.kind == "route") and t.callee_file else []
         out.append({**spec, "gate": {"file": t.callee_file, "ranges": ranges}} if ranges else spec)
     return out
 
@@ -1487,7 +1655,8 @@ def _run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest
                 results[t.qualname] = Result(t.file, t.qualname, UNTESTED, t.code_hash, reason="no requests could be built for this route")
                 continue
             app_module = app.split(":", 1)[0]
-            specs.append({"module": app_module, "qualname": t.qualname, "kind": "http", "app": app, "inputs": t.requests})
+            specs.append({"module": app_module, "qualname": t.qualname, "kind": "http", "app": app, "inputs": t.requests,
+                          **({"handler": t.handler} if t.handler else {})})
             runnable[f"{app_module}:{t.qualname}"] = (t, t.requests)
             continue
         if t.file not in alias_cache:

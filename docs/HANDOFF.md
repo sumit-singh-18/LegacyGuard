@@ -72,6 +72,34 @@ its `pyvenv.cfg` (temp cleanup) and was recreated; the broken one is at `/privat
 5. **Masking cwd/tree paths in `lg_codec.canon`** (the folder name also carries the hook pid, which canon may show as
    `<parent pid>` in the cold worker).
 
+### Sprint 7.2a (route-diff correctness), built 2026-11-20, reviewer PASS (3 rounds), committed
+Plan: `docs/research/2026-11-sprint7-2-plan.md` (section 0: the user's decisions and the reviewer's corrections). Built in
+the order (d), (a), (b), (e). New `legacyguard/guardlib/route_decorators.py`; changes in `guardlib/checks.py`,
+`indexer/routes.py` (shared parser; INTROSPECT through `lg_worker.prepare` + `load_app` under the OS sandbox),
+`guardlib/symbols.py` (`decorators_hash`), `guardlib/symbol_diff.py` (`decorators_changed`), `runner/examples.py`
+(`entry_gate`), `runner/diff.py` (entry gate, `Target.entry_gate`/`handler`, route gates in `gate_parts`/`_tree_specs`,
+`_route_facts`/`_route_verdict`, Result `route`/`requests_reached`/`requests_entered`/`status_counts`, `reached_text`),
+`guardlib/engine.py` (`route_targets` gates and handler), `runner/lg_worker.py` (`load_app`, `_APPS`, `_route_tracer`,
+`run_route` with per-request buckets on every thread), `tools/validate.py` (records `statements` and `route`).
+Tests: `tests/test_route_decorators.py`, `tests/test_route_gates.py`. Review round 1 REVISE fixed (new-route rule needs a
+per-request `routed` flag from the worker; hedge exemption only for a route's own handler entry gate; "entry unknown"
+note). Round 2 REVISE fixed: Starlette `routed` reads the router's scope keys (`routed` is None when the router
+did not run), no 405 rewrite; Flask matches with its own request adapter. 467 tests on Python 3.12 and 3.10.
+Tuning set re-run after the fixes (out `out-run72a-r1`): 8 of 9 / 9 of 9, 0 changes against `out-run74` in any verdict or function status or reason. Re-run because `compare_one` (shared with functions) changed.
+Tuning-set run after 7.2a (`--fix-tests both`, tuning manifest only, out `out-run72a` in /private/tmp/claude-501/lg-validation): 8 of 9 detected without the fix's tests, 9 of 9 with; 0 changes in any verdict or any function's status or reason against `out-run74` (52 functions, untested share 71.2% in both modes). No tuning case has a route (no `app:`), so this shows only that functions are unchanged; the route rules are covered by the fixtures. Held-out sets not run.
+Note for 7.3: routes that were "verified" on all-401 or all-422 responses now read untested; that is intended.
+
+**Next: 7.2b** (part c of the plan): deleted and renamed handlers. `baseline_routes` table filled at SessionStart and by
+`ci.run` (`introspect(root=)`), lookup order baseline_routes -> routes -> static decorator parse of the old function
+(prefix caveat), delete targets (old handler's whole body as `callee_old_gate`), rename targets (entry gate of the new
+function), tests B1-B5.
+
+7.2 follow-ups (not built, user's decision):
+1. "Only compared inputs count" for functions and callers (routes already count only compared requests).
+2. Harvest literal test-client `headers=` into route requests; any printed text names header names only, never values.
+3. Handlers defined inside `create_app` (`<locals>` qualnames) get no route target; normalising the qualname would
+   give them targets, though their entry still could not be traced.
+
 ## Known open follow-ups (small)
 - Pid fix, known limit (documented, pinned by `test_warm.py::test_known_limit_warm_child_ppid_reads_as_pid`): a warm child masks the server's pid as `<pid>`, which it needs for module-level pids captured before the fork. The server is also the child's real parent, so `os.getppid()` reads `<pid>` too. An edit from `return os.getpid()` to `return os.getppid()` is "verified" under warm workers and "different" under cold. The swap is hidden whenever the new side runs warm (both warm, or only the old side fell back to cold); an unchanged `getppid()` with one side warm and the other cold gives a false "different".
 - Thread ids are still faked (6.8d: `threading.get_ident`, `get_native_id`, `Thread.ident`/`native_id` return small stable numbers to project code), so they carry the same OS-handoff risk as the old fake pid. Failure modes:

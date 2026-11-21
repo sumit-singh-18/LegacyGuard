@@ -9,7 +9,7 @@ from guardlib import symbols
 
 @dataclass
 class Change:
-    kind: str  # added, deleted, renamed, visibility_changed, signature_changed, body_changed
+    kind: str  # added, deleted, renamed, visibility_changed, signature_changed, body_changed, decorators_changed
     qualname: str
     new_qualname: str | None = None
     before: symbols.Symbol | None = None
@@ -48,4 +48,8 @@ def diff(before: str | None, after: str | None) -> list[Change]:
             changes.append(Change("signature_changed", q, before=s, after=t))
         elif s.body_hash != t.body_hash:
             changes.append(Change("body_changed", q, before=s, after=t))
+        elif s.decorators_hash != t.decorators_hash:
+            # Sprint 7.2a: only the decorators changed (the function's own text is the same). Its own kind, so that
+            # callers are not reported stale as they are for a signature change.
+            changes.append(Change("decorators_changed", q, before=s, after=t))
     return sorted(changes, key=lambda c: c.qualname)

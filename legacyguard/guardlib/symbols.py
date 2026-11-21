@@ -34,6 +34,9 @@ class Symbol:
     decorators: list[str] = field(default_factory=list)
     params: list[dict] = field(default_factory=list)
     node_text: str = ""
+    # Sprint 7.2a: the decorators' text, apart from the signature hash. Adding @cache or @require_token changes what a
+    # call does, but not what callers must pass, so it must not read as "signature changed" (stale-caller findings).
+    decorators_hash: str = ""
 
     @property
     def name(self) -> str:
@@ -106,9 +109,10 @@ def extract(source: str | bytes) -> tuple[list[Symbol], list[Call]]:
                 sig_end = body.start_byte if body is not None else child.end_byte
                 sig = child.text[: sig_end - child.start_byte].decode("utf8", "replace").strip()
                 kind = "class" if t == "class_definition" else ("method" if in_class else "function")
+                decs = _decorators(child)
                 symbols.append(Symbol(qual, kind, child.start_point[0] + 1, child.end_point[0] + 1, sig, sha(sig),
-                                      sha(child.text), _decorators(child), _params(child) if t == "function_definition" else [],
-                                      text(child)))
+                                      sha(child.text), decs, _params(child) if t == "function_definition" else [],
+                                      text(child), sha("\n".join(decs))))
                 if body is not None:
                     walk(body, scope + [text(nm)], qual if t == "function_definition" else func, t == "class_definition")
                 for p in ("parameters", "superclasses"):

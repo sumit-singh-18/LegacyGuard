@@ -1384,26 +1384,118 @@ def reset_determinism() -> None:
             pass
 
 
-def _http_caller(app_ref: str):
+_APPS: dict = {}  # Sprint 7.2e: app reference -> (app, None) or (None, the exception), once per worker or warm child
+
+
+def _app_expr(ref: str):
+    """(module, name, args, kwargs, is_call) for 'pkg.mod:name' or 'pkg.mod:factory(literal args)'. The rule is Flask's
+    own app discovery (`flask --app`): a simple name, or a call of a simple name whose arguments are Python literals.
+    Anything else raises ValueError: no eval, no attribute chains, no starred arguments."""
+    import ast
+    module, _, attr = ref.partition(":")
+    attr = attr.strip() or "app"
+    bad = ValueError(f"app {ref!r} must be module:name or module:name(literal arguments)")
+    try:
+        node = ast.parse(attr, mode="eval").body
+    except (SyntaxError, ValueError):
+        raise bad from None
+    if isinstance(node, ast.Name):
+        return module, node.id, [], {}, False
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        raise bad
+    if any(isinstance(a, ast.Starred) for a in node.args) or any(k.arg is None for k in node.keywords):
+        raise bad
+    try:
+        args = [ast.literal_eval(a) for a in node.args]
+        kwargs = {k.arg: ast.literal_eval(k.value) for k in node.keywords}
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        raise bad from None
+    return module, node.func.id, args, kwargs, True
+
+
+def load_app(ref: str):
+    """The app object for the config's `app:` (Sprint 7.2e). A factory is called as the Flask CLI calls it: a written
+    call with its literal arguments, and a bare name that is a plain function with none. Never a bare function handed
+    to a test client. Built under setup_phase(), so the blocks, the OS sandbox and the cache-write redirection apply,
+    and once per process: factories that register metrics or extensions often fail when called twice."""
+    if ref in _APPS:
+        app, exc = _APPS[ref]
+        if exc is not None:
+            raise exc
+        return app
+    try:
+        module, name, args, kwargs, is_call = _app_expr(ref)
+        with setup_phase():
+            obj = getattr(importlib.import_module(module), name)
+            if is_call:
+                if not callable(obj):
+                    raise TypeError(f"{name} in {module} is not callable, so {ref!r} cannot be called")
+                obj = obj(*args, **kwargs)
+            elif inspect.isfunction(obj):
+                obj = obj()
+    except BaseException as exc:  # noqa: BLE001 - cached too, so a failing factory is not run again per route
+        _APPS[ref] = (None, exc)
+        raise
+    _APPS[ref] = (obj, None)
+    return obj
+
+
+def _http_caller(app_ref: str, seen: dict | None = None):
     """A callable(method, path, json=None, params=None) that sends one request to the app in process and returns
-    {status, content_type, body}: Flask's test client, or Starlette/FastAPI's TestClient (roadmap C3)."""
-    mod, _, attr = app_ref.partition(":")
-    with setup_phase():
-        app = getattr(importlib.import_module(mod), attr or "app")
+    {status, content_type, body}: Flask's test client, or Starlette/FastAPI's TestClient (roadmap C3). seen["status"]
+    gets each response's status code, and seen["routed"] whether a route of the app matched the method and path
+    (True, False, or None when that could not be told), so a 404/405 from routing is told apart from one a dependency,
+    hook or decorator gave (Sprint 7.2a)."""
+    seen = seen if seen is not None else {}
+    app = load_app(app_ref)
     if hasattr(app, "test_client"):  # Flask
         client = app.test_client()
 
+        def routed(method, path):
+            # Flask's own adapter for this request (SERVER_NAME and subdomain rules included), matched without pushing
+            # the context, so no session is opened and no teardown hook runs. NotFound or MethodNotAllowed: no rule
+            # for this method and path. Anything unexpected is "unknown".
+            try:
+                ctx = app.test_request_context(path, method=method)
+                if ctx.url_adapter is None:
+                    return None
+                ctx.match_request()
+                exc = ctx.request.routing_exception
+            except Exception:  # noqa: BLE001
+                return None
+            if exc is None:
+                return True
+            name = type(exc).__name__
+            return False if name in ("NotFound", "MethodNotAllowed") else (True if name == "RequestRedirect" else None)
+
         def call(method, path, json=None, params=None):
+            seen["routed"] = routed(method, path)
             resp = client.open(path, method=method, json=json, query_string=params)
+            seen["status"] = resp.status_code
             body = resp.get_json(silent=True)
             return {"status": resp.status_code, "content_type": (resp.content_type or "").split(";")[0],
                     "body": body if body is not None else resp.get_data(as_text=True)[:4000]}
         return call
     from starlette.testclient import TestClient  # FastAPI and Starlette; no lifespan, so start-up hooks do not run
-    client = TestClient(app, raise_server_exceptions=False)
+    async def probe(scope, receive, send):
+        # Starlette's Router.app records what routing did in the request scope: "router" before matching, "route" and
+        # "endpoint" on a full or partial match (partial: the path matched, the method is not among the route's). The
+        # dict is passed down through the middleware. No "router" means the router never ran on this scope (a
+        # middleware answered first, or passed a copy): unknown. A Mount leaves the mounted app as the endpoint when its
+        # own router matched nothing.
+        try:
+            await app(scope, receive, send)
+        finally:
+            if scope.get("type") == "http":
+                seen["routed"] = _starlette_routed(scope)
+    client = TestClient(probe, raise_server_exceptions=False)
 
     def call(method, path, json=None, params=None):
+        seen["routed"] = None
         resp = client.request(method, path, json=json, params=params)
+        seen["status"] = resp.status_code
+        if seen.get("routed") == "no route":
+            seen["routed"] = None if resp.status_code == 405 else True
         try:
             body = resp.json()
         except ValueError:
@@ -1412,23 +1504,150 @@ def _http_caller(app_ref: str):
     return call
 
 
-def run_route(spec) -> dict:
-    """Requests to one route of the app, compared like a function's return values."""
+def _starlette_routed(scope):
+    """True, False, None, or "no route" (an endpoint without a route; the caller decides by the status) for one
+    request's scope after Starlette's router ran (Sprint 7.2a)."""
+    if "router" not in scope:
+        return None
+    ep = scope.get("endpoint")
+    if ep is None or hasattr(ep, "routes") or hasattr(ep, "router"):
+        return False
+    route = scope.get("route")
+    if route is None:
+        return "no route"
+    methods = getattr(route, "methods", None)
+    if methods and scope.get("method") not in methods:
+        return False
+    return True
+
+
+def _route_tracer(span, gate, cur: list, stale: set):
+    """Sprint 7.2a: the trace function for one route's requests, on every thread (Starlette's TestClient runs the app on
+    a portal thread, and sync endpoints on a worker thread). cur[0] is the current request's bucket {"own", "gate"}:
+    each frame records into the bucket that was current when the frame started, so lines run by a thread a timed-out
+    request left behind cannot count for a later request. Frames on a thread in `stale` (alive when a request timed
+    out) are not traced at all. Own lines are the handler's span (did the request enter the handler); gate lines are
+    the changed statements in the gate file. Other frames are left untraced."""
+    filename, first, last = span if span else ("", 0, -1)
+    gate_file, gate_lines = gate if gate else ("", frozenset())
+    real: dict = {}
+    overlaps: dict = {}
+    ident = _REAL["get_ident"]
+
+    def is_gate_file(name: str) -> bool:
+        if not gate_file:
+            return False
+        if name not in real:
+            try:
+                real[name] = os.path.realpath(name) == gate_file
+            except (TypeError, ValueError):
+                real[name] = False
+        return real[name]
+
+    def touches_gate(code) -> bool:
+        if code not in overlaps:
+            try:
+                lines = {line for _, line in dis.findlinestarts(code) if line}
+            except Exception:  # noqa: BLE001 - when unsure, trace it
+                lines = set(gate_lines)
+            overlaps[code] = not lines.isdisjoint(gate_lines)
+        return overlaps[code]
+
+    def enter(frame, event, arg):
+        code = frame.f_code
+        own = code.co_filename == filename and first <= code.co_firstlineno <= last
+        in_gate = is_gate_file(code.co_filename) and touches_gate(code)
+        if not (own or in_gate):
+            return None
+        if stale and ident() in stale:
+            return None
+        bucket = cur[0]
+        own_set, gate_set = bucket["own"], bucket["gate"]
+        if own and in_gate:
+            def local(frame, event, arg):
+                if event == "line":
+                    own_set.add(frame.f_lineno)
+                    if frame.f_lineno in gate_lines:
+                        gate_set.add(frame.f_lineno)
+                return local
+        elif own:
+            def local(frame, event, arg):
+                if event == "line":
+                    own_set.add(frame.f_lineno)
+                return local
+        else:
+            def local(frame, event, arg):
+                if event == "line" and frame.f_lineno in gate_lines:
+                    gate_set.add(frame.f_lineno)
+                return local
+        return local
+
+    return enter
+
+
+def _handler_span(handler: dict):
+    """The span of the route's handler, or None when it cannot be resolved (then whether a request entered it is not
+    known). A handler defined inside a factory has a `<locals>` qualname and cannot be resolved."""
+    if not handler or not handler.get("module") or not handler.get("qualname"):
+        return None
     try:
-        call = _http_caller(spec["app"])
+        fn, _, _ = _resolve(handler["module"], handler["qualname"])
+    except BaseException:  # noqa: BLE001
+        return None
+    return _span(fn) if fn is not None else None
+
+
+def run_route(spec, root_real: str = "") -> dict:
+    """Requests to one route of the app, compared like a function's return values. Sprint 7.2a: each request's own
+    gate lines ("request_gate") and whether it entered the handler ("entered") are traced on every thread."""
+    seen: dict = {}
+    try:
+        call = _http_caller(spec["app"], seen)
         if STUBS["on"]:
             lg_stubs.patch_loaded()  # the handlers' own outgoing calls are stubbed; the test client stays in process
     except GuardBlocked as exc:
         return {"status": "import_blocked", "reason": str(exc)}
     except BaseException as exc:  # noqa: BLE001
         return {"status": "import_error", "reason": f"{type(exc).__name__}: {exc}"}
-    results = [_call_once(call, item, None, i) for i, item in enumerate(spec["inputs"])]
-    return {"status": "ran", "results": results, "lines": None, "env": env_snapshot()}
+    span = _handler_span(spec.get("handler") or {})
+    gate = _gate_spec(spec, root_real)
+    cur = [{"own": set(), "gate": set()}]
+    stale: set = set()
+    trace = _route_tracer(span, gate, cur, stale) if span or gate else None
+    main = _REAL["get_ident"]()
+    results, entered, request_gate, statuses, routed = [], [], [], [], []
+    hits: set = set()
+    previous = getattr(threading, "gettrace", lambda: None)()
+    try:
+        if trace is not None:
+            threading.settrace(trace)  # threads started from here on; never settrace_all_threads
+        for i, item in enumerate(spec["inputs"]):
+            cur[0] = {"own": set(), "gate": set()}
+            seen["status"] = seen["routed"] = None
+            out = _call_once(call, item, None, i, trace)
+            results.append(out)
+            statuses.append(seen["status"] if out.get("outcome") == "return" else None)
+            routed.append(seen.get("routed") if out.get("outcome") == "return" else None)
+            if out.get("outcome") == "timeout":
+                stale.update(x for x in (_REAL["ident"].fget(t) for t in threading.enumerate()) if x is not None and x != main)
+            bucket = cur[0]
+            cur[0] = {"own": set(), "gate": set()}  # a leftover thread's new frames go nowhere counted
+            entered.append(bool(bucket["own"]) if span else None)
+            request_gate.append(sorted(bucket["gate"]))
+            hits |= bucket["own"]
+    finally:
+        threading.settrace(previous)
+    out = {"status": "ran", "results": results, "lines": sorted(hits) if span else None, "entered": entered,
+           "statuses": statuses, "routed": routed, "env": env_snapshot()}
+    if gate:
+        out["request_gate"] = request_gate
+        out["gate_lines"] = sorted({n for g in request_gate for n in g})
+    return out
 
 
 def run_function(spec, root_real):
     if spec.get("kind") == "http":
-        return run_route(spec)
+        return run_route(spec, root_real)
     module, qualname = spec["module"], spec["qualname"]
     try:
         fn, owner, reason = _resolve(module, qualname)

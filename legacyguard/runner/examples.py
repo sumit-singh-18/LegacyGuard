@@ -86,6 +86,33 @@ def gates(before_src: str, after_src: str, before_sym, after_sym) -> tuple[list[
     return _gate(before_src, old_lines, before_sym.line_start), _gate(after_src, new_lines, after_sym.line_start)
 
 
+def entry_gate(after_src: str, after_sym) -> list[list[int]]:
+    """Sprint 7.2a: for an edit that changed only a function's decorators, the range of the first body statement that
+    runs (a docstring is skipped: it gives no line event), in the edited file. Reaching it means some input got through
+    the decorators into the body. [] when the function or such a statement is not found."""
+    try:
+        tree = ast.parse(after_src)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return []
+    node = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.lineno == after_sym.line_start), None)
+    if node is None:
+        return []
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    if not body:
+        return []
+    first = body[0]
+    end = first.end_lineno or first.lineno
+    inner = getattr(first, "body", None)
+    if isinstance(inner, list) and inner and hasattr(inner[0], "lineno"):
+        end = max(first.lineno, inner[0].lineno - 1)  # a compound statement counts for its header lines only
+    if isinstance(first, (ast.Global, ast.Nonlocal)):
+        return []
+    return [[first.lineno, end]]
+
+
 def reached(gate: list[list[int]], executed: list[int] | None) -> bool | None:
     """True if an executed line falls inside a changed statement. None when there is nothing to judge by."""
     if not gate or executed is None:

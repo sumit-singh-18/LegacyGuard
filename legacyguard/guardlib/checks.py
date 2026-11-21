@@ -6,10 +6,9 @@ from collections import Counter
 from dataclasses import dataclass
 
 from guardlib import contracts_parse as cp
-from guardlib import symbols
+from guardlib import route_decorators, symbols
 from guardlib.symbol_diff import diff as symbol_diff
 
-ROUTE_DECORATOR = re.compile(r"""^([\w.]*)\.(get|post|put|patch|delete)\(\s*["'](/[^"']*|)["']""", re.I)
 DEPENDENCY_DEFAULT = re.compile(r"\b(Depends|Security|BackgroundTasks)\b")
 
 
@@ -86,9 +85,8 @@ def _routes_of(defs) -> dict[str, tuple[str, str]]:
     out = {}
     for s in defs:
         for dec in s.decorators:
-            m = ROUTE_DECORATOR.match(dec)
-            if m:
-                out[f"{m.group(1)} {m.group(2).upper()} {m.group(3)}"] = (s.qualname, m.group(3))
+            for owner, method, path in route_decorators.parse(dec):
+                out[f"{owner} {method} {path}"] = (s.qualname, path)
     return out
 
 

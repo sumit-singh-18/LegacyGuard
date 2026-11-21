@@ -125,3 +125,35 @@ until the reviewer passes it. Newest entries at the bottom.
   sandbox-exec, 18 to 927 files per tree, 0.01 to 0.13 s, one folder per tree per case and mode (36 for 18 runs).
   The cached thefuck venv had been gutted by the midnight temp cleanup (setup failed); it was moved aside to
   `envs/thefuck-1848729c.broken-20261120` and rebuilt by the harness. Held-out sets not run.
+- Sprint 7.2a (route-diff correctness; plan `docs/research/2026-11-sprint7-2-plan.md`, section 0 has the user's
+  decisions and the reviewer's corrections), built in the order (d), (a), (b), (e). (d) one ast-based route-decorator
+  parser (`guardlib/route_decorators.py`) for the static route check and the index fallback: Flask `.route`/`api_route`
+  (no methods = GET), narrowed `methods=[...]` reports "route removed". (a) decorator-only edits are a
+  `decorators_changed` change (not a signature change), gated on the first body statement (`examples.entry_gate`).
+  (b) route targets carry the handler's gate (or its callee gate) and the handler; `run_route` traces each request on
+  every thread (`threading.settrace` only) into its own bucket; N of M counts statements run by compared requests;
+  with M > 0 the statement rule decides, with M == 0 the same-early-4xx rule then the entered rule; the new-route
+  rule (404/405 from routing in the old tree, entered in the new) is untested, never a finding; no "may come from
+  elsewhere" hedge for a route gated on its own handler's entry gate. (e) `lg_worker.load_app` for `module:factory(literal args)` and bare
+  factory names, cached per process; index introspection uses it with the worker's set-up under the OS sandbox.
+  460 tests on Python 3.12 and 3.10 before review. Cross-thread trace cost: about 1.2 ms per request on a trivial FastAPI
+  endpoint. Tuning-set run after 7.2a (`--fix-tests both`, tuning manifest only, out `out-run72a` in /private/tmp/claude-501/lg-validation): 8 of 9 detected without the fix's tests, 9 of 9 with; 0 changes in any verdict or any function's status or reason against `out-run74` (52 functions, untested share 71.2% in both modes). No tuning case has a route (no `app:`), so this shows only that functions are unchanged; the route rules are covered by the fixtures. Held-out sets not run.
+- Task 7.2a review round 1: REVISE. Fixed: (1) the new-route rule fired on status and entry alone, so dropping a
+  `Depends(get_thing_or_404)` or a 404-aborting decorator was erased as "new route"; the worker now reports per request
+  whether a route of the app matched the method and path (`routed`: Flask URL map match; Starlette: the endpoint the
+  router writes into the scope, a mount whose router matched nothing and a 405 partial match count as unmatched), and
+  the rule needs the old answers to come from routing. A worker flag was chosen over the static decorator check because
+  it also sees router prefixes, mounts and `add_url_rule` routes, and it was checked on FastAPI, an included router,
+  a mounted sub-app and a plain Starlette mount. (2) The hedge exemption is only for a route gated on its own handler's
+  entry gate; callers and caller routes with an entry gate keep the note, reworded. Optional: a pass on responses alone
+  with entry unknown says "entry unknown" (also in the ledger evidence). 464 tests on Python 3.12 and 3.10.
+  Tuning set re-run after the fixes (out `out-run72a-r1`): 8 of 9 / 9 of 9, 0 changes against `out-run74` in any verdict or function status or reason. Re-run because `compare_one` (shared with functions) changed.
+- Task 7.2a review round 2: REVISE, fixed. The Starlette `routed` probe read a missing endpoint as "unmatched" and
+  rewrote any 405 to unmatched. It now reads what Starlette's router records: `routed` is None when the router did not
+  run (no `router` in the scope: a middleware answered first, or passed a copy); False only when the router matched
+  nothing (no endpoint, or a mount whose router matched nothing) or the matched route's methods lack the request's
+  (partial); True otherwise (an endpoint without a route: None on 405, else True). The 405 status rewrite is gone.
+  Flask matches with its own request adapter (`test_request_context(...).match_request()`, not pushed, so no session
+  or teardown hook runs; SERVER_NAME and subdomains covered). Tests: a dropped 405 dependency on a matched route stays
+  different; a middleware 404 before the router does not fire the new-route rule; a scope-reading unit test. 467 tests
+  on Python 3.12 and 3.10.

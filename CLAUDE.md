@@ -48,12 +48,13 @@ index, status, impact, map, waive, pin, mode. All of them call `scripts/lg.py --
 every changed statement of the edited functions it calls), `different` (for a caller whose inputs ran none of the
 changed statements, the wake text and evidence say the difference may come from elsewhere), `broken` (the module no
 longer imports), `untested` (with a reason: DB, network, file write, uncallable, timeout, not every changed statement
-reached, non-deterministic), `slowdown` (only the new code timed out where both old runs finished fast, confirmed
+reached, non-deterministic; for a route also: every request answered the same 4xx before the handler ran, no request
+entered the handler, or the route is new in this edit), `slowdown` (only the new code timed out where both old runs finished fast, confirmed
 by a re-run under the full limit; never a detection, never fails CI, waivable). Comment-, whitespace- and docstring-only edits produce no result at all.
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 423 tests after Sprint 7.4 Part A). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 467 tests after Sprint 7.2a). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -289,6 +290,58 @@ Plan: docs/research/2026-11-sprint7-4-plan.md (with the reviewer's round-2 corre
   case and mode. Held-out sets not run.
 - Follow-ups: Part B (baseline folder once per session), 7.4b bwrap overlay, phase 2 imports from the folder, the
   empty-mode relative-read rule, masking cwd paths in `lg_codec.canon` (see HANDOFF).
+
+## Sprint 7.2a (on main, 2026-11-20), route-diff correctness
+
+Plan: docs/research/2026-11-sprint7-2-plan.md (section 0 has the user's decisions and the reviewer's corrections).
+- **(d) one route-decorator parser** (`guardlib/route_decorators.py::parse`, ast-based) for `checks._routes_of` and
+  `indexer/routes.from_decorators`; both regexes are gone. `get/post/put/patch/delete` and Flask `route`/`api_route`
+  (no `methods` = GET; HEAD/OPTIONS dropped; methods upper-cased; non-literal `methods` gives no rows). The static
+  "route removed" check now covers `.route` handlers and narrowed `methods=[...]`; the index fallback finds them.
+- **(a) decorators count as code:** `Symbol.decorators_hash` and a separate `decorators_changed` kind in `symbol_diff`
+  (not in the signature hash, so no stale-caller findings). `changed_targets` accepts it; when only the decorators
+  changed the gate is the first body statement (`examples.entry_gate`, docstring skipped; `Target.entry_gate`), so a pass
+  needs an input that got past the decorators. The code hash adds the decorators' hash. A wrapper without
+  `functools.wraps` hides the body from `_span`: untested, never a false verified.
+- **(b) routes are gated:** `engine.route_targets` gives each route the handler's gate (`caller_gate([h])`) or, for a
+  handler that is only a caller, that caller's callee gate; plus `Target.handler` {module, qualname}. Routes never get
+  `via`. The worker's `run_route` traces on every thread (`threading.settrace` only, previous hook restored; Starlette
+  runs the app on a portal thread and sync endpoints on a worker thread) with `_route_tracer`: per-request buckets
+  (`request_gate`, `entered`, `statuses`); a frame records into the bucket current when it started, and threads alive
+  when a request timed out are not traced again. Rules (`diff._route_facts`, `_route_verdict`): N counts changed
+  statements run by **compared** requests only (stricter than functions); M > 0: the statement rule decides (verified
+  only when N == M; "none of the R requests reached the changed lines of h ... (reached 0 of M ...)" plus "every request
+  was answered 401 before the handler ran, in both versions" when that holds; "requests reached N of M ...; line X never
+  ran (k of R requests reached any)"); M == 0 (handler only reads a changed constant): same early 4xx in both trees ->
+  untested, else some compared request must have entered the handler in the new tree. Entry unknown (handler not
+  resolved) -> status alone, with a hedge; a pass on responses alone says "entry unknown" in its reason. The new-route
+  rule comes before differences: every compared request 404/405 from routing in the old tree (the worker's per-request
+  `routed`: Flask's own request adapter, matched without pushing the context; Starlette's `router`/`route`/`endpoint`
+  scope keys, where a mount whose router matched nothing and a partial match (method not in the route's) are unmatched;
+  `routed` is None when the router did not run, e.g. a middleware answered first or passed a copied scope, and None
+  never fires the rule) and entered in the new -> untested "the route is new in this edit" (a
+  path moved in a decorator, head-tree index). A 404 from a dependency, hook or decorator the edit removed stays
+  different. Differences stay different; the "may come from elsewhere" hedge applies to routes too, except for a route
+  gated on its own handler's entry gate; callers and routes reached through a caller keep it, worded "never got past
+  the changed decorators of f, or never called it". A route gated on `callee_old_gate` uses the old tree's requests.
+  Result fields `route`, `requests_reached`, `requests_entered`, `status_counts` (old tree); `reached_text` adds "(k of
+  R requests reached them)"; `tools/validate.py` records `statements` and `route`. Routes previously "verified" on
+  all-401/all-422 responses now show as untested (intended). Trace cost: about 1.2 ms per request on a trivial
+  FastAPI endpoint (1 ms to 2.2 ms).
+- **(e) factory apps:** `lg_worker.load_app` (`module:name` or `module:factory(literal args)`, Flask CLI's rule; a bare
+  function name is called with no arguments; no eval, attribute chains or starred args -> ValueError, untested with
+  that text), built under `setup_phase()`, cached per process (`_APPS`, failures too). `_http_caller` and index
+  introspection use it. INTROSPECT now runs with `lg_worker.prepare` (blocks, run scratch folder, tree protected),
+  `setup_phase()` and the OS sandbox (`os_sandbox.wrap`, tree read-only); any failure falls back to the decorators.
+  Limit: handlers defined inside `create_app` have `<locals>` qualnames that match no symbol, so they get no route
+  target (and their entry cannot be traced); blueprints and module-level views work.
+- Tests: `tests/test_route_decorators.py`, `tests/test_route_gates.py` (A1-A4 with both index shapes, method decorator,
+  C, D1-D4, rule order, handler's own 404 in Flask and FastAPI, a dropped 404 dependency or decorator and a dropped 405 dependency stay
+  different, a middleware 404 before the router is not read as routing,
+  the caller hedge with an entry gate, E1-E6, bare factory, leftover threads).
+- Next: **7.2b** (deleted and renamed handlers: `baseline_routes` in session and CI, lookup order, delete and rename
+  targets). Follow-ups: "only compared inputs count" for functions and callers; harvesting literal test-client
+  `headers=` (header names only in printed text).
 
 ## Known gaps still open
 
