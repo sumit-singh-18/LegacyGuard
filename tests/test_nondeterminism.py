@@ -187,6 +187,9 @@ def test_causes_by_kind():
     assert c(_ret(0.8444218515250481), _ret(0.7579544029403025)) == [(noise.RANDOM_NUMBERS, "the return value")]
     assert c(_ret(b"\x01\x02\x03\x04\x05\x06\x07\x08\x09"), _ret(b"\x13\x14\x15\x16\x17\x18\x19\x1a\x1b")) == [(noise.RANDOM_BYTES, "the return value")]
     assert c(_ret("3f9a1c22d0e4b7aa"), _ret("0b7e5d11c2a4f9e3")) == [(noise.RANDOM_TOKENS, "the return value")]
+    # A random hex token that happens to be all digits or all letters a-f (os.urandom(8).hex() about once in 1,800).
+    assert c(_ret("0874934817709286"), _ret("3a2004882199707e")) == [(noise.RANDOM_TOKENS, "the return value")]
+    assert c(_ret("bcff5cec6b8f49ba"), _ret("abcdefabcdefabcd")) == [(noise.RANDOM_TOKENS, "the return value")]
     assert c(_ret("yes"), _ret("no")) == [(noise.OTHER, "the return value")]
     assert c(_ret(1), None) == [(noise.UNFINISHED, "the outcome")]
     raised = {"k": "raise", "type": "ValueError", "message": "worker 501 busy"}

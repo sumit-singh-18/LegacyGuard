@@ -1,6 +1,7 @@
 """Sprint 7.2a: route correctness. Decorator edits count as code (a), routes are gated on the changed statements their
 requests ran and on whether a request entered the handler (b), and factory apps load (e)."""
 import subprocess
+import sys
 import time
 
 from guardlib import engine, symbol_diff
@@ -796,7 +797,7 @@ def test_leftover_thread_lines_stay_with_their_own_request():
     cur, stale = [{"own": set(), "gate": set()}], set()
     trace = lg_worker._route_tracer(span, None, cur, stale)
     started, go = threading.Event(), threading.Event()
-    threading.settrace(trace)
+    threading.settrace(lg_worker._thread_trace(trace))
     try:
         worker = threading.Thread(target=_slow, args=(started, go))
         worker.start()
@@ -823,7 +824,7 @@ def test_threads_alive_at_a_timeout_are_not_traced_later():
     def leftover():
         ready.wait(5)
         _slow(started, go)
-    threading.settrace(trace)
+    threading.settrace(lg_worker._thread_trace(trace))
     try:
         worker = threading.Thread(target=leftover)
         worker.start()
@@ -833,6 +834,44 @@ def test_threads_alive_at_a_timeout_are_not_traced_later():
     finally:
         threading.settrace(None)
     assert started.is_set() and cur[0]["own"] == set()
+
+
+class _EndCheck(__import__("threading").Thread):
+    def _bootstrap_inner(self):
+        super()._bootstrap_inner()
+        self.trace_at_end = sys.gettrace()   # still on the thread, after run() returned
+
+
+class _OwnRun(_EndCheck):
+    def run(self):
+        raise ValueError("a thread that fails")
+
+
+def test_route_threads_end_with_no_trace_function_left_set(monkeypatch):
+    # On Python 3.12+ a thread that ends with a trace function set keeps tracing switched on for the whole process, and
+    # every later line of Python ran about twice as slow (a regex draw in a later test then hit its time cap).
+    import threading
+
+    from runner import lg_worker
+    monkeypatch.setattr(threading, "excepthook", lambda args: None)
+    calls = []
+
+    def trace(frame, event, arg):
+        calls.append(frame.f_code.co_name)
+        return None
+
+    def target():
+        return len(calls)
+    threading.settrace(lg_worker._thread_trace(trace))
+    try:
+        threads = [_EndCheck(target=target), _OwnRun()]
+        for t in threads:
+            t.start()
+            t.join(5)
+    finally:
+        threading.settrace(None)
+    assert [t.trace_at_end for t in threads] == [None, None]
+    assert {"run", "target"} <= set(calls)   # the wrapped trace function still saw the calls
 
 
 # ---------------------------------------------------------------- C: a router prefix moved, paths unchanged

@@ -157,3 +157,16 @@ until the reviewer passes it. Newest entries at the bottom.
   or teardown hook runs; SERVER_NAME and subdomains covered). Tests: a dropped 405 dependency on a matched route stays
   different; a middleware 404 before the router does not fire the new-route rule; a scope-reading unit test. 467 tests
   on Python 3.12 and 3.10.
+- Fix after the 7.2a CI failure (1c78663 failed on ubuntu 3.12/3.13): (1) `test_regex_only_edit_detected_by_from_regex_sample`
+  got no samples. Cause: on Python 3.12+ a thread that ends with a trace function still set leaves the interpreter's
+  tracing instrumentation on for the whole process (sys.gettrace() reads None), so all later Python runs about twice as
+  slow. `run_route` and two in-process tests in test_route_gates.py set `threading.settrace`, and their threads ended
+  traced; the regex draw's cold Hypothesis utf-8 codec table (a loop over every code point) went from 0.75 s to 1.35 s
+  locally and past the 2 s draw cap on CI. 3.10 is unaffected. Fix: `lg_worker._thread_trace` wraps the trace function
+  and calls `sys.settrace(None)` when the thread's outermost run() frame returns; run_route and the tests use it. Test:
+  a thread (and one with its own failing run()) ends with no trace function set. This also removes the same slowdown
+  from a route worker after its first request thread. (2) `test_real_non_determinism_names_its_cause` flaked: a random
+  `os.urandom(8).hex()` that happens to be all digits (about 1 in 900 per pair) did not read as a random token, so the
+  cause was "unclassified". Pre-existing (6.8d). `noise._token_pair` now also accepts two hex strings of which one mixes
+  letters and digits; 0 misses in 200,000 random pairs (was 0.115%). Labels only; no status changes, so the tuning set
+  was not re-run. 468 tests on Python 3.12 and 3.10.

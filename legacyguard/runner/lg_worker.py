@@ -1521,6 +1521,34 @@ def _starlette_routed(scope):
     return True
 
 
+_BOOTSTRAP = getattr(threading.Thread, "_bootstrap_inner", None)
+_BOOTSTRAP_CODE = getattr(_BOOTSTRAP, "__code__", None)
+
+
+def _thread_trace(trace):
+    """`trace` for threading.settrace, removed again when the thread's run() returns. A thread that ends with a trace
+    function still set leaves Python 3.12+ with its tracing instrumentation switched on for the whole process: every
+    later line of Python runs about twice as slow, though sys.gettrace() reads None. The outermost frame of a thread
+    is run() (whatever class defines it), called from Thread._bootstrap_inner."""
+
+    def hook(frame, event, arg):
+        back = frame.f_back
+        if event != "call" or back is None or back.f_code is not _BOOTSTRAP_CODE:
+            return trace(frame, event, arg)
+        inner = trace(frame, event, arg)
+
+        def outer(frame, event, arg):
+            nonlocal inner
+            if inner is not None:
+                inner = inner(frame, event, arg)
+            if event == "return":
+                sys.settrace(None)
+                return None
+            return outer
+        return outer
+    return hook
+
+
 def _route_tracer(span, gate, cur: list, stale: set):
     """Sprint 7.2a: the trace function for one route's requests, on every thread (Starlette's TestClient runs the app on
     a portal thread, and sync endpoints on a worker thread). cur[0] is the current request's bucket {"own", "gate"}:
@@ -1620,7 +1648,7 @@ def run_route(spec, root_real: str = "") -> dict:
     previous = getattr(threading, "gettrace", lambda: None)()
     try:
         if trace is not None:
-            threading.settrace(trace)  # threads started from here on; never settrace_all_threads
+            threading.settrace(_thread_trace(trace))  # threads started from here on; never settrace_all_threads
         for i, item in enumerate(spec["inputs"]):
             cur[0] = {"own": set(), "gate": set()}
             seen["status"] = seen["routed"] = None

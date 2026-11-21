@@ -88,6 +88,10 @@ did not run), no 405 rewrite; Flask matches with its own request adapter. 467 te
 Tuning set re-run after the fixes (out `out-run72a-r1`): 8 of 9 / 9 of 9, 0 changes against `out-run74` in any verdict or function status or reason. Re-run because `compare_one` (shared with functions) changed.
 Tuning-set run after 7.2a (`--fix-tests both`, tuning manifest only, out `out-run72a` in /private/tmp/claude-501/lg-validation): 8 of 9 detected without the fix's tests, 9 of 9 with; 0 changes in any verdict or any function's status or reason against `out-run74` (52 functions, untested share 71.2% in both modes). No tuning case has a route (no `app:`), so this shows only that functions are unchanged; the route rules are covered by the fixtures. Held-out sets not run.
 Note for 7.3: routes that were "verified" on all-401 or all-422 responses now read untested; that is intended.
+CI fix after 1c78663: threads started under `threading.settrace` must end with no trace function set, or Python 3.12+
+keeps tracing on for the whole process (all later code about 2x slower; a regex draw then hit its 2 s cap). Use
+`lg_worker._thread_trace(trace)` for any `threading.settrace`. Follow-up: `runner/legacyguard_harvest.py` uses `threading.setprofile`, which leaks the same way on 3.12+ (1.56x measured); give it a matching wrapper that calls `sys.setprofile(None)` when `run()` returns. Also `noise._token_pair`: an all-digit random hex
+token now reads as a random token. 468 tests on Python 3.12 and 3.10.
 
 **Next: 7.2b** (part c of the plan): deleted and renamed handlers. `baseline_routes` table filled at SessionStart and by
 `ci.run` (`introspect(root=)`), lookup order baseline_routes -> routes -> static decorator parse of the old function

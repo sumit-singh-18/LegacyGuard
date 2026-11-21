@@ -105,6 +105,15 @@ def _random_token(word: str) -> bool:
     return any(c.isdigit() for c in word) and any(c.isalpha() for c in word)
 
 
+def _token_pair(wa: str, wb: str) -> bool:
+    """Two words that look generated. Both mix letters and digits, or both are hex strings of which at least one does:
+    a random hex string is all digits (or all letters a-f) about once in 1,800 draws of 16 characters, and must not
+    then read as "unclassified"."""
+    if _random_token(wa) and _random_token(wb):
+        return True
+    return bool(_HEX.fullmatch(wa) and _HEX.fullmatch(wb)) and (_random_token(wa) or _random_token(wb))
+
+
 def _word_at(text: str, start: int, end: int) -> str:
     lo, hi = start, end
     while lo > 0 and not text[lo - 1].isspace() and text[lo - 1] not in "'\"<>()[]{},;=":
@@ -137,7 +146,7 @@ def _segment(a: str, b: str, wa: str, wb: str, before: str, around: tuple[str, s
         except ValueError:
             return OTHER
         return _number(x, y, ea, eb)
-    if len(wa) == len(wb) and _random_token(wa) and _random_token(wb):
+    if len(wa) == len(wb) and _token_pair(wa, wb):
         return RANDOM_TOKENS
     return OTHER
 
