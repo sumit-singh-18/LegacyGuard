@@ -1,4 +1,4 @@
-# Handoff (2026-11-18)
+# Handoff (2026-11-21)
 
 Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read docs/HANDOFF.md and continue."
 
@@ -9,7 +9,7 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
   - Send corrections to the **same** agent with SendMessage, and the revised report back to the **same** reviewer.
   - **Run test suites one at a time, never in parallel** (concurrent runs share temp folders and gave a spurious failure once). Tell every agent this.
 - **Plan updates:** revise the plan when a better approach is backed by real sources, and record decisions in `docs/ROADMAP.md`.
-- **Overfitting guard:** never tune on the held-out bugs in `docs/validation/holdout-set.md` (black, tornado, httpie, cookiecutter, luigi). No holdout project name in code, comments, tests or commit text. Fixtures use generic shapes.
+- **Overfitting guard:** never tune on the held-out bugs in `docs/validation/holdout-set.md` (black, tornado, httpie, cookiecutter, luigi) or `docs/validation/holdout-set-2.md` (ansible, fastapi, scrapy). No holdout project name in code, comments, tests or commit text. Fixtures use generic shapes.
 - **Honesty:** quote the held-out number, not the pooled one. "Unchecked" is reported, never hidden.
 
 ## Where to read
@@ -20,8 +20,8 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` and includes Task 6.8e. Pushing works again; check CI with `gh run list --limit 3`.
-- 386 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 160 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
+- `main` is pushed to `origin/main` at a467802: Sprint 6.8 done, the frozen-pid fix (193f183), 7.4 Part A (3385224), 7.2a (1c78663) and the 3.12+ trace-leak CI fix (a467802). Check CI with `gh run list --limit 3`; a467802 is the first commit expected green after 1c78663 failed on Linux 3.12/3.13.
+- 468 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 185 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
 - The run 3 write-up and the README headline (held-out number, "1 of 10 either way") are committed and were reviewer-checked (PASS, round 2).
 - Run 4 (6.8f) is done and committed (8a7b947): `holdout2.yaml` and patches, the `holdout2` set in `tools/validate.py`, the run 4 raw results and write-up, and the README headline now on held-out set 2 ("8 of 9 not checked; 1 of 9 without the fix's tests, 2 of 9 with").
 
