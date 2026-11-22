@@ -339,6 +339,10 @@ body, rename targets on the new function's entry. Review round 1 added a rule: a
 edited code still routes the path (a handler that 404s for unknown ids matches the router's 404). 7.2 is complete;
 next per 3d: 7.4 Part B, then 7.1.
 
+**7.4 Part B done (2026-11-21, reviewer PASS round 3):** the session baseline's working folder is cloned once and
+reused by the post-edit hook and Stop audit (stale key, fingerprint, flock, retired folders dropped at SessionStart
+before the baseline rebuild and again after the ledger reset). `ci.run` stays per run. Next: 7.1.
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; `/legacyguard:impact` and the MCP `impact` tool on the
 resolved call graph; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff

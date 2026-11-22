@@ -115,6 +115,14 @@ def start_session(cfg, event):
         return None
     notice = None
     fresh = ledger.fresh(session_id)
+    from runner import scratch
+    # Sprint 7.4 Part B: the last session's baseline folder and every retired one are deleted before the rebuild, and
+    # again once the ledger is reset: an old-session hook can build a folder while the baseline is half rebuilt (after
+    # `git worktree add`, before the dirty files are copied) under a key the new session would accept, so the second
+    # drop deletes it. A folder built after the second drop sees the new ledger and the finished baseline. Neither call
+    # holds the cache lock across the rebuild (that would take it before the ledger lock, the reverse of the Stop
+    # audit's order).
+    scratch.drop_session_cache(cfg)
     try:
         info = baseline.create(cfg)
         fresh.update(baseline_commit=info["commit"], dirty_files=info["dirty_files"], baseline_ok=True)
@@ -123,6 +131,7 @@ def start_session(cfg, event):
     with ledger.locked(cfg.state_dir) as data:
         data.clear()
         data.update(fresh)
+    scratch.drop_session_cache(cfg)
     if fresh["baseline_ok"]:
         refresh(cfg)
         snapshot_baseline_routes(cfg)

@@ -550,7 +550,10 @@ def test_post_edit_prepares_one_folder_per_tree_for_diff_and_affected_tests(tmp_
     assert len(set(used)) == 2 and len(used) > 2  # the diff's workers and both pytest runs shared the two folders
     iso = ledger.load(cfg.state_dir)["isolation"]
     assert iso["os_sandbox"] == "switched off in config" and "work: " in iso["cwd"] and "baseline: " in iso["cwd"]
-    assert scratch._REG == {} and all(not os.path.exists(p) for p in used)
+    # Part B: the working tree's folder is gone; the baseline's is the session's cached one and stays for later checks.
+    kept = scratch._read_manifest(cfg)["path"]
+    assert "built for this session" in iso["cwd"]
+    assert scratch._REG == {} and [p for p in set(used) if os.path.exists(p)] == [kept]
 
 
 def test_folder_name_pid_is_base36_and_sandboxed_fails_open(tmp_path, make_cfg, monkeypatch):

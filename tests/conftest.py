@@ -24,6 +24,21 @@ WORKER = PLUGIN / "runner" / "lg_worker.py"
 TARGET_PY = os.environ.get("LG_TEST_TARGET_PY") or sys.executable
 
 
+@pytest.fixture(autouse=True)
+def _drop_session_cwd_caches(request):
+    """Sprint 7.4 Part B: a session's baseline folder (lg-cwd-base-* in the temp folder) outlives the check that built
+    it until the next SessionStart. After each test, drop every cache whose manifest lives under the test's tmp_path,
+    so test runs leave nothing in the temp folder."""
+    tmp = request.getfixturevalue("tmp_path") if "tmp_path" in request.fixturenames else None
+    yield
+    if tmp is None:
+        return
+    from runner import scratch
+    for manifest in tmp.glob("**/.legacyguard/cwd_cache.json"):
+        state = manifest.parent
+        scratch.drop_session_cache(type("Cfg", (), {"state_dir": state, "root": str(state.parent)})())
+
+
 def write_tree(root: Path, files: dict[str, str]) -> Path:
     for rel, text in files.items():
         path = root / rel

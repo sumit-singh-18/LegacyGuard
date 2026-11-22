@@ -150,7 +150,8 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
             http = {}
     contract_files = [f for f in _git(root, "diff", "--name-only", base).splitlines() if f and f not in changed]
     from runner import scratch
-    # Task 7.4: one throwaway working folder per tree for every check of this run.
+    # Task 7.4: one throwaway working folder per tree for every check of this run. No session cache (Part B): the
+    # base worktree is rebuilt per run, and this one block already clones it once for the whole run.
     with scratch.for_trees(cfg, str(base_dir), root):
         for rel in changed + contract_files:
             before = baseline.read_baseline(cfg, rel)

@@ -420,7 +420,10 @@ Run suites one at a time (`.venv-dev/bin/python -m pytest -q`, then the 3.10 ven
 
 ## 9. Split out (not in 7.4)
 
-0. **Part B: baseline clone once per session** (first 7.4 follow-up; split out by the reviewer in round 2). Part A
+0. **Part B: baseline clone once per session** (first 7.4 follow-up; split out by the reviewer in round 2).
+   **Status (2026-11-21): built** as below, with one deviation: `_sweep` skips `lg-cwd-base-*` explicitly, because
+   "base" parses as a base-36 pid and the sweep would otherwise delete the cached folder. `ci.run` and
+   `tools/validate.py` keep Part A (their base worktree is rebuilt per run). See CLAUDE.md "Sprint 7.4 Part B". Part A
    clones both trees per check (about 0.55 s per check at 2k files on this Mac, about 5 s at the 20k cap). Tests to
    write with it:
    - staleness keys (each key in `stale_key` below, and the folder gone, re-clones);

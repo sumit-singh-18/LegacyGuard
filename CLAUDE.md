@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 490 tests after Sprint 7.2b). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 519 tests after Sprint 7.4 Part B). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -288,8 +288,47 @@ Plan: docs/research/2026-11-sprint7-4-plan.md (with the reviewer's round-2 corre
   them; thefuck-1 quiet without, detected with; every function's status and reason identical to run 4 plus the
   thefuck-1 fix. Every case used `clone` (clonefile, 18 to 927 files) under sandbox-exec, one folder per tree per
   case and mode. Held-out sets not run.
-- Follow-ups: Part B (baseline folder once per session), 7.4b bwrap overlay, phase 2 imports from the folder, the
+- Follow-ups: Part B (done, see below), 7.4b bwrap overlay, phase 2 imports from the folder, the
   empty-mode relative-read rule, masking cwd paths in `lg_codec.canon` (see HANDOFF).
+
+## Sprint 7.4 Part B (on main, 2026-11-21), baseline working folder once per session
+
+Spec: docs/research/2026-11-sprint7-4-plan.md section 9 item 0 ("Part B detail").
+- `scratch.session_baseline`: the post-edit hook and the Stop audit (`for_trees(..., session_cache=True)`) reuse one
+  clone or copy of the session baseline across checks; only the working tree is cloned per check. Only `clone`/`copy`
+  are cached; `empty`/`off` stay per check. Applies only when session.json has `baseline_ok` and the tree is
+  `state_dir/baseline`; otherwise (and `ci.run`, so `tools/validate.py`, whose base worktree is rebuilt per run and
+  already cloned once per run) Part A.
+- Folder `lg-cwd-base-*` in the temp folder (`_sweep` skips that prefix explicitly: "base" would parse as a base-36
+  pid). Manifest `.legacyguard/cwd_cache.json` {path, strategy, label, files, nbytes, stale_key, fingerprint, retired}.
+  Stale key: baseline_commit, `warm._generation`, realpath and st_dev of the baseline, st_dev of the temp folder,
+  cwd_mode, cwd sub-folder, LIST_VERSION; also rebuilt when the folder is gone or its fingerprint (entry count, file
+  bytes, newest st_mtime_ns over files and folders; one os.walk + lstat) changed. The folder stays in
+  `SCRATCH["protect"]`; a pytest relative write in it (affected tests) changes the fingerprint, so the next check re-clones.
+- Concurrency: reuse is checked without a lock (manifest replaced atomically), then again under an exclusive flock on
+  `.legacyguard/cwd_cache.lock`, where builds happen. A new folder goes into `retired` before it is filled (a hook killed
+  mid-build leaves nothing untracked); a replaced folder goes into `retired` and is never deleted by a hook.
+  `drop_session_cache` (SessionStart, before the baseline rebuild and again after the ledger reset; not on
+  resume/compact of the same session) deletes the cached folder and every retired one, then the manifest. The second
+  drop deletes a folder an old-session hook built while the baseline was half rebuilt (after `git worktree add`, before
+  the dirty files were copied: its key, same commit and final generation, would match the new session's). A folder
+  built after it sees the new ledger and the finished baseline; the key is read again under the lock before a build.
+  The cache lock is not held across the rebuild: SessionStart would then take it before the ledger lock, the reverse
+  of the Stop audit's order.
+- Only a path that is an `lg-cwd-base-*` folder directly in the temp folder (parent's realpath equals the temp
+  folder's), not a symlink and outside the project, is reused or deleted, whatever the manifest says.
+- Fails open: any cache error gives a per-check folder (Part A). Labels: "...; built for this session, kept for later
+  checks" or "...; reused from an earlier check this session (checked in 0.01 s)" in the Isolation line.
+- Cost per check at 2k files (this Mac): baseline 0.25 s clone / 0.41 s copy (Part A) -> 0.013 s reuse (the fingerprint);
+  fingerprint 0.12 s at 20k files.
+- Limits: two overlapping post-edit hooks can use the cached folder at once, so a relative write by one check's
+  baseline affected-tests pytest can be seen by the other's baseline pytest (diff workers cannot write there during
+  calls; baseline test results are cached per session in `old_test_results`; the fingerprint catches the write only at
+  the start of the next check); retired folders build up until the next SessionStart (one per rebuild); deleting `.legacyguard/` by hand
+  leaves the cached folder in the temp folder; a write that restores mtime with `os.utime` and keeps the size and count
+  would evade the fingerprint (utime is refused by the audit hook during calls); either SessionStart drop can delete a
+  folder an async check of the previous session is still using (that check's baseline is being rebuilt anyway).
+- Tests: `tests/test_baseline_cache.py`; conftest drops caches under each test's tmp_path after the test.
 
 ## Sprint 7.2a (on main, 2026-11-20), route-diff correctness
 

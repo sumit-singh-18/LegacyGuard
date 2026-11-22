@@ -182,3 +182,28 @@ until the reviewer passes it. Newest entries at the bottom.
   `ci._baseline_routes`. Round 2: PASS. Optional note left: a new catch-all route answering 404 could still let a
   deleted 404-answering handler pass. 490 tests on Python 3.12 and 3.10. Tuning set not re-run (route-only change; no
   tuning case has a route).
+- Task 7.4 Part B (2026-11-21): the session baseline's working folder is built once per session and reused across
+  checks (`scratch.session_baseline`, `for_trees(..., session_cache=True)` from the post-edit hook and the Stop audit);
+  only the working tree is cloned per check. Manifest `.legacyguard/cwd_cache.json`, folder `lg-cwd-base-*`, flock
+  `.legacyguard/cwd_cache.lock`, replaced folders retired and deleted by `drop_session_cache` at SessionStart. `ci.run`
+  and `tools/validate.py` keep Part A. Deviation from the plan: `_sweep` skips `lg-cwd-base-*` explicitly ("base"
+  parses as a base-36 pid). Measured (2,000-file fixture, 1.3 MB, this Mac, best of 3, two runs): baseline folder per
+  check, Part A: clone 0.254 s, copy 0.41 s; Part B reuse: 0.013 s (clone), 0.012 to 0.014 s (copy), almost all of it
+  the fingerprint (one os.walk + lstat: 0.012 to 0.013 s at 2k files; 0.117 s at 20k files). So a check's folder cost
+  goes from about 0.51 s to 0.27 s with clone and from about 0.83 s to 0.43 s with copy, after the first check of a
+  session. 517 tests on Python 3.12 and 3.10 (27 new in tests/test_baseline_cache.py).
+- Task 7.4 Part B review round 1: REVISE. Fixed: (1) the session cache reuses or deletes only an `lg-cwd-base-*`
+  folder whose parent is the temp folder (realpath), that is not a symlink and is outside the project
+  (`scratch._is_cache_folder`, used by `_reuse` and `drop_session_cache`); a manifest entry with the right prefix
+  elsewhere survives (test). (2) The limit that two overlapping post-edit hooks share the cached folder (a baseline
+  affected-tests relative write by one can be seen by the other) is in CLAUDE.md and the scratch.py docstring. Label
+  now "built for this session, kept for later checks". Optional SessionStart window: the drop now runs just before
+  `baseline.create`, not after; holding the cache lock across the rebuild was not done because SessionStart would take
+  it before the ledger lock, the reverse of the Stop audit's order (deadlock risk). 518 tests on Python 3.12 and 3.10.
+- Task 7.4 Part B review round 2: REVISE. Fixed: dropping the cache only before `baseline.create` let an old-session
+  hook build a folder after `git worktree add` but before the dirty files were copied, under a key the new session
+  accepts (same commit, final generation, old ledger's baseline_ok), so the session reused a baseline folder without
+  its dirty files. SessionStart now drops before the rebuild and again after the ledger reset; `session_baseline` reads
+  the key again under the lock before building. Test (fails without the second drop: the folder is reused): a folder
+  built from inside the dirty-file copy is deleted and the first check rebuilds with the dirty file. 519 tests on
+  Python 3.12 and 3.10.

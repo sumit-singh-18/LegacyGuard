@@ -23,8 +23,8 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` at a467802: Sprint 6.8 done, the frozen-pid fix (193f183), 7.4 Part A (3385224), 7.2a (1c78663) the 3.12+ trace-leak CI fix (a467802) and 7.2b (see git log). Check CI with `gh run list --limit 3`; a467802 is the first commit expected green after 1c78663 failed on Linux 3.12/3.13.
-- 490 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 185 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
+- `main` is pushed to `origin/main` at a467802: Sprint 6.8 done, the frozen-pid fix (193f183), 7.4 Part A (3385224), 7.2a (1c78663) the 3.12+ trace-leak CI fix (a467802) 7.2b and 7.4 Part B (see git log). Check CI with `gh run list --limit 3`; a467802 is the first commit expected green after 1c78663 failed on Linux 3.12/3.13.
+- 519 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 185 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
 - The run 3 write-up and the README headline (held-out number, "1 of 10 either way") are committed and were reviewer-checked (PASS, round 2).
 - Run 4 (6.8f) is done and committed (8a7b947): `holdout2.yaml` and patches, the `holdout2` set in `tools/validate.py`, the run 4 raw results and write-up, and the README headline now on held-out set 2 ("8 of 9 not checked; 1 of 9 without the fix's tests, 2 of 9 with").
 
@@ -64,10 +64,11 @@ containers that share /tmp with separate pid namespaces. The 3.10 venv had lost
 its `pyvenv.cfg` (temp cleanup) and was recreated; the broken one is at `/private/tmp/claude-501/venv310.broken-20261120`.
 
 7.4 follow-ups, in order:
-1. **Part B: baseline folder once per session** (first follow-up). Reuse the baseline's clone across checks; only the
-   working tree is cloned per check. Tests to write: staleness keys (baseline commit, `warm._generation`, realpath,
-   devices, mode, subdir, `LIST_VERSION`, folder gone); fingerprint re-clone (entry count, size, max mtime); `flock`
-   with overlapping hooks (replace into a new folder, retire the old path); retired-folder cleanup at SessionStart.
+1. **Part B: done (2026-11-21, reviewer PASS round 3, committed on main).** See CLAUDE.md "Sprint 7.4 Part B".
+   The post-edit hook and Stop audit reuse one clone of the session baseline (`scratch.session_baseline`); `ci.run`
+   stays per run. Review fixes: deletion only of `lg-cwd-base-*` folders directly in the temp folder; SessionStart
+   drops the cache before the baseline rebuild and again after the ledger reset. Check at 2k files: about 0.51 s ->
+   0.27 s (clone). 519 tests on 3.12 and 3.10. Tuning set not re-run.
 2. **7.4b bwrap overlay** (`--overlay-src` + `--tmp-overlay`): needs bwrap 0.11+ (CI's Ubuntu 24.04 has 0.9.0) and
    Linux 5.11+; changes the readonly rule (writes into the tree succeed into tmpfs).
 3. **Phase 2: imports from the folder** (moves `__file__`-relative absolute writes into the folder).
@@ -104,8 +105,12 @@ re-run (no tuning case has a route). Optional follow-ups: CI behavioural check o
 (`route_targets` reading `baseline_routes`); a new catch-all route answering 404 could let a deleted 404-answering handler
 pass; `ci.run` lacks the MAX_FUNCTIONS skipped note (pre-existing).
 
-**Next: 7.4 Part B** (baseline folder once per session; see the 7.4 follow-ups above), then 7.1 (impact on the resolved
-call graph), per ROADMAP 3d.
+**Next: 7.1** (`/legacyguard:impact` skill and MCP `impact` tool on the resolved call graph), per ROADMAP 3d. The
+other 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd masking) stay queued.
+
+**Flaky test to harden:** `tests/test_warm.py` process-id tests fail when the OS pid counter has wrapped below 1000
+(pids under `PID_MASK_MIN` are deliberately not masked, the 6.8d limit). Seen once on 2026-11-21 (pytest ran as pid
+465); passed once pids climbed again. The tests should skip or pin a pid when the current pid is below 1000.
 
 7.2 follow-ups (not built, user's decision):
 1. "Only compared inputs count" for functions and callers (routes already count only compared requests).

@@ -27,6 +27,22 @@ OLD-A can be seen by OLD-B (weakens the old-vs-old noise filter for that case, n
 lg_codec.canon does not mask the working-folder path; the warm server itself keeps the tree as its cwd (a module that
 stores os.getcwd() at import reads the tree on a warm baseline and the clone on a cold one, which gives untested
 through old-vs-old disagreement or a difference, never a hidden one).
+
+Part B (session cache of the baseline's folder): the baseline does not change during a session, so the post-edit
+hook and the Stop audit reuse one clone or copy of it across checks (`session_baseline`); only the working tree is
+cloned per check. The folder is `lg-cwd-base-*` in the temp folder (never swept by pid), described by
+`<state>/cwd_cache.json` {path, strategy, label, files, nbytes, stale_key, fingerprint, retired}. It is rebuilt when
+the stale key changes (baseline commit, baseline generation, real path and device of the baseline, device of the temp
+folder, cwd_mode, cwd sub-folder, LIST_VERSION) or the folder is gone, and when its fingerprint (entry count, total
+size, newest mtime) no longer matches, which catches a write that got past the in-process layers. Builds and
+replacements happen under an exclusive flock on `<state>/cwd_cache.lock`; a replaced folder goes into `retired` and is
+deleted only by `drop_session_cache` at SessionStart, never while another hook may still use it. ci.run (so
+tools/validate.py) does not use it: its base worktree is rebuilt per run and one folder per tree already serves the
+whole run. Any cache error falls back to a per-check folder (Part A). Limit: two overlapping post-edit hooks can
+use the cached folder at the same time, so a relative write by one check's baseline affected-tests pytest can be seen
+by the other's baseline pytest (diff workers cannot write there during calls; the fingerprint catches the write only
+at the start of the next check). Only lg-cwd-base-* folders directly in the temp folder, not symlinks, are reused or
+deleted.
 """
 from __future__ import annotations
 
@@ -56,6 +72,8 @@ PRUNE_SUFFIXES = (".egg-info",)
 PRUNE_MARKERS = ("pyvenv.cfg", "conda-meta")
 LIST_VERSION = 4  # bump when the listing rule changes
 PREFIX = "lg-cwd-"
+CACHE_PREFIX = "lg-cwd-base-"  # the session's baseline folder (Part B): not pid-named, so _sweep leaves it
+CACHE_STRATEGIES = ("clone", "copy")
 MODES = ("auto", "clone", "copy", "empty", "off")
 FICLONE_GENERIC = 0x40049409  # _IOW(0x94, 9, int) on the generic ioctl encoding (x86_64, aarch64)
 CLONE_NOFOLLOW = 0x0001
@@ -72,6 +90,7 @@ class Cwd:
     owned: bool = False    # deleted on release
     tree: str = ""
     folder: str = ""       # the folder that release() deletes
+    reused: bool = False   # the session's cached baseline folder, built by an earlier check (Part B)
 
 
 class _TooBig(Exception):
@@ -306,8 +325,8 @@ def _sweep() -> None:
     except OSError:
         return
     for name in names:
-        if not name.startswith(PREFIX):
-            continue
+        if not name.startswith(PREFIX) or name.startswith(CACHE_PREFIX):
+            continue  # lg-cwd-base-* belongs to the session cache ("base" would also parse as a base-36 pid)
         pid_text = name[len(PREFIX):].split("-", 1)[0]
         try:
             pid = int(pid_text, 36)
@@ -393,8 +412,8 @@ def _empty(cfg, tree: str, sub: str | None, label: str, started: float) -> Cwd:
 
 
 def _build(cfg, tree: str, sub: str | None, entries, files: int, nbytes: int, use_clone: bool, why_not_clone: str,
-           sandboxed: bool, started: float) -> Cwd:
-    folder = _location(cfg, tree)
+           sandboxed: bool, started: float, folder: str | None = None) -> Cwd:
+    folder = folder or _location(cfg, tree)
     if folder is None:
         return _off(tree, sub, "off: the temp folder is inside the project", time.monotonic() - started)
     try:
@@ -419,9 +438,10 @@ def _build(cfg, tree: str, sub: str | None, entries, files: int, nbytes: int, us
                tree=tree, folder=folder)
 
 
-def prepare_cwd(cfg, tree: str, sandboxed: bool) -> Cwd:
+def prepare_cwd(cfg, tree: str, sandboxed: bool, folder: str | None = None) -> Cwd:
     """The working folder for processes running project code from this tree, by `behavioral_diff.cwd_mode`.
-    Fails open: any error gives the tree itself (as before 7.4) with the reason in the label."""
+    Fails open: any error gives the tree itself (as before 7.4) with the reason in the label. `folder`: an empty
+    folder to clone or copy into (the session cache's); the caller deletes it when the result is not in it."""
     started = time.monotonic()
     bd = cfg.behavioral_diff
     sub = bd.get("cwd") or None
@@ -441,16 +461,16 @@ def prepare_cwd(cfg, tree: str, sandboxed: bool) -> Cwd:
         copy_fits = files <= MAX_COPY_FILES and nbytes <= MAX_COPY_BYTES and not over
         if mode == "copy":
             if copy_fits:
-                cwd = _build(cfg, tree, sub, entries, files, nbytes, False, "", sandboxed, started)
+                cwd = _build(cfg, tree, sub, entries, files, nbytes, False, "", sandboxed, started, folder)
             else:
                 cwd = _fallback(cfg, tree, sandboxed, _too_many(files, nbytes, over, MAX_COPY_FILES) + " to copy", sub, started)
             return _noted(cwd, note)
         ok, reason = _cached_probe(cfg, tree, mode, sample)
         if ok and not over and (mode == "clone" or files <= MAX_CLONE_FILES):
-            return _noted(_build(cfg, tree, sub, entries, files, nbytes, True, "", sandboxed, started), note)
+            return _noted(_build(cfg, tree, sub, entries, files, nbytes, True, "", sandboxed, started, folder), note)
         why = reason if not ok else f"more than {MAX_CLONE_FILES:,} files"
         if copy_fits:
-            return _noted(_build(cfg, tree, sub, entries, files, nbytes, False, why, sandboxed, started), note)
+            return _noted(_build(cfg, tree, sub, entries, files, nbytes, False, why, sandboxed, started, folder), note)
         what = _too_many(files, nbytes, over, limit or MAX_CLONE_FILES)  # limit is None only in clone mode, never over
         return _noted(_fallback(cfg, tree, sandboxed, f"{what} to clone or copy" + (f" (no clone: {reason})" if not ok and reason else ""),
                                 sub, started), note)
@@ -479,8 +499,8 @@ def release(cwd: Cwd | None) -> None:
 # ---- one folder per tree per check ----
 
 class _Entry:
-    def __init__(self, cfg, tree: str, role: str):
-        self.cfg, self.tree, self.role = cfg, tree, role
+    def __init__(self, cfg, tree: str, role: str, cached: bool = False):
+        self.cfg, self.tree, self.role, self.cached = cfg, tree, role, cached
         self.lock = threading.Lock()
         self.cwd: Cwd | None = None
         self.depth = 0
@@ -488,7 +508,10 @@ class _Entry:
     def get(self) -> Cwd:
         with self.lock:  # OLD-A, OLD-B and NEW ask at the same moment: prepare once
             if self.cwd is None:
-                self.cwd = prepare_cwd(self.cfg, self.tree, sandboxed(self.cfg))
+                if self.cached:
+                    self.cwd = session_baseline(self.cfg, self.tree, sandboxed(self.cfg))
+                else:
+                    self.cwd = prepare_cwd(self.cfg, self.tree, sandboxed(self.cfg))
                 with _REG_LOCK:
                     _LAST[self.role] = self.cwd.label
             return self.cwd
@@ -511,10 +534,12 @@ def sandboxed(cfg) -> bool:
 
 
 @contextlib.contextmanager
-def for_trees(cfg, baseline_root: str, work_root: str):
+def for_trees(cfg, baseline_root: str, work_root: str, session_cache: bool = False):
     """One working folder per tree for everything inside the block. Folders are prepared on first use (a check that
     runs nothing clones nothing) and released when the outermost block for that tree ends. Re-entrant: an inner
-    block (diff.run inside the post_edit hook's block) reuses the outer one's folders."""
+    block (diff.run inside the post_edit hook's block) reuses the outer one's folders. session_cache (the post-edit
+    hook and the Stop audit): the baseline's folder comes from the session cache (session_baseline) and outlives
+    the block."""
     mine = []
     with _REG_LOCK:
         if not any(e.depth for e in _REG.values()):
@@ -523,7 +548,7 @@ def for_trees(cfg, baseline_root: str, work_root: str):
             key = _real(root)
             entry = _REG.get(key)
             if entry is None:
-                entry = _REG[key] = _Entry(cfg, root, role)
+                entry = _REG[key] = _Entry(cfg, root, role, cached=session_cache and role == "baseline")
             entry.depth += 1
             mine.append(key)
     try:
@@ -568,3 +593,172 @@ def describe() -> str:
             return "not used"
         order = [r for r in ("work", "baseline", "tree") if r in _LAST]
         return "; ".join(f"{r}: {_LAST[r]}" for r in order)
+
+
+# ---- Part B: the baseline's folder, once per session ----
+
+def fingerprint(folder: str) -> list[int] | None:
+    """[entries, total file bytes, newest st_mtime_ns over files and folders] from one os.walk and lstat, or None
+    when the folder is gone. A write that restores the mtime with os.utime would not show (the audit hook refuses
+    utime during calls)."""
+    try:
+        newest = os.lstat(folder).st_mtime_ns
+    except OSError:
+        return None
+    count = size = 0
+    for dirpath, dirnames, filenames in os.walk(folder):
+        for name in (*dirnames, *filenames):
+            try:
+                st = os.lstat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            count += 1
+            if stat.S_ISREG(st.st_mode):
+                size += st.st_size
+            newest = max(newest, st.st_mtime_ns)
+    return [count, size, newest]
+
+
+def _manifest_path(cfg) -> Path:
+    return Path(cfg.state_dir) / "cwd_cache.json"
+
+
+def _read_manifest(cfg) -> dict:
+    try:
+        got = json.loads(_manifest_path(cfg).read_text())
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _write_manifest(cfg, manifest: dict) -> None:
+    path = _manifest_path(cfg)
+    tmp = path.with_name(f".cwd_cache.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(manifest))
+    os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def _cache_lock(cfg):
+    """Exclusive flock on <state>/cwd_cache.lock: hooks that overlap build one folder, one at a time."""
+    import fcntl
+    Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
+    with open(Path(cfg.state_dir) / "cwd_cache.lock", "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _applies(cfg, tree: str) -> bool:
+    """The cache is for the session baseline only: a session whose baseline was built (session.json baseline_ok)
+    and a tree that is that baseline folder."""
+    from guardlib import baseline, ledger
+    return bool(ledger.load(Path(cfg.state_dir)).get("baseline_ok")) and _real(tree) == _real(str(baseline.baseline_dir(cfg)))
+
+
+def stale_key(cfg, tree: str) -> dict:
+    """What the cached folder was built from; any change rebuilds it."""
+    from guardlib import ledger
+    from runner import warm
+    bd = cfg.behavioral_diff
+    return {"baseline_commit": ledger.load(Path(cfg.state_dir)).get("baseline_commit"),
+            "generation": warm._generation(cfg), "tree": _real(tree), "dev_tree": _dev(_real(tree)),
+            "dev_tmp": _dev(_real(tempfile.gettempdir())), "cwd_mode": str(bd.get("cwd_mode") or "auto"),
+            "cwd": bd.get("cwd") or None, "list_version": LIST_VERSION}
+
+
+def _is_cache_folder(cfg, p) -> bool:
+    """A path the session cache may use or delete: an lg-cwd-base-* folder (not a symlink) directly in the temp
+    folder, outside the project. Anything else a manifest names is neither reused nor deleted."""
+    if not isinstance(p, str) or not p:
+        return False
+    p = p.rstrip(os.sep)
+    return (os.path.basename(p).startswith(CACHE_PREFIX) and not os.path.islink(p)
+            and _real(os.path.dirname(p)) == _real(tempfile.gettempdir()) and not _inside(p, str(cfg.root)))
+
+
+def _reuse(cfg, manifest: dict, key: dict, tree: str, started: float) -> Cwd | None:
+    folder = manifest.get("path")
+    if (manifest.get("stale_key") != key or manifest.get("strategy") not in CACHE_STRATEGIES
+            or not _is_cache_folder(cfg, folder)):
+        return None
+    if not os.path.isdir(folder) or fingerprint(folder) != manifest.get("fingerprint"):
+        return None
+    path, _ = _subdir(folder, key["cwd"], create=False)
+    seconds = time.monotonic() - started
+    label = f"{manifest.get('label', manifest['strategy'])}; reused from an earlier check this session (checked in {seconds:.2f} s)"
+    return Cwd(path=path, strategy=manifest["strategy"], label=label, seconds=seconds, files=int(manifest.get("files") or 0),
+               nbytes=int(manifest.get("nbytes") or 0), owned=False, tree=tree, folder=folder, reused=True)
+
+
+def _cache_location(cfg, tree: str) -> str | None:
+    folder = tempfile.mkdtemp(prefix=CACHE_PREFIX, dir=tempfile.gettempdir())
+    if _inside(folder, str(cfg.root)) or _inside(folder, tree):
+        shutil.rmtree(folder, ignore_errors=True)
+        return None
+    return folder
+
+
+def session_baseline(cfg, tree: str, sandboxed: bool) -> Cwd:
+    """The baseline's working folder, built once per session and reused while its stale key and fingerprint hold.
+    Only clone and copy are cached (empty and off cost nothing). Outside a session baseline, or on any error, a
+    per-check folder as in Part A."""
+    started = time.monotonic()
+    try:
+        if not _applies(cfg, tree):
+            return prepare_cwd(cfg, tree, sandboxed)
+        key = stale_key(cfg, tree)
+        got = _reuse(cfg, _read_manifest(cfg), key, tree, started)  # no lock: the manifest is replaced atomically
+        if got is not None:
+            return got
+        with _cache_lock(cfg):
+            manifest = _read_manifest(cfg)
+            got = _reuse(cfg, manifest, key, tree, started)  # another hook built it while this one waited
+            if got is not None:
+                return got
+            key = stale_key(cfg, tree)  # read again under the lock: the key describes what is cloned now
+            folder = _cache_location(cfg, tree)
+            if folder is None:
+                return prepare_cwd(cfg, tree, sandboxed)
+            retired = [p for p in manifest.get("retired") or [] if isinstance(p, str)]
+            # Tracked before it is filled: a hook killed mid-build leaves nothing that SessionStart would miss.
+            _write_manifest(cfg, {**manifest, "retired": [*retired, folder]})
+            cwd = prepare_cwd(cfg, tree, sandboxed, folder)
+            if cwd.folder != folder or cwd.strategy not in CACHE_STRATEGIES:
+                shutil.rmtree(folder, ignore_errors=True)
+                _write_manifest(cfg, {**manifest, "retired": retired})
+                return cwd  # empty, off or a failure: per check, as in Part A
+            old = manifest.get("path")
+            if isinstance(old, str) and old and old != folder and old not in retired:
+                retired.append(old)  # another hook may still be using it: deleted at the next SessionStart
+            _write_manifest(cfg, {"path": folder, "strategy": cwd.strategy, "label": cwd.label, "files": cwd.files,
+                                  "nbytes": cwd.nbytes, "stale_key": key, "fingerprint": fingerprint(folder),
+                                  "retired": retired})
+            cwd.owned = False
+            cwd.label += "; built for this session, kept for later checks"
+            return cwd
+    except Exception:  # noqa: BLE001 - hooks fail open: a per-check folder, as in Part A
+        return prepare_cwd(cfg, tree, sandboxed)
+
+
+def _drop(cfg) -> None:
+    """Delete the cached folder and every retired one, then the manifest; the caller holds the cache lock. Only
+    folders that pass _is_cache_folder are deleted, whatever the manifest says."""
+    manifest = _read_manifest(cfg)
+    for p in [manifest.get("path"), *(manifest.get("retired") or [])]:
+        if _is_cache_folder(cfg, p):
+            shutil.rmtree(p, ignore_errors=True)
+    with contextlib.suppress(FileNotFoundError):
+        _manifest_path(cfg).unlink()
+
+
+def drop_session_cache(cfg) -> None:
+    """Delete the cached baseline folder and every retired one, then the manifest. Fails open."""
+    try:
+        with _cache_lock(cfg):
+            _drop(cfg)
+    except Exception:  # noqa: BLE001
+        pass
+

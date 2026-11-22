@@ -62,8 +62,9 @@ def _contract_findings(cfg, data, changed):
 def _behavior_findings(cfg, data, changed):
     root = cfg.root
     engine.prune_skipped(data, changed)  # callers skipped for an edit that is no longer in the tree (roadmap 6.5)
-    # Task 7.4: one throwaway working folder per tree for the whole audit, prepared only if some check runs.
-    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root):
+    # Task 7.4: one throwaway working folder per tree for the whole audit, prepared only if some check runs; the
+    # baseline's folder is the session's cached one (Part B).
+    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root, session_cache=True):
         for rel in changed:
             if not engine.is_guarded_source(cfg, rel):
                 continue

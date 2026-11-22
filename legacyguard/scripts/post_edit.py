@@ -33,8 +33,9 @@ def handle(event: dict):
     if not targets:
         return None
     from runner import scratch
-    # Task 7.4: one throwaway working folder per tree for the diff and the affected tests together.
-    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root):
+    # Task 7.4: one throwaway working folder per tree for the diff and the affected tests together; the baseline's
+    # folder is the session's cached one (Part B), so only the working tree is cloned per check.
+    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root, session_cache=True):
         results = differ.run(cfg, str(baseline.baseline_dir(cfg)), root, targets)
         if virtual.read_current(file_path) != text:
             return None  # a newer edit landed while this ran; its own check covers the current code
