@@ -1,7 +1,7 @@
 # Sprint 7.2 plan: route-diff correctness (researcher, 2026-11-20, main at 3385224)
 
 **Status:** reviewed; the user's decisions and the reviewer's corrections are folded in below (section 0). 7.2a (parts d, a,
-b, e) is built; 7.2b (part c) is next.
+b, e) is built; 7.2b (part c) is built and reviewed (PASS, round 2; see CLAUDE.md "Sprint 7.2b").
 
 ## 0. Decisions and corrections (these win over anything below)
 

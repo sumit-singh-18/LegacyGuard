@@ -125,7 +125,24 @@ def start_session(cfg, event):
         data.update(fresh)
     if fresh["baseline_ok"]:
         refresh(cfg)
+        snapshot_baseline_routes(cfg)
     return notice
+
+
+def snapshot_baseline_routes(cfg) -> None:
+    """Sprint 7.2b: the working tree equals the baseline right after the refresh, so its routes are the baseline's.
+    Later refreshes (/legacyguard index) may rebuild routes on the edited tree; baseline_routes keeps the old ones for
+    deleted and renamed handlers."""
+    from indexer import db, routes
+    try:
+        conn = db.connect(cfg.root)
+        try:
+            routes.snapshot_baseline(conn)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - hooks fail open; without it, the lookup falls back to routes, then decorators
+        pass
 
 
 if __name__ == "__main__":

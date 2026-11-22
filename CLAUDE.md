@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 468 tests after Sprint 7.2a). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 490 tests after Sprint 7.2b). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -339,9 +339,52 @@ Plan: docs/research/2026-11-sprint7-2-plan.md (section 0 has the user's decision
   C, D1-D4, rule order, handler's own 404 in Flask and FastAPI, a dropped 404 dependency or decorator and a dropped 405 dependency stay
   different, a middleware 404 before the router is not read as routing,
   the caller hedge with an entry gate, E1-E6, bare factory, leftover threads).
-- Next: **7.2b** (deleted and renamed handlers: `baseline_routes` in session and CI, lookup order, delete and rename
-  targets). Follow-ups: "only compared inputs count" for functions and callers; harvesting literal test-client
-  `headers=` (header names only in printed text).
+- Follow-ups: "only compared inputs count" for functions and callers; harvesting literal test-client `headers=`
+  (header names only in printed text).
+
+## Sprint 7.2b (on main, 2026-11-21), deleted and renamed route handlers
+
+Plan: docs/research/2026-11-sprint7-2-plan.md section (c). Reviewer PASS in round 2.
+- **`baseline_routes`** (`indexer/db.py`, same columns as `routes`) always describes the baseline: SessionStart copies
+  `routes` into it right after `refresh` (`routes.snapshot_baseline`, `session_start.snapshot_baseline_routes`; a later
+  `/legacyguard index` may rebuild `routes` on the edited tree, the copy stays); `ci.run` introspects the baseline tree
+  (`routes.rebuild_baseline`, `introspect(cfg, root=base_dir)`: ROOTS, cwd, protect and the sandbox's read-only tree
+  follow `root`); the old rows are deleted and committed first (also under `--no-index`), so a failure never leaves
+  another base's rows. In CI an empty baseline_routes falls through to `routes` (the head index); a truly gone handler
+  has no head row there and reaches the decorators.
+- **Lookup for an old handler** (`routes.old_handler_routes`): baseline_routes -> routes -> the old function's own
+  decorators via `route_decorators.parse` (source "decorator"; the result's reason then says the path "may lack a router
+  or blueprint prefix"). ANY rows are left out.
+- **`engine.removed_route_targets(cfg, rel, before, after, taken)`**, called by `targets_for` (placed with the routes,
+  within MAX_FUNCTIONS) and `ci.run`: one route target per old `METHOD path`, requests from the old function's params,
+  `file` = the handler's file, `code_hash` = sha("METHOD path|deleted|" + old text) or "|renamed|" + old and new text.
+  - Renamed (`renamed`/`visibility_changed`, or a delete plus an add in the same file whose new function's decorators
+    serve one of the old METHOD/path pairs): gated on the new function's entry gate (`entry_gate` True, no hedge);
+    `handler` = new name, `Target.old_handler` = old name, traced in the old tree (`_tree_specs`). A path changed in the
+    same edit gives new 404: different.
+  - Deleted: gated on the old function's whole body as one range (`callee_old_gate`, old tree's requests); `handler` is
+    empty (entry unknown in the new tree). Old 2xx/4xx vs new 404/405: different, plus the static "route removed".
+    With no difference (`diff._deleted_verdict`), it passes only when the old handler ran **and** the edited code still
+    serves the path (some compared request has `routed` True in the new tree, or entered a handler there): a handler
+    moved to another file. Otherwise untested, "the edited code no longer serves GET /x: ... every request was answered
+    404 in both versions (the old handler ... ran ... and answered them itself)" (review round 1: a handler that 404s
+    for unknown ids matches the router's own 404). `Result.route_deleted`; `reached_text` says "the old handler ran
+    (k of R requests ran it)" instead of "N of M changed statements".
+  - Routes only in the edited code get no target. `Target.route_note` carries the prefix caveat into `Result.reason`.
+- **A4 reconciled:** a decorator-only path change on a function that keeps its name is `decorators_changed`, not a rename,
+  so `removed_route_targets` gives nothing and `route_targets` works from the routes table as in 7.2a: session index ->
+  `GET /a` different; head index (ci.run) -> `GET /b` "new in this edit", with the removal of `GET /a` reported by the
+  static "route removed" check only.
+- Tests: `tests/test_route_rename.py` (B1-B5 incl. both B5 forms, FastAPI B1-B3, delete plus add, moved handler verified
+  and changed, A4 not a rename, lookup order, SessionStart and ci.run table filling, `introspect(root=)`, a deleted
+  handler that answered 404 itself is untested in FastAPI and Flask).
+- Limits: a handler file deleted whole gets no route target; open route findings are not re-run after a revert; a
+  deleted route's own (deleted) tests are not harvested; the prefix caveat is in `Result.reason`, which pass notes do not
+  print; a new catch-all route that itself answers 404 sets `routed` True, so a deleted handler whose old body also
+  answered 404 could pass (narrow, not handled); `ci.run` adds route targets without the MAX_FUNCTIONS skipped note
+  (pre-existing).
+- Follow-up (optional): make `route_targets` read `baseline_routes` for edited handlers, so CI also checks a
+  decorator-only path change behaviourally (today only the static check reports the removed path there).
 
 ## Known gaps still open
 

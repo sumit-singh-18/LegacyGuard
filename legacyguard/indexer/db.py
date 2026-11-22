@@ -17,6 +17,7 @@ CREATE INDEX IF NOT EXISTS calls_file ON calls(file);
 CREATE TABLE IF NOT EXISTS test_cover(test_id TEXT, file TEXT, qualname TEXT);
 CREATE INDEX IF NOT EXISTS cover_symbol ON test_cover(file, qualname);
 CREATE TABLE IF NOT EXISTS routes(method TEXT, path TEXT, handler_qualname TEXT, handler_file TEXT, source TEXT);
+CREATE TABLE IF NOT EXISTS baseline_routes(method TEXT, path TEXT, handler_qualname TEXT, handler_file TEXT, source TEXT);
 CREATE TABLE IF NOT EXISTS contracts(kind TEXT, path TEXT, item TEXT, detail TEXT);
 CREATE TABLE IF NOT EXISTS cochange(file_a TEXT, file_b TEXT, support INT, confidence REAL);
 CREATE INDEX IF NOT EXISTS cochange_a ON cochange(file_a);

@@ -95,6 +95,35 @@ def apply_overrides(cfg, overrides: dict | None) -> None:
             cfg.raw[key] = value
 
 
+def _baseline_routes(cfg, base_dir: str, index: bool) -> None:
+    """Sprint 7.2b: refresh() builds the routes table on the head tree here, so the baseline's routes (for deleted and
+    renamed handlers) come from asking the framework in the baseline tree. Without indexing, rows left by an earlier
+    run describe another base, so they are cleared and the lookup falls back to routes, then to decorators."""
+    from indexer import db, routes
+    if not db.exists(cfg.root):
+        return
+    try:
+        conn = db.connect(cfg.root)
+    except Exception:  # noqa: BLE001 - without baseline routes, deleted and renamed handlers use the fallbacks
+        return
+    try:
+        # The old rows go first, committed on their own, so a failure below never leaves another base's rows behind.
+        conn.execute("DELETE FROM baseline_routes")
+        conn.commit()
+        if index:
+            routes.rebuild_baseline(conn, cfg, base_dir)
+            conn.commit()
+    except Exception:  # noqa: BLE001 - without baseline routes, deleted and renamed handlers use the fallbacks
+        try:
+            conn.rollback()
+            conn.execute("DELETE FROM baseline_routes")
+            conn.commit()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        conn.close()
+
+
 def run(root: str, base: str | None = None, python: str | None = None, index: bool = True,
         overrides: dict | None = None) -> tuple:
     """(cfg, Outcome) for the changes between base and the working tree. overrides go on top of the loaded config."""
@@ -109,6 +138,7 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
             indexer_main.refresh(cfg)  # routes and contracts; tests are not run here
         except Exception:  # noqa: BLE001 - without an index, routes are skipped; everything else still runs
             pass
+    _baseline_routes(cfg, str(base_dir), index)
     changed = [f for f in _git(root, "diff", "--name-only", base, "--", "*.py").splitlines() if f]
     out = Outcome(base=base, files=changed)
     http_rel = cfg.contract_path("http")
@@ -135,6 +165,7 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
             targets += engine.dependents(cfg, rel, targets, {t.qualname for t in targets}, skipped=out.skipped,
                                          limit=diff.MAX_FUNCTIONS - len(targets))
             targets += engine.route_targets(cfg, targets)
+            targets += engine.removed_route_targets(cfg, rel, before, after, {t.qualname for t in targets})
             seen = {(r.file, r.qualname) for r in out.results}
             targets = [t for t in targets if (t.file, t.qualname) not in seen]
             if not targets:

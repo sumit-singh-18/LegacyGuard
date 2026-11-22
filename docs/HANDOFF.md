@@ -4,6 +4,9 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 
 ## Rules the user set (keep these)
 - **Authorship:** every commit is by the user only. No Claude co-author trailer and no PR attribution. Commit to `main` directly; no pull requests.
+- **Plugin builds:** the old installed builds `legacyguard@legacyguard` 0.3.1 and `legacyguard@turnback-lab` 0.5.0 were
+  turned off in `~/.claude/settings.json` (2026-11-21). They had no mkdir guard and left about 148 empty junk folders at
+  the repo root (removed).
 - **Agent workflow:** researcher, implementer and reviewer agents (`.claude/agents/`, skill `/sprint-loop`). Nothing is committed until the reviewer says PASS. Loop on corrections until it does (at most 4 rounds, then ask the user).
   - The project agent types may not be registered in a session. Then run them as `general-purpose` agents whose prompt starts with "read .claude/agents/<role>.md and follow it" (implementer: model opus).
   - Send corrections to the **same** agent with SendMessage, and the revised report back to the **same** reviewer.
@@ -20,8 +23,8 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` at a467802: Sprint 6.8 done, the frozen-pid fix (193f183), 7.4 Part A (3385224), 7.2a (1c78663) and the 3.12+ trace-leak CI fix (a467802). Check CI with `gh run list --limit 3`; a467802 is the first commit expected green after 1c78663 failed on Linux 3.12/3.13.
-- 468 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 185 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
+- `main` is pushed to `origin/main` at a467802: Sprint 6.8 done, the frozen-pid fix (193f183), 7.4 Part A (3385224), 7.2a (1c78663) the 3.12+ trace-leak CI fix (a467802) and 7.2b (see git log). Check CI with `gh run list --limit 3`; a467802 is the first commit expected green after 1c78663 failed on Linux 3.12/3.13.
+- 490 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 185 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
 - The run 3 write-up and the README headline (held-out number, "1 of 10 either way") are committed and were reviewer-checked (PASS, round 2).
 - Run 4 (6.8f) is done and committed (8a7b947): `holdout2.yaml` and patches, the `holdout2` set in `tools/validate.py`, the run 4 raw results and write-up, and the README headline now on held-out set 2 ("8 of 9 not checked; 1 of 9 without the fix's tests, 2 of 9 with").
 
@@ -93,10 +96,16 @@ keeps tracing on for the whole process (all later code about 2x slower; a regex 
 `lg_worker._thread_trace(trace)` for any `threading.settrace`. Follow-up: `runner/legacyguard_harvest.py` uses `threading.setprofile`, which leaks the same way on 3.12+ (1.56x measured); give it a matching wrapper that calls `sys.setprofile(None)` when `run()` returns. Also `noise._token_pair`: an all-digit random hex
 token now reads as a random token. 468 tests on Python 3.12 and 3.10.
 
-**Next: 7.2b** (part c of the plan): deleted and renamed handlers. `baseline_routes` table filled at SessionStart and by
-`ci.run` (`introspect(root=)`), lookup order baseline_routes -> routes -> static decorator parse of the old function
-(prefix caveat), delete targets (old handler's whole body as `callee_old_gate`), rename targets (entry gate of the new
-function), tests B1-B5.
+**7.2b done (2026-11-21, reviewer PASS round 2, committed on main).** See CLAUDE.md "Sprint 7.2b" and docs/PROGRESS.md.
+`baseline_routes` (SessionStart snapshot; `ci.run` introspects the base), lookup baseline_routes -> routes -> old
+decorators (prefix caveat), delete targets gated on the old body, rename targets on the new function's entry. A deleted
+route passes only when the edited code still routes the path (round-1 fix). 490 tests on 3.12 and 3.10. Tuning set not
+re-run (no tuning case has a route). Optional follow-ups: CI behavioural check of a decorator-only path change
+(`route_targets` reading `baseline_routes`); a new catch-all route answering 404 could let a deleted 404-answering handler
+pass; `ci.run` lacks the MAX_FUNCTIONS skipped note (pre-existing).
+
+**Next: 7.4 Part B** (baseline folder once per session; see the 7.4 follow-ups above), then 7.1 (impact on the resolved
+call graph), per ROADMAP 3d.
 
 7.2 follow-ups (not built, user's decision):
 1. "Only compared inputs count" for functions and callers (routes already count only compared requests).

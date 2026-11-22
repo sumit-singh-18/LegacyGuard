@@ -234,6 +234,101 @@ def route_targets(cfg, targets: list[differ.Target]) -> list[differ.Target]:
         conn.close()
 
 
+PREFIX_NOTE = ("the route's path was read from the decorator of {name}, so it may lack a router or blueprint prefix "
+               "(the framework's own routes for the code before the edit were not available)")
+
+
+def _successor(old, rows: list[tuple[str, str, str]], added: list, taken: set[str]):
+    """The function added in the same file that serves one of the old handler's METHOD and path in the edited code's
+    decorators (a delete plus an add that symbol_diff could not pair as a rename, because the body changed too). The
+    old handler's decorator paths count as well as the index's, which may carry a prefix. Exactly one, or None."""
+    from guardlib import route_decorators
+    wanted = {(m, p) for m, p, _ in rows}
+    for dec in old.decorators or []:
+        wanted |= {(m, p) for _, m, p in route_decorators.parse(dec)}
+    found = [s for s in added if s.qualname not in taken and s.kind == old.kind
+             and {(m, p) for dec in (s.decorators or []) for _, m, p in route_decorators.parse(dec)} & wanted]
+    return found[0] if len(found) == 1 else None
+
+
+def _body_gate(before: str, sym) -> list[list[int]]:
+    """The whole body of a function in the code before the edit as one statement range: reached when any request ran
+    any line of it (a docstring gives no line event, so it is skipped)."""
+    from runner import examples
+    first = examples.entry_gate(before, sym)
+    return [[first[0][0], max(first[0][0], sym.line_end)]] if first else []
+
+
+def removed_route_targets(cfg, rel: str, before: str | None, after: str | None, taken: set[str] | frozenset = frozenset()) -> list[differ.Target]:
+    """Sprint 7.2b: routes whose handler the edit deleted or renamed. changed_targets skips both (the old name is gone),
+    and route_targets only matches the index's handlers to current targets, so without this they would get no route
+    result at all.
+
+    The old handler's METHOD and path come from old_handler_routes (baseline_routes, then routes, then the old function's
+    own decorators with a prefix caveat). One route target per METHOD and path, with requests built from the old
+    function's parameters, file = the handler's file:
+      - renamed (symbol_diff renamed or visibility_changed, or a delete plus an add in this file whose new function's
+        decorators serve one of the same METHOD and path): gated on the entry gate of the new function in the edited
+        code, so a pass needs a request that ran the renamed handler. A path changed in the same edit gives 404 in the
+        edited code: different. The old tree traces the old function as the handler.
+      - deleted: gated on the old function's whole body in the code before the edit (callee_old_gate, judged by the old
+        tree's requests), so "reached" means some request ran the old handler. Expected: old 2xx/4xx against new 404/405,
+        different. When the edited code still serves the same path the same way (the handler moved to another file),
+        the route passes only if the old handler ran and the responses agree.
+    Routes only in the edited code get no target here: an addition is never a finding. A decorator-only edit to a
+    handler that keeps its name (A4) is not a rename: route_targets handles it from the routes table as it stands."""
+    from indexer import db, routes as index_routes
+    from runner import examples, routes_diff
+    from guardlib import symbol_diff
+    if not cfg.raw.get("app") or before is None or after is None:
+        return []
+    try:
+        changes = symbol_diff.diff(before, after)
+    except Exception:  # noqa: BLE001 - a file that cannot be compared gives no route targets, never a failed check
+        return []
+    gone = [c for c in changes if c.kind in ("deleted", "renamed", "visibility_changed") and c.before.kind != "class"]
+    if not gone:
+        return []
+    added = [c.after for c in changes if c.kind == "added" and c.after.kind != "class"]
+    conn = db.connect(cfg.root) if db.exists(cfg.root) else None
+    out: list[differ.Target] = []
+    seen = set(taken)
+    paired: set[str] = set()
+    try:
+        module = differ.module_for(rel, cfg.root)[0]
+        for c in gone:
+            old = c.before
+            rows = index_routes.old_handler_routes(conn, rel, old.qualname, old.decorators)
+            if not rows:
+                continue
+            new = c.after if c.kind != "deleted" else _successor(old, rows, added, paired)
+            if new is not None:
+                paired.add(new.qualname)
+                entry = examples.entry_gate(after, new)
+                gate = {"callees": [new.qualname], "callee_file": rel, "callee_new_gate": entry, "entry_gate": bool(entry)}
+                handler, how, text = {"module": module, "qualname": new.qualname}, "renamed", old.node_text + "|" + new.node_text
+            else:
+                body = _body_gate(before, old)
+                gate = {"callees": [old.qualname], "callee_file": rel, "callee_old_gate": body}
+                handler, how, text = {}, "deleted", old.node_text
+            for method, path, source in rows:
+                name = f"{method} {path}"
+                if name in seen:
+                    continue
+                seen.add(name)
+                requests = routes_diff.requests_for(cfg.root, method, path, old.params)
+                out.append(differ.Target(rel, name, "route", [], symbols.sha(f"{name}|{how}|{text}"), requests=requests,
+                                         handler=handler, old_handler={"module": module, "qualname": old.qualname},
+                                         route_note=PREFIX_NOTE.format(name=old.qualname) if source == "decorator" else "",
+                                         **gate))
+        return out
+    except Exception:  # noqa: BLE001 - a route that cannot be planned is skipped, never a failed check
+        return out
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def targets_for(cfg, rel: str, data: dict, skipped: list | None = None) -> list[differ.Target]:
     """Changed functions, the functions that call them, and functions with an open difference.
 
@@ -253,6 +348,9 @@ def targets_for(cfg, rel: str, data: dict, skipped: list | None = None) -> list[
         targets[dep.qualname] = dep
     for route in route_targets(cfg, list(targets.values())):
         targets[route.qualname] = route
+    # Sprint 7.2b: routes of handlers this edit deleted or renamed, placed with the other routes.
+    for route in removed_route_targets(cfg, rel, before, after, set(targets)):
+        targets.setdefault(route.qualname, route)
     for t in targets.values():
         decl = intent.declaration_for(data, t.file, t.qualname)
         if decl and t.kind != "route":

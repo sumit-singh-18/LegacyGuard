@@ -170,3 +170,15 @@ until the reviewer passes it. Newest entries at the bottom.
   cause was "unclassified". Pre-existing (6.8d). `noise._token_pair` now also accepts two hex strings of which one mixes
   letters and digits; 0 misses in 200,000 random pairs (was 0.115%). Labels only; no status changes, so the tuning set
   was not re-run. 468 tests on Python 3.12 and 3.10.
+- Task 7.2b (2026-11-21): deleted and renamed route handlers. `baseline_routes` table (SessionStart copies `routes`
+  after refresh; `ci.run` introspects the base tree with `introspect(root=)`, old rows deleted and committed first).
+  Old-handler lookup: baseline_routes -> routes -> the old function's decorators (source "decorator", prefix caveat in
+  the reason). `engine.removed_route_targets`: one target per old METHOD path with requests from the old params; a
+  rename (or a delete plus an add serving the same METHOD path) is gated on the new function's entry, a delete on the
+  old body as one range. A decorator-only path change keeps 7.2a's A4 behaviour. Review round 1: REVISE, fixed: a
+  deleted handler that answered 404 itself for unknown ids came out verified, because its 404 matched the router's own;
+  a deleted route now passes only when the edited code still routes the path (`routed` True or a handler entered in
+  the new tree), else untested with the reason. Also: "the old handler ran (k of R requests)" wording, stale-row-safe
+  `ci._baseline_routes`. Round 2: PASS. Optional note left: a new catch-all route answering 404 could still let a
+  deleted 404-answering handler pass. 490 tests on Python 3.12 and 3.10. Tuning set not re-run (route-only change; no
+  tuning case has a route).

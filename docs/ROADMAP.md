@@ -333,6 +333,12 @@ text; decorator edits are their own `decorators_changed` kind (not in the signat
 under the OS sandbox with the worker's set-up. Follow-ups: "only compared inputs count" for functions and callers;
 harvesting literal test-client `headers=` (header names only in printed text).
 
+**7.2b done (2026-11-21, reviewer PASS round 2):** `baseline_routes` (SessionStart snapshot, `ci.run` introspects the
+base); old-handler lookup baseline_routes -> routes -> old decorators (prefix caveat); delete targets gated on the old
+body, rename targets on the new function's entry. Review round 1 added a rule: a deleted route passes only when the
+edited code still routes the path (a handler that 404s for unknown ids matches the router's 404). 7.2 is complete;
+next per 3d: 7.4 Part B, then 7.1.
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; `/legacyguard:impact` and the MCP `impact` tool on the
 resolved call graph; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff

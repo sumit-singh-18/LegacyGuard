@@ -71,24 +71,27 @@ lg_worker.drop_scratch()
 """
 
 
-def introspect(cfg, timeout: int = 60) -> list[list] | None:
+def introspect(cfg, timeout: int = 60, root: str | None = None) -> list[list] | None:
+    """[[METHOD, path, handler qualname, handler file (real path)]] from the framework, or None. `root` is the tree to
+    ask (Sprint 7.2b: ci.run asks the baseline tree for baseline_routes); it defaults to the project root."""
     if not (cfg.raw.get("app") or cfg.raw.get("django_settings")):
         return None
     from runner import os_sandbox
     bd = cfg.behavioral_diff
     py = cfgmod.target_python(cfg)
-    roots = [str(Path(cfg.root) / r) for r in (cfg.raw.get("source_roots") or [])] + [cfg.root]
+    root = str(root or cfg.root)
+    roots = [str(Path(root) / r) for r in (cfg.raw.get("source_roots") or [])] + [root]
     try:
         with tempfile.TemporaryDirectory(prefix="lgroutes") as tmp:
             req = Path(tmp) / "req.json"
-            req.write_text(json.dumps({"root": cfg.root, "sys_path": roots, "protect": [str(cfg.root)], "cwd": cfg.root,
+            req.write_text(json.dumps({"root": root, "sys_path": roots, "protect": [root], "cwd": root,
                                        "scratch": str(Path(tmp) / "scratch"), "django_settings": cfg.raw.get("django_settings"),
                                        "deterministic": False, "io": str(bd.get("io", "stub"))}))
             script = (f"RUNNER_DIR={str(RUNNER)!r}\nREQUEST={str(req)!r}\nAPP={cfg.raw.get('app')!r}\n"
                       f"DJANGO={cfg.raw.get('django_settings')!r}\n" + INTROSPECT)
-            cmd = os_sandbox.wrap([py, "-B", "-c", script], py, writable=[tempfile.gettempdir(), tmp], readonly=[str(cfg.root)],
+            cmd = os_sandbox.wrap([py, "-B", "-c", script], py, writable=[tempfile.gettempdir(), tmp], readonly=[root],
                                   mode=str(bd.get("os_sandbox", "auto")))
-            res = subprocess.run(cmd, cwd=cfg.root, env=clean_env(cfg), capture_output=True, text=True, timeout=timeout)
+            res = subprocess.run(cmd, cwd=root, env=clean_env(cfg), capture_output=True, text=True, timeout=timeout)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
     for line in res.stdout.splitlines():
@@ -109,15 +112,73 @@ def from_decorators(conn) -> list[tuple]:
     return rows
 
 
+def _framework_rows(live: list[list], root: str) -> list[tuple]:
+    """Introspected rows with handler files relative to the tree they came from."""
+    prefix = str(Path(root).resolve()) + "/"
+    return [(m, p, q, f[len(prefix):] if f.startswith(prefix) else f, "framework") for m, p, q, f in live]
+
+
 def rebuild(conn, cfg) -> dict:
     conn.execute("DELETE FROM routes")
     live = introspect(cfg)
     if live is not None:
-        root = str(Path(cfg.root).resolve()) + "/"
-        rows = [(m, p, q, f[len(root):] if f.startswith(root) else f, "framework") for m, p, q, f in live]
+        rows = _framework_rows(live, cfg.root)
         source = "framework"
     else:
         rows = from_decorators(conn)
         source = "decorators"
     conn.executemany("INSERT INTO routes(method, path, handler_qualname, handler_file, source) VALUES (?,?,?,?,?)", rows)
     return {"routes": len(rows), "source": source}
+
+
+# ---- Sprint 7.2b: the routes of the code before the edit, for deleted and renamed handlers ----
+# The routes table describes different trees in different places: a session builds it at SessionStart, when the
+# working tree equals the baseline, while ci.run (and tools/validate.py) refresh it on the head tree. baseline_routes
+# always describes the baseline, so a handler the edit deleted or renamed still has its old METHOD and path.
+INSERT_BASELINE = ("INSERT INTO baseline_routes(method, path, handler_qualname, handler_file, source) VALUES (?,?,?,?,?)")
+
+
+def snapshot_baseline(conn) -> int:
+    """SessionStart, right after the index refresh: the working tree equals the baseline, so the routes table is the
+    baseline's. Copied as it is (framework or decorator rows)."""
+    conn.execute("DELETE FROM baseline_routes")
+    conn.execute("INSERT INTO baseline_routes(method, path, handler_qualname, handler_file, source) "
+                 "SELECT method, path, handler_qualname, handler_file, source FROM routes")
+    return conn.execute("SELECT COUNT(*) FROM baseline_routes").fetchone()[0]
+
+
+def rebuild_baseline(conn, cfg, base_dir: str) -> dict:
+    """ci.run: ask the framework in the baseline tree. When introspection gives nothing the table stays empty, and the
+    lookup for an old handler falls back to the routes table, then to the old function's own decorators."""
+    conn.execute("DELETE FROM baseline_routes")
+    live = introspect(cfg, root=base_dir)
+    rows = _framework_rows(live, base_dir) if live is not None else []
+    conn.executemany(INSERT_BASELINE, rows)
+    return {"routes": len(rows), "source": "framework" if live is not None else "none"}
+
+
+def old_handler_routes(conn, file: str, qualname: str, decorators: list[str]) -> list[tuple[str, str, str]]:
+    """[(METHOD, path, source)] a handler served in the code before the edit, looked up in this order:
+    1. baseline_routes; 2. routes (a session's index is the baseline's); 3. the old function's own route decorators, read
+    by the shared parser (source "decorator": no router or blueprint prefix is known, so the path may lack one).
+    ANY rows (Django) give no requests and are left out.
+    In ci.run the routes table describes the head tree, so step 2 matters only when baseline_routes is empty there (the
+    baseline could not be introspected). A handler that is truly gone has no head row and falls through to step 3; a
+    head row under the same file and qualname belongs to a function that still exists, which symbol_diff would not
+    report as deleted or renamed in the first place."""
+    for table in ("baseline_routes", "routes"):
+        if conn is None:
+            break
+        try:
+            rows = conn.execute(f"SELECT method, path, source FROM {table} WHERE handler_file = ? AND handler_qualname = ?",
+                                (file, qualname)).fetchall()
+        except Exception:  # noqa: BLE001 - an index without the table falls through to the next source
+            rows = []
+        rows = sorted({(m, p, s or "framework") for m, p, s in rows if m != "ANY"})
+        if rows:
+            return rows
+    out = []
+    for dec in decorators or []:
+        for _, method, path in route_decorators.parse(dec):
+            out.append((method, path, "decorator"))
+    return sorted(set(out))

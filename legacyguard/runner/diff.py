@@ -64,6 +64,11 @@ class Target:
     entry_gate: bool = False
     # Sprint 7.2a, kind "route": {"module", "qualname"} of the handler, traced to tell whether a request entered it.
     handler: dict = field(default_factory=dict)
+    # Sprint 7.2b, routes of a deleted or renamed handler: the handler in the code before the edit, traced in the old tree
+    # in place of `handler` (which names the renamed function, or is empty for a deleted one); and a note added to the
+    # result's reason (the path read from a decorator may lack a router or blueprint prefix).
+    old_handler: dict = field(default_factory=dict)
+    route_note: str = ""
 
 
 @dataclass
@@ -135,6 +140,7 @@ class Result:
     requests_reached: int = 0
     requests_entered: int = 0
     status_counts: dict = field(default_factory=dict)
+    route_deleted: bool = False     # Sprint 7.2b: the route's handler was deleted; the gate is the old handler's body
 
     @property
     def subject(self) -> str:
@@ -687,10 +693,15 @@ def compare_one(target: Target, items: list[dict], a: dict | None, b: dict | Non
 EARLY_STATUS = range(400, 500)
 
 
+def _deleted_handler(target: Target) -> bool:
+    """Sprint 7.2b: a route whose handler this edit deleted (no handler in the edited code, the old one traced)."""
+    return target.kind == "route" and not target.handler and bool(target.old_handler)
+
+
 def _route_via(target: Target) -> bool:
     """A route whose handler is only a caller of the edited function (its gate is that function's), not the handler."""
-    handler = (target.handler or {}).get("qualname", "")
-    return not (target.callee_file == target.file and list(target.callees) == [handler])
+    handlers = {(h or {}).get("qualname", "") for h in (target.handler, target.old_handler)} - {""}
+    return not (target.callee_file == target.file and len(target.callees) == 1 and target.callees[0] in handlers)
 
 
 def _codes(counts: dict) -> str:
@@ -706,6 +717,7 @@ def _route_facts(r: Result, target: Target, a: dict, n: dict, parts: list) -> di
     that tree (validation, dependencies, before-request hooks, decorators, routing, middleware); entry is None when the
     handler could not be resolved."""
     r.route = True
+    r.route_deleted = _deleted_handler(target)
     sa, sn = a.get("statuses") or [], n.get("statuses") or []
     ea, en = a.get("entered"), n.get("entered")
     pairs = [(i, sa[i] if i < len(sa) else None, sn[i] if i < len(sn) else None,
@@ -734,7 +746,15 @@ def _route_facts(r: Result, target: Target, a: dict, n: dict, parts: list) -> di
     unrouted = all(i < len(ra) and ra[i] is False for i, *_ in pairs)
     new_route = bool(pairs) and known and unrouted and all(so in (404, 405) and ea_ is False and en_ is True
                                                            for _, so, _, ea_, en_ in pairs)
+    # Sprint 7.2b: whether the edited code still serves the path (a handler of its app matched, or the traced handler ran).
+    rn = n.get("routed") or []
+    served_new = any((i < len(rn) and rn[i] is True) or en_ is True for i, _, _, _, en_ in pairs)
+    new_counts: dict = {}
+    for _, _, sn_, _, _ in pairs:
+        if sn_ is not None:
+            new_counts[str(sn_)] = new_counts.get(str(sn_), 0) + 1
     return {"same_early": same_early, "known": known, "new_route": new_route, "codes_old": _codes(counts) if counts else "",
+            "served_new": served_new, "codes_new": _codes(new_counts) if new_counts else "",
             "any_entered_new": any(p[4] is True for p in pairs), "entry_unknown": not pairs or any(p[4] is None for p in pairs)}
 
 
@@ -752,6 +772,8 @@ def _route_verdict(r: Result, target: Target, facts: dict, untraced: bool, misse
     if untraced and (target.callee_new_gate or target.callee_old_gate):
         r.reason = f"the changed lines of {name} could not be traced while the requests ran"
         return r
+    if _deleted_handler(target):
+        return _deleted_verdict(r, target, facts, name)
     if r.statements_total:
         if not r.statements_reached:
             r.reason = (f"none of the {count} requests reached the changed lines of {name}, so the edit itself was not "
@@ -784,6 +806,28 @@ def _route_verdict(r: Result, target: Target, facts: dict, untraced: bool, misse
                         f"known (responses before the edit: {_codes(r.status_counts)})" if r.status_counts else
                         f"entry unknown: the handler {name} could not be traced")
             return r
+    r.status = DONE
+    return r
+
+
+def _deleted_verdict(r: Result, target: Target, facts: dict, name: str) -> Result:
+    """Sprint 7.2b: a route whose handler was deleted, with no difference. It passes only when the old handler ran and
+    the edited code still serves the path (a handler moved to another file): some compared request matched a route of
+    the edited app, or entered a handler there. Agreeing responses alone prove nothing: a handler that answers 404 for
+    an unknown id gives the same 404 as a router that no longer has the route."""
+    count = r.inputs_compared
+    route = target.qualname
+    if not r.statements_reached:
+        r.reason = (f"none of the {count} requests ran the old handler {name} (deleted in this edit), so the route was "
+                    f"not exercised" + (f"; responses before the edit: {_codes(r.status_counts)}" if r.status_counts else ""))
+        return r
+    if not facts["served_new"]:
+        both = (f"every request was answered {facts['codes_old']} in both versions" if facts["codes_old"] == facts["codes_new"]
+                else f"responses: {facts['codes_old'] or 'none'} before the edit, {facts['codes_new'] or 'none'} after")
+        r.reason = (f"the edited code no longer serves {route}: no request matched a route there; {both} (the old handler "
+                    f"{name} ran on {r.requests_reached} of {count} requests and answered them itself), so the responses "
+                    "agreeing shows nothing about the route")
+        return r
     r.status = DONE
     return r
 
@@ -850,6 +894,9 @@ def reached_text(r: Result) -> str:
     """'reached 2 of 2 changed statements', or '' without a gate."""
     if not r.statements_total:
         return ""
+    if r.route_deleted:
+        ran = "the old handler ran" if r.statements_reached else "the old handler never ran"
+        return f"{ran} ({r.requests_reached} of {r.inputs_compared} requests ran it)" if r.inputs_compared else ran
     text = f"reached {r.statements_reached} of {r.statements_total} changed statements"
     if r.route and r.inputs_compared:
         text += f" ({r.requests_reached} of {r.inputs_compared} requests reached them)"
@@ -862,7 +909,10 @@ def _tree_specs(specs: list[dict], runnable: dict, old: bool) -> list[dict]:
     for spec in specs:
         t, _ = runnable[f"{spec['module']}:{spec['qualname']}"]
         ranges = (t.callee_old_gate if old else t.callee_new_gate) if (t.via or t.kind == "route") and t.callee_file else []
-        out.append({**spec, "gate": {"file": t.callee_file, "ranges": ranges}} if ranges else spec)
+        spec = {**spec, "gate": {"file": t.callee_file, "ranges": ranges}} if ranges else spec
+        if old and t.kind == "route" and t.old_handler:
+            spec = {**spec, "handler": t.old_handler}  # Sprint 7.2b: a renamed or deleted handler has its old name there
+        out.append(spec)
     return out
 
 
@@ -1765,6 +1815,9 @@ def _run(cfg, baseline_root: str, work_root: str, targets: list[Target], harvest
     for t in targets:
         results[t.qualname].via, results[t.qualname].via_file = t.via, t.via_file
         results[t.qualname].callees = list(t.callees)
+        if t.route_note and t.route_note not in results[t.qualname].reason:
+            r = results[t.qualname]
+            r.reason = f"{r.reason}; {t.route_note}" if r.reason else t.route_note
     for key, info in carved.items():
         r = results.get(key.split(":", 1)[1])
         if r is not None:
@@ -1883,7 +1936,7 @@ def format_note(results: list[Result]) -> str:
             conf = confidence_text(r)
             io = (f"Database and HTTP calls were answered by stand-ins (no rows, HTTP 200 with an empty body), so for "
                   f"{r.inputs_with_io} inputs what agreed is the calls made, not their real results. ") if r.inputs_with_io else ""
-            reach = f"; the inputs {reached_text(r)}" if r.statements_total else ""
+            reach = (f"; {reached_text(r)}" if r.route_deleted else f"; the inputs {reached_text(r)}") if r.statements_total else ""
             if r.feedback_reached:
                 reach += (f", {r.feedback_reached} of them only by {r.feedback_tried} inputs from a second pass aimed at the "
                           "conditions around lines the first inputs missed")
