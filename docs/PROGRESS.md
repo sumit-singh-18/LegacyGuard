@@ -207,3 +207,16 @@ until the reviewer passes it. Newest entries at the bottom.
   the key again under the lock before building. Test (fails without the second drop: the folder is reused): a folder
   built from inside the dirty-file copy is deleted and the first check rebuilds with the dirty file. 519 tests on
   Python 3.12 and 3.10.
+- Task 7.1 (2026-11-22): impact on the resolved call graph. The MCP `impact` tool, `/legacyguard:impact` and the
+  session map find callers through imports (`impact.compute(mode="resolved")` over `callgraph.callers`); pre_edit and
+  prompt_context stay on name matching. `Edge.callee_file`, truncation notes (candidate cap, limit), tree nested by
+  callee file, fallback to names with a note if callgraph raises. 536 tests on Python 3.12 and 3.10 (17 new in
+  tests/test_impact_resolved.py).
+- Task 7.1 review round 1: REVISE. Fixed: (1) the Stop-time session map went from 0.14 s to 7.93 s on this repo
+  (8 changed functions) with no bound, under the ledger lock; now one parse cache and a 3 s budget per build
+  (`RESOLVE_BUDGET_S`), functions past the budget fall back to names with a counted note; measured 2.7 to 2.8 s.
+  The MCP tool and the skill get a 20 s budget. (2) A bare name matching several definitions listed all their
+  callers under one header; `render` now adds "also matched" and tags callers of other matches `-> file::qualname`.
+  Optional items done: routes join on every matched definition; tree test checks adjacency and indent; a fallback
+  test raises partway. 543 tests on Python 3.12 and 3.10.
+- Task 7.1 review round 2: PASS. Tuning set not re-run (impact views only; no effect on the behavioural diff).

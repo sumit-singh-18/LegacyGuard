@@ -56,7 +56,8 @@ def handle(event: dict):
         try:
             symbols = named_symbols(conn, prompt)
             room = MAX_SYMBOLS - len(blocks)
-            blocks += [impact.impact_text(conn, cfg, s) for s in symbols[:max(0, room)]]
+            # names: no file reads, this hook has a 1 s budget
+            blocks += [impact.impact_text(conn, cfg, s, mode="names") for s in symbols[:max(0, room)]]
             more += max(0, len(symbols) - max(0, room))
         finally:
             conn.close()

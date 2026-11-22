@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 519 tests after Sprint 7.4 Part B). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 543 tests after Sprint 7.1). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -291,6 +291,28 @@ Plan: docs/research/2026-11-sprint7-4-plan.md (with the reviewer's round-2 corre
 - Follow-ups: Part B (done, see below), 7.4b bwrap overlay, phase 2 imports from the folder, the
   empty-mode relative-read rule, masking cwd paths in `lg_codec.canon` (see HANDOFF).
 
+## Sprint 7.1 (on main, 2026-11-22), impact on the resolved call graph
+
+Spec: docs/research/2026-11-sprint7.md row 7.1.
+- `impact.compute(..., mode="resolved"|"names", limit, deadline, cache)`. Resolved mode runs `callgraph.callers` per
+  matched definition (test files skipped); caller sources are `resolved` or `name` (a bare call of a name defined once).
+  Names mode is the old `calls`-table match and stays the default. Callers carry `via_file` and, in resolved mode,
+  `reaches` (the matched definition they lead to); `render` adds an "also matched" line for bare names and tags callers
+  of a non-first match `-> file::qualname`; `render_tree` nests by `(via_file, via)`. Routes join on every matched
+  definition. `Impact` gains `mode`, `note`, `fallback` ("error"|"budget"), `truncated`/`truncated_reason`, `targets`.
+- Who uses which: the MCP `impact` tool and `/legacyguard:impact` (`lg.py cmd_impact`, one compute for text and tree)
+  use resolved with a 20 s budget (`INTERACTIVE_BUDGET_S`); the session map uses resolved with one 3 s budget and one
+  parse cache per build (`sessionmap.RESOLVE_BUDGET_S`); `pre_edit` and `prompt_context` stay on names (1 s budget,
+  never call callgraph). On an exception or a spent budget, compute falls back to names with a visible note.
+- `callgraph`: `Edge.callee_file` (default ""), optional `stats` (`capped` names over MAX_CANDIDATE_FILES, `limit_hit`,
+  `deadline_hit`), `skip`, `follow`, `cache` (parsed files and `git grep` lists shared across calls), `deadline`. All
+  default to None, so `engine.py`'s caller targets are unchanged. Resolved mode does not follow dunders (constructor
+  calls do not resolve to `__init__`).
+- Measured (this repo, 8 changed functions, `sessionmap.build`): names 0.11 to 0.16 s; resolved without cache 6.8 to
+  7.9 s; with cache and budget 2.7 to 2.8 s. Limits: the budget can overshoot by one `git grep` (own 20 s timeout) plus
+  one parse; when it runs out, which functions stay resolved depends on ledger order and the note gives a count only;
+  the Stop hook end to end and the ledger-lock hold time were not measured.
+
 ## Sprint 7.4 Part B (on main, 2026-11-21), baseline working folder once per session
 
 Spec: docs/research/2026-11-sprint7-4-plan.md section 9 item 0 ("Part B detail").
@@ -429,7 +451,7 @@ Plan: docs/research/2026-11-sprint7-2-plan.md section (c). Reviewer PASS in roun
 
 - `ARCHITECTURE.md` and `TESTING.md` from the hackathon are still missing. `docs/ARCHITECTURE.md` is the new
   design. IDs like FR-xx, D-0xx and NFR-xx point into the old docs.
-- MAX_FUNCTIONS=12 targets per edit (routes and callers included). `/legacyguard:impact` and the MCP `impact` tool still use name edges.
+- MAX_FUNCTIONS=12 targets per edit (routes and callers included). `/legacyguard:impact`, the MCP `impact` tool and the session map resolve callers through imports (7.1); the pre_edit and prompt_context hooks still match by name.
 - Hooks are still short-lived processes (no daemon yet). With Django, the working-tree server still runs `django.setup()` cold in every check.
 - Not yet verified on Linux bubblewrap or on a Django project. Throwaway cwd: see Sprint 7.4 (phase 1, safety only).
 

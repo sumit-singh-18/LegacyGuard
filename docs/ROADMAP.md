@@ -343,9 +343,13 @@ next per 3d: 7.4 Part B, then 7.1.
 reused by the post-edit hook and Stop audit (stale key, fingerprint, flock, retired folders dropped at SessionStart
 before the baseline rebuild and again after the ledger reset). `ci.run` stays per run. Next: 7.1.
 
+**7.1 done (2026-11-22, reviewer PASS round 2):** the MCP `impact` tool, `/legacyguard:impact` and the session map
+resolve callers through imports (`impact.compute(mode="resolved")`); pre_edit and prompt_context stay on names.
+Bounded: a parse cache plus a 3 s budget per session-map build and 20 s for the tool and skill, falling back to names
+with a note. Sprint 7 items left: 7.5 (Django routes), 7.6 (contract tools), 7.7 (`/legacyguard:characterize`).
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
---check`, buf when present); D3 `/legacyguard:characterize`; `/legacyguard:impact` and the MCP `impact` tool on the
-resolved call graph; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
+--check`, buf when present); D3 `/legacyguard:characterize`; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
 validation on the FastAPI and Flask apps picked in run 1's research.
 
 **Sprint 8, larger items:** A3 the per-project daemon; C1 recorded answers from the project's test database

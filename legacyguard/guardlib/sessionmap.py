@@ -1,13 +1,14 @@
 """Session map (FR-30, D-038): this session's changed functions and what depends on them, as one offline HTML file.
 
-A view over the existing lookup tables and the findings ledger. It is not a call graph: edges are name matches,
-and an edge counts as observed only when one test runs both ends.
+A view over the existing lookup tables and the findings ledger. Callers are resolved through imports
+(guardlib/callgraph.py via impact.compute mode "resolved"), and an edge counts as observed only when one test runs both ends.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import re
+import time
 from pathlib import Path
 
 from guardlib import impact, ledger, report
@@ -16,9 +17,12 @@ from indexer import names
 
 CHANGED_KINDS = ("behavior_difference", "slowdown", "verified", "untested")
 MAX_CALLERS = 30
+# Wall-clock budget for resolving callers through imports in one build (the Stop hook holds the ledger lock while it
+# builds the map). Functions looked up after it is spent get name-matched callers, and the page says how many.
+RESOLVE_BUDGET_S = 3.0
 NOTE = ("The guard runs each edited function and up to six functions that call it directly; the rest of the map is who depends on the change. "
-        "Edges come from matching function names, so one can be wrong and dynamic calls are missing. "
-        "A solid edge means one test runs both functions; a dashed edge is a name match only. "
+        "Edges come from calls resolved through imports, so dynamic calls are missing. "
+        "A solid edge means one test runs both functions; a dashed edge is a call no test was seen to run. "
         "Only API routes are labeled as entry points; scheduled jobs are not indexed.")
 
 
@@ -59,7 +63,8 @@ def build(cfg, data: dict) -> dict:
     model = {"session": data.get("session_id"), "mode": cfg.mode, "baseline": (data.get("baseline_commit") or "")[:10], "budget": cfg.budget,
              "prompts": data.get("prompts_used", 0), "wakeups": data.get("wakeups", 0), "generated": dt.datetime.now().isoformat(timespec="minutes"),
              "counts": counts, "turned_back": sum(1 for f in visible if f["state"] == "resolved"), "statuses": list(ledger.STATUSES),
-             "index": idb.exists(cfg.root), "coverage": True, "truncated": 0, "note": NOTE, "footer": report.FOOTER, "not_followed": []}
+             "index": idb.exists(cfg.root), "coverage": True, "truncated": 0, "note": NOTE, "footer": report.FOOTER, "not_followed": [],
+             "callers_incomplete": [], "impact_notes": []}
     try:  # the current caller budget, for the panel's "Checked by the guard?" text
         from guardlib import engine
         from runner import diff as differ
@@ -85,8 +90,11 @@ def build(cfg, data: dict) -> dict:
                 return tests_cache[key]
 
             callers_added = 0
+            deadline = time.monotonic() + RESOLVE_BUDGET_S
+            parse_cache: dict = {}  # parsed files shared by every lookup in this build
+            by_name_budget = 0
             for (file, item), node in changed.items():
-                imp = impact.compute(conn, cfg, node["id"])
+                imp = impact.compute(conn, cfg, node["id"], mode="resolved", limit=MAX_CALLERS, deadline=deadline, cache=parse_cache)
                 if imp is None:
                     node["sources"] = ["not in the index, so its callers are unknown"]
                     continue
@@ -100,6 +108,12 @@ def build(cfg, data: dict) -> dict:
                 node["routes"] = sorted(set(node["routes"]) | set(route_of.get((file, item), [])))
                 by_hop: dict[int, list[dict]] = {}
                 model["not_followed"] = sorted(set(model["not_followed"]) | set(getattr(imp, "not_followed", [])))
+                if imp.truncated:
+                    model["callers_incomplete"].append(item)
+                if imp.fallback == "budget":
+                    by_name_budget += 1
+                elif imp.note and imp.note not in model["impact_notes"]:
+                    model["impact_notes"].append(imp.note)
                 # callers the guard ran, or left out of a check, come first in each step, so the cap never hides them
                 for c in sorted(imp.callers, key=lambda c: (c["hop"], f"{c['file']}::{c['qualname']}" not in ran
                                                             and f"{c['file']}::{c['qualname']}" not in skipped)):
@@ -118,12 +132,18 @@ def build(cfg, data: dict) -> dict:
                         target["layer"] = min(target["layer"], c["hop"])
                     target["routes"] = sorted(set(target["routes"]) | set(route_of.get((c["file"], c["qualname"]), [])))
                     by_hop.setdefault(c["hop"], []).append(c)
-                    parents = [node["id"]] if c["hop"] == 1 else [f"{p['file']}::{p['qualname']}" for p in by_hop.get(c["hop"] - 1, [])
-                                                                 if p["qualname"].rsplit(".", 1)[-1] == c["via"]]
+                    if c.get("via_file"):  # resolved: the exact definition it calls
+                        parents = [f"{c['via_file']}::{c['via']}"]
+                    else:  # name match (fallback): every caller one step nearer with the called name
+                        parents = [node["id"]] if c["hop"] == 1 else [f"{p['file']}::{p['qualname']}" for p in by_hop.get(c["hop"] - 1, [])
+                                                                     if p["qualname"].rsplit(".", 1)[-1] == c["via"]]
                     for pid in parents:
                         if pid in nodes and pid != cid:
                             pfile, pqual = pid.split("::", 1)
                             edges[(cid, pid)] = {"from": cid, "to": pid, "observed": bool(tests_of(c["file"], c["qualname"]) & tests_of(pfile, pqual))}
+            if by_name_budget:
+                model["impact_notes"].append(f"callers of {by_name_budget} function{'s' if by_name_budget != 1 else ''} are matched by name: "
+                                             f"the {RESOLVE_BUDGET_S:g} s time budget for resolving callers through imports ran out")
         finally:
             conn.close()
     order = {n["id"]: i for i, n in enumerate(changed.values())}
@@ -234,7 +254,9 @@ storyHtml();
 $('#fade').onchange=e=>{fade=e.target.checked;draw()};
 const notes=[];if(!M.index)notes.push('There is no index, so dependents are unknown. Run /legacyguard:index.');else if(!M.coverage)notes.push('There is no test map yet, so test reach is unknown. Run /legacyguard:index.');
 if(M.truncated)notes.push(M.truncated+' more callers are not drawn.');
-if(M.not_followed&&M.not_followed.length)notes.push('Callers were not followed through very common names ('+M.not_followed.slice(0,4).join(', ')+'): a name match there says nothing.');$('#warn').textContent=notes.join(' ');
+if(M.not_followed&&M.not_followed.length)notes.push('Callers were not followed through special or very common names ('+M.not_followed.slice(0,4).join(', ')+').');
+if(M.callers_incomplete&&M.callers_incomplete.length)notes.push('The caller search stopped early for '+M.callers_incomplete.slice(0,4).join(', ')+', so callers may be missing.');
+if(M.impact_notes&&M.impact_notes.length)notes.push(M.impact_notes.map(n=>n.charAt(0).toUpperCase()+n.slice(1)+'.').join(' '));$('#warn').textContent=notes.join(' ');
 chips();table();pick(null);
 """
 
@@ -250,7 +272,7 @@ def render_html(model: dict) -> str:
 <section id="story"></section>
 <main><div id="left">
 <div class="tools"><span><svg width="30" height="8"><path class="e" d="M0 4H30"/></svg> one test runs both ends</span>
-<span><svg width="30" height="8"><path class="e guess" d="M0 4H30"/></svg> matched by name only</span>
+<span><svg width="30" height="8"><path class="e guess" d="M0 4H30"/></svg> no test seen running both</span>
 <span><span class="sw" style="background:var(--risk-bg);border-color:var(--risk)"></span>depends on a change, no test reaches it</span>
 <label><input type="checkbox" id="fade"> Fade callers that tests reach</label></div>
 <div class="box" id="map"></div><p class="meta" id="warn" style="margin-top:6px"></p>

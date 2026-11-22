@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 from mcp.server.mcpserver import MCPServer
 
@@ -22,7 +23,9 @@ def _load():
 def impact(symbol: str, depth: int = 3) -> str:
     """Who depends on a function: callers up to 3 hops, routes, tests, co-changed files. Each item names its source.
 
-    Name matches can over-match same-named functions and miss dynamic calls.
+    Callers are resolved through imports, aliases included ([resolved]); a bare call of a name defined only once is
+    tagged [name]. Dynamic calls (getattr, callbacks, constructor calls reaching __init__) are missed. If import
+    resolution fails, callers fall back to name matches, which can over-match, and the output says so.
     """
     try:
         cfg = _load()
@@ -30,7 +33,8 @@ def impact(symbol: str, depth: int = 3) -> str:
         return f"LegacyGuard is inactive here: {exc}"
     conn = db.connect(cfg.root)
     try:
-        return impact_lib.impact_text(conn, cfg, symbol, min(max(depth, 1), impact_lib.HOPS))
+        return impact_lib.impact_text(conn, cfg, symbol, min(max(depth, 1), impact_lib.HOPS), mode="resolved",
+                                    deadline=time.monotonic() + impact_lib.INTERACTIVE_BUDGET_S)
     finally:
         conn.close()
 

@@ -52,7 +52,7 @@ def _risk_context(cfg, rel, before, after, data):
             key = f"{rel}::{change.qualname}"
             if key in data["context_sent"]:
                 continue
-            imp = impact.compute(conn, cfg, key)
+            imp = impact.compute(conn, cfg, key, mode="names")  # names: no file reads, this hook has a 1 s budget
             if imp is None:
                 continue
             signals = []

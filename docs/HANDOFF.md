@@ -1,4 +1,4 @@
-# Handoff (2026-11-21)
+# Handoff (2026-11-22)
 
 Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read docs/HANDOFF.md and continue."
 
@@ -105,8 +105,16 @@ re-run (no tuning case has a route). Optional follow-ups: CI behavioural check o
 (`route_targets` reading `baseline_routes`); a new catch-all route answering 404 could let a deleted 404-answering handler
 pass; `ci.run` lacks the MAX_FUNCTIONS skipped note (pre-existing).
 
-**Next: 7.1** (`/legacyguard:impact` skill and MCP `impact` tool on the resolved call graph), per ROADMAP 3d. The
-other 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd masking) stay queued.
+**7.1 done (2026-11-22, reviewer PASS round 2, committed on main).** See CLAUDE.md "Sprint 7.1". The MCP `impact`
+tool, `/legacyguard:impact` and the session map resolve callers through imports; pre_edit and prompt_context stay on
+names. Session map: parse cache plus 3 s budget (2.7 s for 8 changed functions on this repo, was 7.9 s uncached);
+tool and skill: 20 s. 543 tests on 3.12 and 3.10. Optional follow-ups: the budget note gives a count, not names; Stop
+hook end-to-end and ledger-lock hold time not measured; a per-session parse cache could cut repeated Stops further.
+
+**Next:** Sprint 7 items left per ROADMAP 3d: 7.6 (contract tools; independent; oasdiff and `makemigrations --check`
+first, confirm oasdiff JSON fields before building), then 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`),
+which wait for the runnability and determinism fixes. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports,
+empty-mode rule, cwd masking) stay queued.
 
 **Flaky test to harden:** `tests/test_warm.py` process-id tests fail when the OS pid counter has wrapped below 1000
 (pids under `PID_MASK_MIN` are deliberately not masked, the 6.8d limit). Seen once on 2026-11-21 (pytest ran as pid

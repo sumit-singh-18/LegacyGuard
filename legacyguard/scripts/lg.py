@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 PLUGIN_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -46,11 +47,14 @@ def cmd_impact(args) -> int:
     from indexer import db
     cfg = _cfg()
     conn = db.connect(cfg.root)
-    print(impact.impact_text(conn, cfg, args.symbol, args.depth))
-    if args.tree:
-        imp = impact.compute(conn, cfg, args.symbol, args.depth)
-        if imp and imp.callers:
-            print("\n" + impact.render_tree(imp))
+    try:
+        imp = impact.compute(conn, cfg, args.symbol, args.depth, mode="resolved",  # once: the text and the tree share it
+                             deadline=time.monotonic() + impact.INTERACTIVE_BUDGET_S)
+    finally:
+        conn.close()
+    print(impact.render(imp) if imp else impact.not_found_text(args.symbol))
+    if args.tree and imp and imp.callers:
+        print("\n" + impact.render_tree(imp))
     return 0
 
 

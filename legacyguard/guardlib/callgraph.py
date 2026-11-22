@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import ast
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 MAX_CANDIDATE_FILES = 200
 
@@ -28,6 +30,7 @@ class Edge:
     callee: str       # the edited function's qualname
     how: str          # "resolved" or "name"
     hops: int = 1
+    callee_file: str = ""  # the file of `callee`, so callers of same-named functions in different files stay apart
 
 
 def module_name(rel: str, root: str) -> str:
@@ -35,8 +38,10 @@ def module_name(rel: str, root: str) -> str:
     return module_for(rel, root)[0]
 
 
-def _candidates(root: str, name: str) -> list[str]:
-    """Python files that mention the name as a word. git grep is fast and respects .gitignore."""
+def _candidates(root: str, name: str, stats: dict | None = None) -> list[str]:
+    """Python files that mention the name as a word. git grep is fast and respects .gitignore.
+
+    At most MAX_CANDIDATE_FILES are read; when more mention the name, the name goes into stats["capped"]."""
     try:
         res = subprocess.run(["git", "-C", root, "grep", "-l", "-w", "-e", name, "--", "*.py"], capture_output=True, text=True, timeout=20)
         files = res.stdout.splitlines()
@@ -45,6 +50,8 @@ def _candidates(root: str, name: str) -> list[str]:
     if not files:  # not a git repo, or untracked files only
         files = [p.relative_to(root).as_posix() for p in Path(root).rglob("*.py")
                  if ".legacyguard" not in p.parts and ".venv" not in p.parts and name in p.read_text(errors="replace")]
+    if len(files) > MAX_CANDIDATE_FILES and stats is not None:
+        stats.setdefault("capped", set()).add(name)
     return files[:MAX_CANDIDATE_FILES]
 
 
@@ -127,23 +134,60 @@ class _Scope(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def callers_of(root: str, file: str, qualname: str, unique_names: set[str] | None = None) -> list[Edge]:
-    """Direct callers of the definition `qualname` in `file`, one hop."""
+def _parsed(root: str, rel: str, cache: dict | None):
+    """(names, modules, calls) for one file, or None when it cannot be read or parsed. Cached per rel path when a
+    cache dict is given (one caller search, or one session-map build: files do not change in between)."""
+    key = ("file", rel)
+    if cache is not None and key in cache:
+        return cache[key]
+    try:
+        tree = ast.parse((Path(root) / rel).read_text(errors="replace"))
+    except (OSError, SyntaxError, ValueError):
+        out = None
+    else:
+        names, modules = _imports(tree, module_name(rel, root), rel.endswith("__init__.py"))
+        scope = _Scope()
+        scope.visit(tree)
+        out = (names, modules, scope.calls)
+    if cache is not None:
+        cache[key] = out
+    return out
+
+
+def _cached_candidates(root: str, name: str, stats: dict | None, cache: dict | None) -> list[str]:
+    if cache is None:
+        return _candidates(root, name, stats)
+    key = ("candidates", name)
+    if key not in cache:
+        local: dict = {}
+        cache[key] = (_candidates(root, name, local), bool(local.get("capped")))
+    files, capped = cache[key]
+    if capped and stats is not None:
+        stats.setdefault("capped", set()).add(name)
+    return files
+
+
+def callers_of(root: str, file: str, qualname: str, unique_names: set[str] | None = None, stats: dict | None = None,
+               cache: dict | None = None, deadline: float | None = None) -> list[Edge]:
+    """Direct callers of the definition `qualname` in `file`, one hop.
+
+    `cache` (optional) keeps parsed files and candidate lists across calls. Past `deadline` (time.monotonic) the
+    remaining files are not read and stats["deadline_hit"] is set, so the result may be incomplete."""
     name = qualname.rsplit(".", 1)[-1]
     target_cls = qualname.rsplit(".", 1)[0] if "." in qualname else None
     target_cls_name = target_cls.rsplit(".", 1)[-1] if target_cls else None
     target_module = module_name(file, root)
     out: set[Edge] = set()
-    for rel in _candidates(root, name):
-        try:
-            tree = ast.parse((Path(root) / rel).read_text(errors="replace"))
-        except (OSError, SyntaxError, ValueError):
+    for rel in _cached_candidates(root, name, stats, cache):
+        if deadline is not None and time.monotonic() >= deadline:
+            if stats is not None:
+                stats["deadline_hit"] = True
+            break
+        parsed = _parsed(root, rel, cache)
+        if parsed is None:
             continue
-        this_module = module_name(rel, root)
-        names, modules = _imports(tree, this_module, rel.endswith("__init__.py"))
-        scope = _Scope()
-        scope.visit(tree)
-        for caller, caller_cls, call in scope.calls:
+        names, modules, calls = parsed
+        for caller, caller_cls, call in calls:
             if rel == file and caller == qualname:
                 continue  # recursion is not a caller
             f = call.func
@@ -168,7 +212,7 @@ def callers_of(root: str, file: str, qualname: str, unique_names: set[str] | Non
                 if (isinstance(f, ast.Name) and f.id == name) or (isinstance(f, ast.Attribute) and f.attr == name):
                     how = "name"
             if how:
-                out.add(Edge(rel, caller, qualname, how))
+                out.add(Edge(rel, caller, qualname, how, callee_file=file))
     return sorted(out, key=lambda e: (e.how != "resolved", e.file != file, e.file, e.qualname))
 
 
@@ -183,8 +227,16 @@ def unique_function_names(conn) -> set[str]:
     return {r[0] for r in rows}
 
 
-def callers(root: str, file: str, qualname: str, conn=None, hops: int = 2, limit: int = 30) -> list[Edge]:
-    """Callers up to `hops` steps away, nearest first. A caller of a caller can return something different too."""
+def callers(root: str, file: str, qualname: str, conn=None, hops: int = 2, limit: int = 30, *,
+            skip: Callable[[str], bool] | None = None, follow: Callable[[Edge], bool] | None = None,
+            stats: dict | None = None, cache: dict | None = None, deadline: float | None = None) -> list[Edge]:
+    """Callers up to `hops` steps away, nearest first. A caller of a caller can return something different too.
+
+    Optional: `skip(file)` drops callers in that file entirely (neither listed nor followed); `follow(edge)` False keeps
+    the caller but does not look for its own callers; `stats` collects truncation: "capped" (names whose candidate
+    files passed MAX_CANDIDATE_FILES), "limit_hit" (True when `limit` callers were reached and the search stopped) and
+    "deadline_hit" (True when time.monotonic() passed `deadline` and the search stopped); `cache` keeps parsed files
+    across steps and across calls that share the dict. The defaults (None) keep engine.dependents as it was."""
     unique = unique_function_names(conn)
     seen = {(file, qualname)}
     frontier = [(file, qualname)]
@@ -192,13 +244,23 @@ def callers(root: str, file: str, qualname: str, conn=None, hops: int = 2, limit
     for hop in range(1, hops + 1):
         nxt = []
         for f, q in frontier:
-            for e in callers_of(root, f, q, unique):
+            if deadline is not None and time.monotonic() >= deadline:
+                if stats is not None:
+                    stats["deadline_hit"] = True
+                return out
+            for e in callers_of(root, f, q, unique, stats, cache, deadline):
                 if (e.file, e.qualname) in seen:
                     continue
                 seen.add((e.file, e.qualname))
-                out.append(Edge(e.file, e.qualname, e.callee, e.how, hop))
-                nxt.append((e.file, e.qualname))
+                if skip is not None and skip(e.file):
+                    continue
+                edge = Edge(e.file, e.qualname, e.callee, e.how, hop, e.callee_file)
+                out.append(edge)
+                if follow is None or follow(edge):
+                    nxt.append((e.file, e.qualname))
                 if len(out) >= limit:
+                    if stats is not None:
+                        stats["limit_hit"] = True
                     return out
         frontier = nxt
     return out
