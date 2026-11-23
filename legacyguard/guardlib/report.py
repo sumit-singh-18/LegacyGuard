@@ -157,13 +157,26 @@ def isolation_line(data: dict) -> str:
     return line
 
 
+def tools_line(data: dict, cfg) -> str:
+    """Sprint 7.6: which contract tools ran (oasdiff, makemigrations --check), or "" when none applies here."""
+    try:
+        from guardlib import contract_tools
+        if not (cfg.contract_path("http") or (data.get("contract_tools") or {}).get("makemigrations")
+                or (data.get("contract_tools") or {}).get("notes")):
+            return ""
+        return contract_tools.report_line(cfg, data)
+    except Exception:  # noqa: BLE001 - the report never fails on this line
+        return ""
+
+
 def render(data: dict, cfg) -> str:
     c = counts(data)
     lines = [f"# LegacyGuard session report", "",
              f"Session `{data.get('session_id')}`. Mode **{cfg.mode}**. Baseline `{(data.get('baseline_commit') or 'none')[:10]}`.",
              f"Prompts used **{data['prompts_used']} of {cfg.budget}**. Claude wake-ups **{data['wakeups']}**. Edits seen {data.get('edits', 0)}."]
     iso = isolation_line(data)
-    lines += ([iso] if iso else []) + [""]
+    tools = tools_line(data, cfg)
+    lines += ([iso] if iso else []) + ([tools] if tools else []) + [""]
     steps = story(data)
     if steps:
         lines += ["## What happened", ""] + [f"- **{STORY_LABEL[st['kind']]}:** {st['text']}" for st in steps] + ["", "## Findings", ""]

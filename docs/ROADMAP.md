@@ -348,6 +348,12 @@ resolve callers through imports (`impact.compute(mode="resolved")`); pre_edit an
 Bounded: a parse cache plus a 3 s budget per session-map build and 20 s for the tool and skill, falling back to names
 with a note. Sprint 7 items left: 7.5 (Django routes), 7.6 (contract tools), 7.7 (`/legacyguard:characterize`).
 
+**7.6 Part A done (2026-11-22):** plan `docs/research/2026-11-sprint7-6-plan.md` (reviewed in 3 rounds; user decisions
+D1 oasdiff in PreToolUse with a 0.8 s cap and parser fallback, plus Stop and CI; D2 drift as a PostToolUse note and a
+Stop finding; D3 Django in dev requirements; D4 no oasdiff in CI). `contract_tools`, oasdiff for the OpenAPI contract
+file, Django `makemigrations --check` drift (new in the working tree only, no database). Later parts (plan section
+10): B code-first OpenAPI (`app.openapi()` in both trees), C squawk, D buf. Sprint 7 items left: 7.6 B-D, 7.5, 7.7.
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
 validation on the FastAPI and Flask apps picked in run 1's research.

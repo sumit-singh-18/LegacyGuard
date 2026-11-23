@@ -111,10 +111,17 @@ names. Session map: parse cache plus 3 s budget (2.7 s for 8 changed functions o
 tool and skill: 20 s. 543 tests on 3.12 and 3.10. Optional follow-ups: the budget note gives a count, not names; Stop
 hook end-to-end and ledger-lock hold time not measured; a per-session parse cache could cut repeated Stops further.
 
-**Next:** Sprint 7 items left per ROADMAP 3d: 7.6 (contract tools; independent; oasdiff and `makemigrations --check`
-first, confirm oasdiff JSON fields before building), then 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`),
-which wait for the runnability and determinism fixes. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports,
-empty-mode rule, cwd masking) stay queued.
+**7.6 Part A done (2026-11-22, committed on main).** See CLAUDE.md "Sprint 7.6 Part A" and
+`docs/research/2026-11-sprint7-6-plan.md` (user decisions at its top). oasdiff for the OpenAPI contract file
+(PreToolUse 0.8 s cap with parser fallback, Stop, CI; sibling refs only under the OS sandbox) and Django
+`makemigrations --check` drift (no database, new items only; PostToolUse note, Stop and CI findings). Django is now
+in `requirements-dev.txt` (installed in `.venv-dev` 6.1.3 and the 3.10 venv 5.2.19). Unverified: the real oasdiff
+binary (never run here), Linux bwrap sibling-ref path, Django 6.0, a real Django project.
+
+**Next:** 7.6 later parts (plan section 10): B code-first OpenAPI (`app.openapi()` in both trees, oasdiff on the
+two JSON texts), C squawk, D buf. Then 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`), which wait for the
+runnability and determinism fixes. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd
+masking) stay queued.
 
 **Flaky test to harden:** `tests/test_warm.py` process-id tests fail when the OS pid counter has wrapped below 1000
 (pids under `PID_MASK_MIN` are deliberately not masked, the 6.8d limit). Seen once on 2026-11-21 (pytest ran as pid

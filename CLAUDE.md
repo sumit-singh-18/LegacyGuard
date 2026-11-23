@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 543 tests after Sprint 7.1). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 591 tests after Sprint 7.6 Part A). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -291,6 +291,58 @@ Plan: docs/research/2026-11-sprint7-4-plan.md (with the reviewer's round-2 corre
 - Follow-ups: Part B (done, see below), 7.4b bwrap overlay, phase 2 imports from the folder, the
   empty-mode relative-read rule, masking cwd paths in `lg_codec.canon` (see HANDOFF).
 
+## Sprint 7.6 Part A (on main, 2026-11-22), contract tools: oasdiff and Django model drift
+
+Plan: docs/research/2026-11-sprint7-6-plan.md (reviewer PASS round 3; user decisions D1-D6, D8 at its top).
+- **`guardlib/contract_tools.py`**: `find` (config `contract_tools.oasdiff: auto|false|<path>`, `makemigrations: auto|false`; else
+  `shutil.which`), cached in `.legacyguard/tools.json` with the binary's stat and version; `run` never raises; decisions
+  come from parsed JSON, never exit codes. `refresh(cfg, reset_counters)`: only SessionStart passes True; Stop and
+  `ci.run` keep the counters. Notes are `(kind, text)` pairs shown once per session (`ledger` `tool_notes`).
+- **oasdiff** (v1.39.0 read at the tag; JSON `level` is an int, 3 ERR / 2 WARN / 1 INFO; `id` may be missing):
+  `checks.check_http_file(..., tools=)` runs `oasdiff breaking <base> <rev> -f json` when the configured contract file
+  is edited, in PreToolUse (timeout `pre_edit_timeout_s`=0.8), at Stop and in `ci.run` (`timeout_s`=20). ERR changes
+  become `Break`s (source `oasdiff`), WARN a context note; anything else (missing tool, timeout, bad JSON, broken YAML,
+  new contract file) falls back to `contracts_parse` exactly as before (`tools=None` is today's path). Each spec text is
+  parsed once (`contracts_parse.http_items_from`). Internal refs only: `--allow-external-refs=false`. Sibling-file
+  `$ref`s: copied into temp trees and run only under `os_sandbox.wrap` (no network, writes only to its temp folder);
+  without an OS sandbox oasdiff is not run (D8). Remote, absolute, out-of-tree, symlinked-out refs, too many or
+  unreadable files: never given to oasdiff. Runs with a temp cwd and no `OASDIFF_CONFIG`, so a project's `.oasdiff.*`
+  is ignored (D5); `--open` is never passed. Skip rule: `tools.json["oasdiff"]["pre_edit_timeouts"]`; a pre-edit
+  timeout adds 1, a run in time sets 0, at 2 PreToolUse skips oasdiff with one note; reset only at SessionStart or
+  when the binary's stat or the config changes (so at most two pre-edit timeouts per session per binary).
+- **Django model drift** (`guardlib/migration_drift.py`, target side `runner/lg_migrations.py`, stdlib, Django imported
+  after `lg_worker.prepare`): `makemigrations --check --dry-run`, non-interactive, verbosity 1, under the worker set-up
+  (blocks, stubs, OS sandbox, throwaway cwd, `-B`), no database. Four patches: `check_consistent_history` and
+  `run_formatters` to no-ops; the non-interactive questioner's not-null and `auto_now_add` questions record a
+  `needs-default:<model>.<field>` item and return None so detection goes on (no exit 3); `detect_conflicts` records
+  `{app: leaves}` and returns {} (no CommandError). Operations are read from `write_migration_files`. Runs in both
+  trees; only items new in the working tree are reported (a conflict is new for a new app or a grown leaf set), so old
+  drift never hides new drift. Baseline result cached in `migration_drift_base` (key: baseline commit, generation,
+  `django_settings`, target interpreter realpath/mtime, io, source_roots, env; Django version checked after the run).
+  - PostToolUse: when a models or migrations file was edited, run outside the ledger lock inside the check's
+    `for_trees` block; a context note only, never a wake on its own (D2).
+  - Stop: `audit.run(cfg, data, log=)` opens one `for_trees` block for drift and the behavioural diff, computes drift
+    before `_contract_findings(drift=...)` so drift items join `seen_items` before the `not_applied` sweep; findings are
+    `contract_break` (D6, source `makemigrations`), `file` = the app's models file, `code_hash` = sha(item) (plus leaves
+    for a conflict), the same in CI. A failed or not-checked run leaves drift findings unchanged.
+  - CI: `ci.run` adds drift breaks after the same waiver key; `Outcome.notes`; third-party app drift
+    (`django-app:<app>`) annotated `::warning` without `file=`.
+- Also: `ledger.SOURCES` gains `oasdiff` and `makemigrations`; fixed a crash when a Django migration `.py` was edited
+  with no `contracts.db` (`audit._migrations` and `pre_edit._read_migrations` did `path / None`); the report has a
+  "Contract tools" line; `requirements-dev.txt` adds `django>=4.2` (D3); oasdiff is not installed in CI (D4).
+- Measured (this Mac): pre_edit with a fast fake oasdiff 0.03 to 0.13 s; with a hanging fake 0.82 s; drift `run_tree`
+  about 0.19 s per tree on the fixture (0.28 s whole process on Django 6.1.3 and 5.2.19).
+- Limits: the real oasdiff binary was never run here (timing, JSON shape only pinned by a fake; tests 14-15 skip
+  without it); Linux bwrap for the sibling-ref path not verified; Django 6.0 not run (5.2.19, 6.1.3 were); no real
+  Django project (`django.setup()` cost unknown); Stop end to end through `stop_audit.handle` not tested; "not checked"
+  notes at Stop are not deduplicated. Only edits to the contract file itself run oasdiff (a `$ref`'d sibling edit is not
+  diffed at PreToolUse). Parser and oasdiff waiver items differ. Drift needs the settings and the DB driver to import in
+  the worker, else "not checked". A renamed field shows as remove plus add. A drift waiver is keyed on Django's one-line
+  description, so it survives a later type change with the same description. Turning the check off mid-session sweeps
+  drift findings to `not_applied` (reads as fixed).
+- Tests: `tests/test_contract_tools.py`, `tests/test_pre_edit_oasdiff.py`, `tests/test_migration_drift.py`
+  (`tests/oasdiff_fake.py` pins the v1.39.0 JSON shape).
+
 ## Sprint 7.1 (on main, 2026-11-22), impact on the resolved call graph
 
 Spec: docs/research/2026-11-sprint7.md row 7.1.
@@ -453,7 +505,7 @@ Plan: docs/research/2026-11-sprint7-2-plan.md section (c). Reviewer PASS in roun
   design. IDs like FR-xx, D-0xx and NFR-xx point into the old docs.
 - MAX_FUNCTIONS=12 targets per edit (routes and callers included). `/legacyguard:impact`, the MCP `impact` tool and the session map resolve callers through imports (7.1); the pre_edit and prompt_context hooks still match by name.
 - Hooks are still short-lived processes (no daemon yet). With Django, the working-tree server still runs `django.setup()` cold in every check.
-- Not yet verified on Linux bubblewrap or on a Django project. Throwaway cwd: see Sprint 7.4 (phase 1, safety only).
+- Not yet verified on Linux bubblewrap or on a real Django project (7.6 drift ran on fixtures only). Throwaway cwd: see Sprint 7.4 (phase 1, safety only).
 
 ## Conventions
 

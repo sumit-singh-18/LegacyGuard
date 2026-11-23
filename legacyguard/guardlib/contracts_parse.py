@@ -27,7 +27,12 @@ def _type_of(schema: dict) -> str:
 
 def http_items(text: str) -> dict[str, str]:
     """route:METHOD /path, param:METHOD /path:name, field:Schema.prop for an OpenAPI document."""
-    spec = yaml.safe_load(text) or {}
+    return http_items_from(yaml.safe_load(text) or {})
+
+
+def http_items_from(spec: dict) -> dict[str, str]:
+    """http_items for an already-parsed document (Sprint 7.6: each text is parsed once per hook)."""
+    spec = spec or {}
     items: dict[str, str] = {}
     for path, ops in (spec.get("paths") or {}).items():
         for method, op in (ops or {}).items():

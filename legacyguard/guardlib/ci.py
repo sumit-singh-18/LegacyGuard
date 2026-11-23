@@ -28,6 +28,7 @@ class Outcome:
     breaks: list = field(default_factory=list)        # (file, checks.Break)
     lines: dict = field(default_factory=dict)         # "file::qualname" -> line in the new file
     skipped: list = field(default_factory=list)       # callers left out of the budget, with reasons (engine.skipped_note)
+    notes: list = field(default_factory=list)         # contract-tool notes (Sprint 7.6): oasdiff fallbacks, model drift
 
     def failing(self, cfg) -> list:
         """Differences that fail the check. One found only on a placeholder instance (Task 6.8c) is not among them: it is
@@ -132,6 +133,8 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
     apply_overrides(cfg, overrides)
     base = base or default_base(root)
     base_dir = _baseline_at(cfg, base)
+    from guardlib import contract_tools
+    contract_tools.refresh(cfg, reset_counters=False)
     if index:
         try:
             from indexer import __main__ as indexer_main
@@ -152,12 +155,15 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
     from runner import scratch
     # Task 7.4: one throwaway working folder per tree for every check of this run. No session cache (Part B): the
     # base worktree is rebuilt per run, and this one block already clones it once for the whole run.
+    tool_notes: list = []
+    tool_timeout = contract_tools.settings(cfg)["timeout_s"]
     with scratch.for_trees(cfg, str(base_dir), root):
         for rel in changed + contract_files:
             before = baseline.read_baseline(cfg, rel)
             after_path = Path(root) / rel
             after = after_path.read_text(errors="replace") if after_path.exists() else ""
-            for b in checks.run_checks(cfg, rel, before, after, http):
+            for b in checks.run_checks(cfg, rel, before, after, http, trees=(str(base_dir), root), notes=tool_notes,
+                                       tool_timeout=tool_timeout):
                 if not waivers.is_waived(cfg, "contract_break", rel, b.item, symbols.sha(after)):
                     out.breaks.append((rel, b))
             if rel not in changed or not engine.is_guarded_source(cfg, rel) or before is None or not after:
@@ -176,7 +182,33 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
                 text = (Path(root) / t.file).read_text(errors="replace") if (Path(root) / t.file).exists() else ""
                 sym = next((s for s in symbols.extract(text)[0] if s.qualname == t.qualname), None)
                 out.lines[f"{t.file}::{t.qualname}"] = sym.line_start if sym else 1
+        _drift(cfg, out, str(base_dir), root, changed + contract_files)
+    out.notes = list(dict.fromkeys([t for _, t in tool_notes] + out.notes))
     return cfg, out
+
+
+def _drift(cfg, out: Outcome, base_dir: str, root: str, files: list[str]) -> None:
+    """Sprint 7.6: Django model drift new since the base, as contract breaks (no session data, no cache)."""
+    from guardlib import migration_drift
+    try:
+        if not any(migration_drift.applies(cfg, rel, _read(Path(root) / rel)) for rel in files):
+            return
+        drift = migration_drift.compute(cfg, base_dir, root, None)
+    except Exception as exc:  # noqa: BLE001 - fails open: a note, no break
+        out.notes.append(f"LegacyGuard: the migration check failed ({type(exc).__name__}).")
+        return
+    if drift.note:
+        out.notes.append(drift.note)
+    for file, b in drift.breaks:
+        if not waivers.is_waived(cfg, "contract_break", file, b.item, migration_drift.code_hash(b)):
+            out.breaks.append((file, b))
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return ""
 
 
 def _esc(text: str) -> str:
@@ -201,7 +233,10 @@ def annotations(cfg, out: Outcome) -> list[str]:
         line = out.lines.get(f"{r.file}::{r.qualname}", 1)
         lines.append(f"::warning file={r.file},line={line},title=LegacyGuard: {r.qualname} differs on a placeholder instance::{_esc(msg)}")
     for rel, b in out.breaks:
-        lines.append(f"::warning file={rel},title=LegacyGuard contract::{_esc(b.text())}")
+        if rel.startswith("django-app:"):  # drift in a third-party app: not a path GitHub can attach to
+            lines.append(f"::warning title=LegacyGuard contract::{_esc(rel + ': ' + b.text())}")
+        else:
+            lines.append(f"::warning file={rel},title=LegacyGuard contract::{_esc(b.text())}")
     return lines
 
 
@@ -257,6 +292,8 @@ def report(cfg, out: Outcome) -> str:
         lines.append("")
     if out.breaks:
         lines += ["### Contract and test changes", ""] + [f"- `{rel}`: {b.text()}" for rel, b in out.breaks] + [""]
+    if out.notes:
+        lines += ["<details><summary>Contract tool notes</summary>", ""] + [f"- {n}" for n in out.notes] + ["", "</details>", ""]
     if verified:
         lines += ["<details><summary>Agree on the inputs tried</summary>", ""]
         for r in verified:

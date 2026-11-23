@@ -25,16 +25,22 @@ def _migrations(cfg):
 
     def reader(rel, before, after):
         def scripts(base: Path):
+            if not folder:  # a Django migration edited with no contracts.db configured (found in Sprint 7.6)
+                return []
             d = base / folder
             return [p.read_text() for p in sorted(d.iterdir()) if p.suffix == ".sql"] if d.is_dir() else []
         return scripts(baseline.baseline_dir(cfg)), scripts(Path(cfg.root))
     return reader
 
 
-def _contract_findings(cfg, data, changed):
+def _contract_findings(cfg, data, changed, drift=None, notes=None):
     http = _baseline_http(cfg)
     reader = _migrations(cfg)
     seen_items = set()
+    from guardlib import contract_tools
+    trees = (str(baseline.baseline_dir(cfg)), cfg.root)
+    timeout = contract_tools.settings(cfg)["timeout_s"]
+    notes = notes if notes is not None else []
     for rel in changed:
         before = baseline.read_baseline(cfg, rel)
         after = virtual.read_current(str(Path(cfg.root) / rel)) or ""
@@ -43,7 +49,7 @@ def _contract_findings(cfg, data, changed):
                                evidence="The working tree differs from the baseline for a file on the frozen list.", item=rel, code_hash=symbols.sha(after))
             continue
         code_hash = symbols.sha(after)
-        for b in checks.run_checks(cfg, rel, before, after, http, reader):
+        for b in checks.run_checks(cfg, rel, before, after, http, reader, trees=trees, notes=notes, tool_timeout=timeout):
             seen_items.add((rel, b.item))
             known = next((f for f in data["findings"] if f["kind"] == "contract_break" and f["file"] == rel and f["item"] == b.item), None)
             if known is not None:
@@ -54,16 +60,63 @@ def _contract_findings(cfg, data, changed):
             ledger.add_finding(data, kind="contract_break", status=ledger.FAILURE, source=b.source, subject=b.subject, file=rel,
                                evidence=f"{b.text()}; found by the session audit, so the edit bypassed the pre-write check", item=b.item, code_hash=code_hash,
                                state="waived" if waived else "open", extra={"contract_kind": b.kind})
+    _drift_findings(cfg, data, drift, seen_items)
     for f in data["findings"]:
         if f["kind"] == "contract_break" and f["state"] in ("open", "applied") and (f["file"], f["item"]) not in seen_items:
             f["state"] = "not_applied"
+
+
+def _drift_findings(cfg, data, drift, seen_items) -> None:
+    """Sprint 7.6: Django model drift as contract_break findings, before the not_applied sweep. A run that was not
+    complete (or only hedged) leaves existing drift findings as they are; drift None (no changed file applies, so
+    nothing can be new) lets the sweep close them."""
+    from guardlib import migration_drift
+    if drift is None:
+        return
+    if drift.state != "checked":
+        for f in data["findings"]:
+            if f["kind"] == "contract_break" and f.get("source") == "makemigrations" and f["state"] in ("open", "applied"):
+                seen_items.add((f["file"], f["item"]))
+        return
+    for file, b in drift.breaks:
+        seen_items.add((file, b.item))
+        known = next((f for f in data["findings"] if f["kind"] == "contract_break" and f["file"] == file and f["item"] == b.item), None)
+        if known is not None:
+            if known["state"] == "not_applied":
+                known["state"] = "open"
+            continue
+        code_hash = migration_drift.code_hash(b)
+        waived = waivers.is_waived(cfg, "contract_break", file, b.item, code_hash)
+        ledger.add_finding(data, kind="contract_break", status=ledger.FAILURE, source="makemigrations", subject=b.subject, file=file,
+                           evidence=f"{b.subject}; found by makemigrations --check --dry-run (no database), new since the baseline",
+                           item=b.item, code_hash=code_hash, state="waived" if waived else "open", extra={"contract_kind": "db"})
+
+
+def _drift(cfg, data, changed, log=None):
+    """The drift outcome for this Stop, or None when no changed file can affect it."""
+    from guardlib import migration_drift
+    root = cfg.root
+    if not any(migration_drift.applies(cfg, rel, virtual.read_current(str(Path(root) / rel))) for rel in changed):
+        return None
+    try:
+        drift = migration_drift.compute(cfg, str(baseline.baseline_dir(cfg)), root, data.get("migration_drift_base") or {}, data=data)
+    except Exception as exc:  # noqa: BLE001 - hooks fail open: a failed run leaves drift findings unchanged
+        if log:
+            log(f"migration drift: {type(exc).__name__}: {exc}")
+        return migration_drift.DriftOutcome("not_checked", note="LegacyGuard: the migration check failed inside LegacyGuard.",
+                                            note_kind="makemigrations-internal")
+    if drift.base_result:
+        data["migration_drift_base"] = drift.base_result
+    migration_drift.record_run(data, drift)
+    return drift
 
 
 def _behavior_findings(cfg, data, changed):
     root = cfg.root
     engine.prune_skipped(data, changed)  # callers skipped for an edit that is no longer in the tree (roadmap 6.5)
     # Task 7.4: one throwaway working folder per tree for the whole audit, prepared only if some check runs; the
-    # baseline's folder is the session's cached one (Part B).
+    # baseline's folder is the session's cached one (Part B). Sprint 7.6: run() opens the block around the drift
+    # check and this; for_trees is re-entrant, so the working tree is cloned at most once per Stop.
     with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root, session_cache=True):
         for rel in changed:
             if not engine.is_guarded_source(cfg, rel):
@@ -121,13 +174,27 @@ def _stale_callers(cfg, data, changed):
         conn.close()
 
 
-def run(cfg, data: dict) -> list[dict]:
-    """Update the ledger from the whole diff. Returns unresolved high-risk findings not yet raised at a Stop."""
+def _report_notes(data, notes: list, drift) -> None:
+    """Contract-tool notes for the session report (Sprint 7.6), each text once."""
+    ct = data.setdefault("contract_tools", {})
+    texts = [t for _, t in notes] + ([drift.note] if drift is not None and drift.note else [])
+    ct["notes"] = list(dict.fromkeys(texts))
+
+
+def run(cfg, data: dict, log=None) -> list[dict]:
+    """Update the ledger from the whole diff. Returns unresolved high-risk findings not yet raised at a Stop.
+    log: a callable taking one string, for errors that must not stop the audit."""
     if not data.get("baseline_ok"):
         return []
     changed = baseline.changed_files(cfg)
-    _contract_findings(cfg, data, changed)
-    _behavior_findings(cfg, data, changed)
+    from guardlib import contract_tools
+    contract_tools.refresh(cfg, reset_counters=False)  # keeps the pre-edit timeout counter (Sprint 7.6)
+    notes: list = []
+    with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), cfg.root, session_cache=True):
+        drift = _drift(cfg, data, changed, log)
+        _contract_findings(cfg, data, changed, drift=drift, notes=notes)
+        _report_notes(data, notes, drift)
+        _behavior_findings(cfg, data, changed)
     _test_with_code(cfg, data, changed)
     _stale_callers(cfg, data, changed)
     return [f for f in data["findings"] if f["status"] in BLOCKING_STATUS and f["state"] == "open" and f["id"] not in data["stop_blocked_for"]

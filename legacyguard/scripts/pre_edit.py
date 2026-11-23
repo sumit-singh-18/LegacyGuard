@@ -15,8 +15,9 @@ GUARD_STATE = ("Files under .legacyguard/ are controlled by the developer throug
 
 def _read_migrations(cfg, rel, before, after):
     from guardlib.contracts_parse import dangerous_statements  # noqa: F401 - keeps imports lazy for speed
-    folder = Path(cfg.root) / cfg.contract_path("db")
-    files = sorted(p for p in folder.iterdir() if p.suffix == ".sql") if folder.is_dir() else []
+    db = cfg.contract_path("db")
+    folder = Path(cfg.root) / db if db else None  # a Django migration with no contracts.db configured (Sprint 7.6)
+    files = sorted(p for p in folder.iterdir() if p.suffix == ".sql") if folder is not None and folder.is_dir() else []
     target = Path(cfg.root) / rel
     scripts_before = [before if p == target else p.read_text() for p in files]
     if not rel.endswith(".sql"):
@@ -111,10 +112,23 @@ def handle(event: dict):
     if rel.endswith(".py") and symbols.has_errors(after) and not symbols.has_errors(current or ""):
         notes.append(f"LegacyGuard: the new content of {rel} does not parse as Python.")
 
-    breaks = checks.run_checks(cfg, rel, current, after, _http_map(cfg), lambda r, b, a: _read_migrations(cfg, r, b, a))
+    # Sprint 7.6: oasdiff for the OpenAPI contract file, under a hard timeout with the parser as fallback. Both trees
+    # are the working tree: the edit changes only the contract file, and "before" is its current text.
+    tool_notes: list = []
+    kwargs = {}
+    if rel == cfg.contract_path("http"):
+        from guardlib import contract_tools
+        kwargs = {"trees": (root, root), "notes": tool_notes, "tool_timeout": contract_tools.settings(cfg)["pre_edit_timeout_s"],
+                  "allow_oasdiff": contract_tools.pre_edit_allowed(cfg), "pre_edit": True}
+    breaks = checks.run_checks(cfg, rel, current, after, _http_map(cfg), lambda r, b, a: _read_migrations(cfg, r, b, a), **kwargs)
     code_hash = symbols.sha(after)
     with ledger.locked(cfg.state_dir) as data:
         data["edits"] += 1
+        shown = []
+        if tool_notes:
+            from guardlib import contract_tools
+            shown = contract_tools.take_notes(data, tool_notes)
+        notes += shown
         if not breaks:
             ctx = _risk_context(cfg, rel, current, after, data)
             text = "\n".join(notes + ([ctx] if ctx else []))
@@ -135,15 +149,18 @@ def handle(event: dict):
     listing = "; ".join(f"[{i}] {b.subject}" for i, b in zip(ids, breaks))
     label = "Test integrity" if all(b.kind == "test" for b in breaks) else "Contract break"
     context = f"{label} in {rel}: {listing}. Contract file: {breaks[0].contract}."
+    tail = ("\n" + "\n".join(shown)) if shown else ""
     if decision.action == "ask":
-        return hook_output(EVENT, decision="ask", context=f"{context} The developer is asked to approve or reject this edit. If it is rejected, keep the existing behavior.",
+        return hook_output(EVENT, decision="ask", context=f"{context} The developer is asked to approve or reject this edit. If it is rejected, keep the existing behavior.{tail}",
                            reason=f"{label}: {listing}. Prompt {used} of {budget}. To accept it for good: /legacyguard:waive {ids[0]} \"<reason>\"")
     if decision.action == "deny":
-        return hook_output(EVENT, decision="deny", context=context,
+        return hook_output(EVENT, decision="deny", context=context + tail,
                            reason=f"{label}: {listing}. Strict mode denies this until the developer runs /legacyguard:waive {ids[0]} \"<reason>\".")
     if decision.over_budget:
-        return hook_output(EVENT, context=f"{context} This session's prompt budget is used up, so the edit was not stopped and the finding goes to the session report.")
-    return hook_output(EVENT, context=context) if decision.include_context else None
+        return hook_output(EVENT, context=f"{context} This session's prompt budget is used up, so the edit was not stopped and the finding goes to the session report.{tail}")
+    if decision.include_context:
+        return hook_output(EVENT, context=context + tail)
+    return hook_output(EVENT, context=tail.strip()) if tail else None
 
 
 if __name__ == "__main__":

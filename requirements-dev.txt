@@ -5,3 +5,5 @@ fastapi>=0.110
 httpx>=0.27
 flask>=3.0
 requests>=2.31
+# Only for testing the Django model-drift check (guardlib/migration_drift.py, Sprint 7.6)
+django>=4.2

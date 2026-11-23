@@ -30,35 +30,63 @@ def handle(event: dict):
             return None
         skipped: list = []  # callers left out of the budget, named in the note (roadmap 6.5)
         targets = engine.targets_for(cfg, rel, data, skipped=skipped)
-    if not targets:
+        base_cached = data.get("migration_drift_base")  # Sprint 7.6: read here, used outside the lock
+        data_snapshot = {"baseline_commit": data.get("baseline_commit")}
+    from guardlib import migration_drift
+    drift_wanted = migration_drift.applies(cfg, rel, text)
+    if not targets and not drift_wanted:
         return None
     from runner import scratch
-    # Task 7.4: one throwaway working folder per tree for the diff and the affected tests together; the baseline's
-    # folder is the session's cached one (Part B), so only the working tree is cloned per check.
+    drift = None
+    results, texts = [], []
+    # Task 7.4: one throwaway working folder per tree for the drift check, the diff and the affected tests together;
+    # the baseline's folder is the session's cached one (Part B), so only the working tree is cloned per check.
     with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), root, session_cache=True):
-        results = differ.run(cfg, str(baseline.baseline_dir(cfg)), root, targets)
+        if drift_wanted:
+            # Sprint 7.6: Django model drift runs project code, so here and not in PreToolUse; never under the ledger
+            # lock. It gives a context note only (D2): the Stop audit turns drift still there into a finding.
+            try:
+                drift = migration_drift.compute(cfg, str(baseline.baseline_dir(cfg)), root, base_cached or {}, data=data_snapshot)
+            except Exception as exc:  # noqa: BLE001 - hooks fail open
+                from _common import log_error
+                log_error(root, f"migration drift: {type(exc).__name__}: {exc}")
+                drift = None
+        if targets:
+            results = differ.run(cfg, str(baseline.baseline_dir(cfg)), root, targets)
         if virtual.read_current(file_path) != text:
             return None  # a newer edit landed while this ran; its own check covers the current code
+        drift_text, drift_kind = migration_drift.context_text(drift)
+        wake = []
         with ledger.locked(cfg.state_dir) as data:
-            wake = engine.record(cfg, data, results)
-            engine.record_isolation(data)
-            if wake:
-                data["wakeups"] += 1
-        texts = [differ.format_wake(r, f["id"]) for f, r in wake[:2]]
-        # The project's own tests that reach the changed code, baseline against now (roadmap C4).
-        try:
-            texts += engine.affected_tests(cfg, rel, targets, file_hash)[:2]
-        except Exception as exc:  # noqa: BLE001 - a test run that cannot start must not hide the diff's result
-            from _common import log_error
-            log_error(root, f"affected tests: {type(exc).__name__}: {exc}")
+            if drift is not None:
+                if drift.base_result:
+                    data["migration_drift_base"] = drift.base_result
+                migration_drift.record_run(data, drift)
+                if drift_text and drift_kind:
+                    from guardlib import contract_tools
+                    drift_text = (contract_tools.take_notes(data, [(drift_kind, drift_text)]) or [None])[0]
+            if targets:
+                wake = engine.record(cfg, data, results)
+                engine.record_isolation(data)
+                if wake:
+                    data["wakeups"] += 1
+        if targets:
+            texts = [differ.format_wake(r, f["id"]) for f, r in wake[:2]]
+            # The project's own tests that reach the changed code, baseline against now (roadmap C4).
+            try:
+                texts += engine.affected_tests(cfg, rel, targets, file_hash)[:2]
+            except Exception as exc:  # noqa: BLE001 - a test run that cannot start must not hide the diff's result
+                from _common import log_error
+                log_error(root, f"affected tests: {type(exc).__name__}: {exc}")
     skipped_text = engine.skipped_note(skipped)
-    if texts:
-        raise Wake("\n\n".join(texts + ([skipped_text] if skipped_text else [])))
+    if not targets:
+        return hook_output("PostToolUse", context=drift_text) if drift_text else None
+    if texts:  # the drift text never wakes by itself (D2); it rides along with a wake
+        raise Wake("\n\n".join(texts + [x for x in (drift_text, skipped_text) if x]))
     # No difference: Claude is told what was run and what that does and does not show, as context only (D-045).
     # Without it Claude cannot know the edit was checked, and repeats the work or assumes nothing looked.
-    note = "\n".join(x for x in (differ.format_note(results), skipped_text) if x)
+    note = "\n".join(x for x in (differ.format_note(results), drift_text, skipped_text) if x)
     return hook_output("PostToolUse", context=note) if note else None
-
 
 if __name__ == "__main__":
     run_hook(handle)

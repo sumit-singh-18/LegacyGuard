@@ -17,6 +17,8 @@ DEFAULTS = {
                         "deterministic": True, "os_sandbox": "auto", "mutants": 8, "io": "stub",
                         "cwd_mode": "auto", "cwd": None},
     "affected_tests": {"enabled": True, "max_tests": 25, "timeout_s": 60},
+    # Sprint 7.6: oasdiff: auto (PATH) | false | a path; makemigrations: auto (when django_settings is set) | false.
+    "contract_tools": {"oasdiff": "auto", "makemigrations": "auto", "pre_edit_timeout_s": 0.8, "timeout_s": 20},
     "alarm_budget": {"max_prompts_per_session": 3, "may_interrupt": ["frozen", "contract_break", "behavior_difference"],
                      "context_only": ["many_callers", "history_coupling", "untested"]},
 }

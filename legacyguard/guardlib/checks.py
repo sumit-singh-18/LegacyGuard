@@ -40,11 +40,7 @@ def _compare(before: dict[str, str], after: dict[str, str]) -> tuple[list[str], 
     return removed, retyped
 
 
-def check_http_file(rel: str, before: str, after: str) -> list[Break]:
-    try:
-        a, b = cp.http_items(before), cp.http_items(after)
-    except Exception:  # noqa: BLE001 - a broken YAML edit: Claude's next step will reveal it; never block on our parse
-        return []
+def _http_breaks(rel: str, a: dict[str, str], b: dict[str, str]) -> list[Break]:
     removed, retyped = _compare(a, b)
     out = []
     for item in removed:
@@ -53,6 +49,60 @@ def check_http_file(rel: str, before: str, after: str) -> list[Break]:
         out.append(Break("http", item, f"{word}: {rest}", "schema", rel))
     out += [Break("http", f"{i}|retype", f"field retyped: {i.split(':', 1)[1]} {x} to {y}", "schema", rel) for i, x, y in retyped if not i.startswith("route:")]
     return out
+
+
+TOOL_NOTE_KIND = {"missing": "oasdiff", "refused": "oasdiff-refused", "failed": "oasdiff-failed", "timeout": "oasdiff-timeout"}
+SLOW_NOTE = ("LegacyGuard: oasdiff took longer than {t} s here twice in a row; the pre-edit check now uses the built-in "
+             "parser, and the Stop audit still runs oasdiff.")
+
+
+def _oasdiff_breaks(rel: str, before: str, after: str, tools, specs) -> list[Break] | None:
+    """Breaks from oasdiff, or None to keep the parser's (with a note in tools.notes saying why)."""
+    from guardlib import contract_tools
+    if not before.strip():
+        return None  # a new contract file: nothing to diff, no note
+    if not tools.allow_oasdiff:
+        tools.notes.append(("oasdiff-slow", SLOW_NOTE.format(t=tools.timeout)))
+        return None
+    res = contract_tools.oasdiff_breaking(tools.cfg, rel, before, after, tools.trees, tools.timeout, specs=specs, pre_edit=tools.pre_edit)
+    if isinstance(res, contract_tools.Refusal):
+        if res.kind in TOOL_NOTE_KIND and res.reason:
+            tools.notes.append((TOOL_NOTE_KIND[res.kind], "LegacyGuard: " + res.reason))
+        return None
+    out = []
+    for change in res.errs:
+        item, subject = contract_tools.break_fields(rel, change)
+        out.append(Break("http", item, subject, "oasdiff", rel))
+    if res.warns:
+        n = len(res.warns)
+        texts = "; ".join(w.get("text") or w.get("id") or "?" for w in res.warns[:3])
+        tools.notes.append((None, f"LegacyGuard: oasdiff also reports {n} possible breaking change{'s' if n != 1 else ''} it cannot confirm "
+                                  f"in {rel}: {texts}."))
+    return out
+
+
+def check_http_file(rel: str, before: str, after: str, tools=None) -> list[Break]:
+    """OpenAPI contract changes. tools (contract_tools.ToolContext) lets oasdiff replace the parser's result for this
+    file; any failure of the tool path falls back to the parser with a note. tools=None: the parser alone."""
+    if tools is None:
+        try:
+            a, b = cp.http_items(before), cp.http_items(after)
+        except Exception:  # noqa: BLE001 - a broken YAML edit: Claude's next step will reveal it; never block on our parse
+            return []
+        return _http_breaks(rel, a, b)
+    try:
+        import yaml
+        a_spec, b_spec = yaml.safe_load(before) or {}, yaml.safe_load(after) or {}
+        a, b = cp.http_items_from(a_spec), cp.http_items_from(b_spec)
+    except Exception:  # noqa: BLE001 - as above; the tool is not run on a spec the parser cannot read either
+        return []
+    parsed = _http_breaks(rel, a, b)
+    try:
+        found = _oasdiff_breaks(rel, before, after, tools, (a_spec, b_spec))
+    except Exception as exc:  # noqa: BLE001 - hooks fail open: the parser's result stands
+        tools.notes.append(("oasdiff-failed", f"LegacyGuard: oasdiff step failed: {type(exc).__name__}; the built-in parser was used."))
+        return parsed
+    return parsed if found is None else found
 
 
 def check_migration(rel: str, folder_scripts_before: list[str], folder_scripts_after: list[str], before: str, after: str) -> list[Break]:
@@ -224,11 +274,22 @@ def check_test_file(rel: str, before: str | None, after: str | None) -> list[Bre
     return out
 
 
-def run_checks(cfg, rel: str, before: str | None, after: str, http: dict[str, str] | None, read_migrations=None) -> list[Break]:
-    """All checks that apply to one file change."""
+def run_checks(cfg, rel: str, before: str | None, after: str, http: dict[str, str] | None, read_migrations=None,
+               trees=None, notes=None, tool_timeout=None, allow_oasdiff=True, pre_edit=False) -> list[Break]:
+    """All checks that apply to one file change. trees (base tree, revision tree) turns on contract tools (oasdiff) for
+    the OpenAPI contract file; their notes go to `notes` as (kind, text) pairs (contract_tools.take_notes)."""
     before_text = before or ""
     if rel == cfg.contract_path("http"):
-        return check_http_file(rel, before_text, after)
+        tools = None
+        if trees is not None:
+            try:
+                from guardlib import contract_tools
+                timeout = tool_timeout if tool_timeout is not None else contract_tools.settings(cfg)["timeout_s"]
+                tools = contract_tools.ToolContext(cfg, tuple(trees), float(timeout), notes if notes is not None else [],
+                                                   allow_oasdiff, pre_edit)
+            except Exception:  # noqa: BLE001 - e.g. a timeout in the config that is not a number: the parser alone
+                tools = None
+        return check_http_file(rel, before_text, after, tools)
     db_dir = cfg.contract_path("db")
     if is_under(rel, db_dir) or ("/migrations/" in rel and rel.endswith(".py")):  # Django keeps a migrations folder per app
         scripts_before, scripts_after = read_migrations(rel, before_text, after) if read_migrations else ([], [])

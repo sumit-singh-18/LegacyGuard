@@ -115,6 +115,11 @@ def start_session(cfg, event):
         return None
     notice = None
     fresh = ledger.fresh(session_id)
+    try:  # Sprint 7.6: find the contract tools again; a new session starts the pre-edit timeout counter at 0
+        from guardlib import contract_tools
+        contract_tools.refresh(cfg, reset_counters=True)
+    except Exception as exc:  # noqa: BLE001 - never stops the session start
+        log_error(cfg.root, f"session_start: contract tools: {exc!r}")
     from runner import scratch
     # Sprint 7.4 Part B: the last session's baseline folder and every retired one are deleted before the rebuild, and
     # again once the ledger is reset: an old-session hook can build a folder while the baseline is half rebuilt (after

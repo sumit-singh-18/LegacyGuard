@@ -220,3 +220,15 @@ until the reviewer passes it. Newest entries at the bottom.
   Optional items done: routes join on every matched definition; tree test checks adjacency and indent; a fallback
   test raises partway. 543 tests on Python 3.12 and 3.10.
 - Task 7.1 review round 2: PASS. Tuning set not re-run (impact views only; no effect on the behavioural diff).
+- Task 7.6 Part A (2026-11-22): contract tools. Plan docs/research/2026-11-sprint7-6-plan.md went through three
+  review rounds before building (round 1: drift hidden behind a baseline exit-3 field or conflict, Stop sweep order and
+  finding identity, oasdiff following URL refs from sibling files outside a sandbox, fail-open gaps, undefined skip
+  rule, incomplete cache key; round 2: the skip counter was reset at every Stop). User decisions D1 (a), D2 (b), D3 yes,
+  D4 no, D5/D6/D8 as recommended. Built: `contract_tools`, oasdiff in `check_http_file` (PreToolUse 0.8 s, Stop, CI)
+  with parser fallback, Django drift via `runner/lg_migrations.py` (four patches, new-only items, PostToolUse note,
+  Stop and CI findings). Fixed an existing crash on Django migration edits with no `contracts.db`. Measured: pre_edit
+  with a fast fake 0.03 to 0.13 s, hanging fake 0.82 s; drift 0.19 s per tree on the fixture. 589 passed, 2 skipped
+  (real oasdiff absent) on Python 3.12 / Django 6.1.3 and 3.10 / Django 5.2.19.
+- Task 7.6 Part A review round 1: REVISE, docs only (criterion 8). Optional items taken: a hook-side test for the
+  migration fix; Stop and CI refresh no longer re-run `oasdiff --version` unless the binary or config changed. 591
+  passed, 2 skipped on 3.12 and 3.10.

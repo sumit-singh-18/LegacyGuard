@@ -19,7 +19,7 @@ RISK = "Potential risk (static only)"
 UNTESTED = "Untested"
 SLOWDOWN = "Slowdown — not a proof of a wrong result"  # Task 6.6: an input timed out only in the new code
 STATUSES = (VERIFIED, FAILURE, DIFFERENCE, RISK, UNTESTED, SLOWDOWN)
-SOURCES = ("names", "tests", "routes", "schema", "history", "diff", "rule")
+SOURCES = ("names", "tests", "routes", "schema", "history", "diff", "rule", "oasdiff", "makemigrations")  # 7.6: contract tools
 
 
 def _path(state_dir: Path) -> Path:
@@ -30,7 +30,7 @@ def fresh(session_id: str | None) -> dict:
     return {"session_id": session_id, "started": dt.datetime.now().isoformat(timespec="seconds"), "baseline_commit": None, "dirty_files": [],
             "baseline_ok": False, "prompt_text": [], "prompts_used": 0, "wakeups": 0, "next_id": 1, "findings": [], "stop_blocked_for": [],
             "outside_notified": [], "context_sent": [], "edits": 0, "report": None, "callers_run": {},
-            "callers_unrunnable": {}, "callers_skipped": {}}
+            "callers_unrunnable": {}, "callers_skipped": {}, "tool_notes": [], "migration_drift_base": None}
 
 
 def load(state_dir: Path) -> dict:

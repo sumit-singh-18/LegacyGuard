@@ -13,7 +13,7 @@ def handle(event: dict):
     blocks, messages = [], []
     for cfg in guards:
         with ledger.locked(cfg.state_dir) as data:
-            unresolved = audit.run(cfg, data)
+            unresolved = audit.run(cfg, data, log=lambda m, root=cfg.root: log_error(root, m))
             if unresolved and not event.get("stop_hook_active"):
                 data["stop_blocked_for"] += [f["id"] for f in unresolved]
                 blocks.append(audit.block_reason(unresolved))
