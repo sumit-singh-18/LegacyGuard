@@ -142,7 +142,7 @@ def run_tree(cfg, tree: str, timeout: float) -> dict | None:
             cmd = os_sandbox.wrap([py, "-B", str(SCRIPT), str(req)], py, writable=writable,
                                   readonly=[str(cfg.root), tree], mode=str(bd.get("os_sandbox", "auto")))
             try:
-                done = subprocess.run(cmd, cwd=cwd.path, env=env, capture_output=True, text=True, timeout=timeout)
+                done = os_sandbox.run(cmd, timeout, cwd=cwd.path, env=env, capture_output=True, text=True)
             except subprocess.TimeoutExpired:
                 return {"error": f"timed out after {timeout} s", "kind": "timeout"}
             except OSError as exc:

@@ -260,7 +260,8 @@ def _bump_timeouts(cfg, timed_out: bool) -> None:
 def _run(cmd: list[str], timeout: float, cwd: str | None, env: dict | None) -> tuple[Completed | None, str, bool]:
     started = time.time()
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
+        from runner import os_sandbox  # kills the whole process group on a timeout (a sandboxed oasdiff too)
+        res = os_sandbox.run(cmd, timeout, capture_output=True, text=True, cwd=cwd, env=env)
     except subprocess.TimeoutExpired:
         return None, f"timed out after {timeout} s", True
     except (OSError, ValueError) as exc:

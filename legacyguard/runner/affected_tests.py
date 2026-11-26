@@ -108,7 +108,7 @@ def run(cfg, tree_root: str, nodeids: list[str], timeout: float) -> dict[str, di
         cmd = os_sandbox.wrap(cmd, py, writable=writable, readonly=[str(cfg.root), tree_root],
                               mode=str(cfg.behavioral_diff.get("os_sandbox", "auto")))
         try:
-            subprocess.run(cmd, cwd=cwd.path, env=env, capture_output=True, text=True, timeout=timeout)
+            os_sandbox.run(cmd, timeout, cwd=cwd.path, env=env, capture_output=True, text=True)
         except (subprocess.TimeoutExpired, OSError):
             return {}
         return _parse_junit(report, tree_root)

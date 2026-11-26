@@ -50,7 +50,8 @@ def run_suite(cfg, timeout: int = 600, extra_args: list[str] | None = None) -> t
         cmd = [py, "-m", "coverage", "run", f"--rcfile={rc}", f"--data-file={data_file}", "-m", "pytest", "-q", "-p", "no:cacheprovider",
                "-p", "legacyguard_harvest", "--no-header", *(extra_args or [])]
         try:
-            res = subprocess.run(cmd, cwd=cfg.root, env=env, capture_output=True, text=True, timeout=timeout)
+            from runner import os_sandbox
+            res = os_sandbox.run(cmd, timeout, cwd=cfg.root, env=env, capture_output=True, text=True)  # the project's tests: end every process on a timeout
         except subprocess.TimeoutExpired:
             return None, f"test suite timed out after {timeout}s", data_file
         except OSError as exc:

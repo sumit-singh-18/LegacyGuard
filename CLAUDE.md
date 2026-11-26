@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 630 tests after Sprint 7.6 Part B). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 633 tests after the 7.6 Part B process-group fix). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -401,6 +401,23 @@ only, M1 block the Stop once, D10 a paused check restarts only on a cache-key ch
   a `run_tree` thread is not waited for. Unverified: the real oasdiff binary (JSON loading, timing, rule output for a
   rename, default change, pure component rename), FastAPI with pydantic v1 or versions other than 0.162.x, Linux
   bubblewrap. Do not validate it on held-out set 2.
+- **Fix after Part B (process groups):** on CI's bubblewrap 0.11.1 a timed-out `subprocess.run` killed only bwrap; the
+  Python inside was reparented to init and kept spinning (test 17's hanging import left three spec builds at ~90% CPU
+  for the whole suite, so an unrelated regex-draw test ran out of time on every Ubuntu job). `os_sandbox.run(cmd,
+  timeout, ...)` has `subprocess.run` semantics, starts the child in its own session and on timeout (or any other
+  exception) kills the whole process group with SIGKILL, then reaps it before raising. Used by every runner of project
+  code: the diff worker, affected tests, route introspection, coverage map, Django drift, the spec build, the sandbox
+  probe, and `contract_tools._run` (oasdiff). Left alone on purpose: `warm.py`'s long-lived server (already its own
+  session) and `inputs.py`'s guard-side regex child. Tests: `tests/test_process_group.py`; test 17 checks its three
+  build pids are gone. Limits: grandchildren left after a clean exit are not killed; the reap can add up to 5 s; a
+  KeyboardInterrupt landing after the child was reaped could in principle `killpg` a reused group id (tiny window).
+  Side effects: children no longer share the hook's process group, so a kill aimed at the hook's group (if Claude Code
+  ends a timed-out hook that way, which is inference, not known) no longer reaches them; bwrap's `--die-with-parent`
+  (short-lived runs) and the worker's per-call alarm still bound them on Linux, but on macOS and without an OS sandbox a
+  hung spec build, drift run, introspection import, coverage pytest or oasdiff would keep running. On Linux the
+  sandboxed Python is not the session leader, so project code calling `os.setsid()` at import leaves the group and
+  escapes the timeout kill (not refused by the worker today; `--unshare-pid` or refusing setsid/setpgid would close it;
+  reasoning only, not run).
 - Tests: `tests/test_app_openapi.py` (21, real FastAPI; module skip without it, Flask test has its own importorskip),
   `tests/test_app_openapi_guard.py` (18, canned builds, no FastAPI).
 

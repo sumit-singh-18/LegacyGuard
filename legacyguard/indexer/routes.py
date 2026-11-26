@@ -91,7 +91,7 @@ def introspect(cfg, timeout: int = 60, root: str | None = None) -> list[list] | 
                       f"DJANGO={cfg.raw.get('django_settings')!r}\n" + INTROSPECT)
             cmd = os_sandbox.wrap([py, "-B", "-c", script], py, writable=[tempfile.gettempdir(), tmp], readonly=[root],
                                   mode=str(bd.get("os_sandbox", "auto")))
-            res = subprocess.run(cmd, cwd=root, env=clean_env(cfg), capture_output=True, text=True, timeout=timeout)
+            res = os_sandbox.run(cmd, timeout, cwd=root, env=clean_env(cfg), capture_output=True, text=True)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
     for line in res.stdout.splitlines():

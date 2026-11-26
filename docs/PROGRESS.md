@@ -244,4 +244,11 @@ until the reviewer passes it. Newest entries at the bottom.
   builds (1 in 25 runs failed); it now probes with a shared lock; (2) a finding's evidence kept its first hedge text when
   its status changed; evidence is now rebuilt on every transition and test 11c checks it. Round 2: PASS. 630 passed, 2
   skipped on Python 3.12 and 3.10; test 18 passed 40 of 40 solo runs. Tuning set not re-run (no tuning case has `app:`).
+- CI after 7.6 Part B (fe0d0c5): 3 Ubuntu jobs failed (one regex-draw test out of time; suite 217 s -> 400 s) and
+  macOS 3.13 once (a one-off; green on re-run). Not reproducible on this Mac or in an Ubuntu 24.04 container (bwrap
+  0.9.0). A temporary CI branch with `--durations` and `ps` samples showed three orphaned spec builds (PPID 1, ~90% CPU)
+  from test 17 under bwrap 0.11.1: `subprocess.run`'s timeout killed bwrap but not the Python inside. Fix:
+  `os_sandbox.run` kills the process group, used by every runner of project code. On the diagnostic branch: 633 passed,
+  2 skipped in 270 s, no orphans. Reviewer: code correct; docs and limits (own session per child, `os.setsid` escape on
+  Linux) recorded. 633 passed, 2 skipped on Python 3.12 and 3.10.
 

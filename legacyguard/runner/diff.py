@@ -313,7 +313,7 @@ def _run_worker(cfg, py: str, root: str, sys_path: list[str], functions: list[di
         cmd = os_sandbox.wrap([py, "-B", str(WORKER), str(req), str(res)], py, writable=writable,
                               readonly=[str(cfg.root), root], mode=str(bd.get("os_sandbox", "auto")))
         try:
-            done = subprocess.run(cmd, cwd=cwd.path, env=env, capture_output=True, text=True, timeout=timeout)
+            done = os_sandbox.run(cmd, timeout, cwd=cwd.path, env=env, capture_output=True, text=True)
         except subprocess.TimeoutExpired:
             return {FAILED: "timed out"}
         except OSError as exc:

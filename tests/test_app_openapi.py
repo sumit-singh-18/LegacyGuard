@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -452,14 +453,44 @@ def test_encoding_of_replaced_openapi_results(tmp_path, make_cfg, monkeypatch):
 
 # 17
 def test_hanging_import_times_out(tmp_path, make_cfg, monkeypatch):
-    hang = {**FILES, "svc/models.py": "while True:\n    pass\n"}
-    p = Project(tmp_path, make_cfg, monkeypatch, base=hang, contract_tools={"timeout_s": 2})
-    started = time.perf_counter()
-    out = app_openapi.compute(p.cfg, str(p.base), str(p.root), None, {"baseline_commit": "c1"})
-    took = time.perf_counter() - started
-    assert took < 5
-    assert out.state == "not_checked" and "timed out" in out.note and app_openapi.REL not in out.note
-    assert "lgoas" not in out.note and str(tmp_path) not in out.note
+    import tempfile
+    piddir = tempfile.mkdtemp(prefix="lgpids")  # the temp folder is writable for the worker at import
+    try:
+        hang = {**FILES, "svc/models.py": (f"import os\nopen(os.path.join({piddir!r}, str(os.getpid())), 'w').write('x')\n"
+                                           "while True:\n    pass\n")}
+        p = Project(tmp_path, make_cfg, monkeypatch, base=hang, contract_tools={"timeout_s": 2})
+        started = time.perf_counter()
+        out = app_openapi.compute(p.cfg, str(p.base), str(p.root), None, {"baseline_commit": "c1"})
+        took = time.perf_counter() - started
+        assert took < 5
+        assert out.state == "not_checked" and "timed out" in out.note and app_openapi.REL not in out.note
+        assert "lgoas" not in out.note and str(tmp_path) not in out.note
+        # Every lg_openapi process it started is gone (under bubblewrap the timed-out Python used to outlive bwrap).
+        pids = [int(n) for n in os.listdir(piddir)]
+        assert len(pids) == 3  # base A, base B and the working tree all reached the loop
+        end, left = time.time() + 1.0, pids
+        while left and time.time() < end:
+            left = [x for x in left if _alive(x)]
+            time.sleep(0.05)
+        for x in left:
+            try:
+                os.kill(x, 9)
+            except OSError:
+                pass
+        assert left == []
+    finally:
+        shutil.rmtree(piddir, ignore_errors=True)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 # 19

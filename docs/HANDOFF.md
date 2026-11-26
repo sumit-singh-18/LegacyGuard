@@ -31,7 +31,7 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
   3.10, 3.12, 3.13; the `guard` job runs on PRs only). Working tree clean apart from the runtime folders
   `.legacyguard/` and `.claude/worktrees/` (never commit them). Recent commits: e839724 7.2b, ebd86f6 7.4 Part B,
   c3fe2f0 7.1, e90ff7f 7.6 Part A, then 7.6 Part B (see `git log`).
-- **630 tests** (2 skipped: the real-oasdiff tests, no binary here) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
+- **633 tests** (2 skipped: the real-oasdiff tests, no binary here) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
   about 230 to 300 s, Django 6.1.3 installed) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`).
   **The 3.10 venv was recreated on 2026-11-26** (it was corrupt again: no `pyvenv.cfg`); FastAPI 0.162.5, Django 5.2.19
   installed. If tests import-fail there, do `/private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`. If the venv is gone, recreate it with
@@ -152,6 +152,12 @@ noise filter, cached per session in `.legacyguard/app_openapi_base.json`) and di
 PostToolUse wake (also with no function targets), Stop finding that blocks once, CI annotation. Optional follow-ups:
 run the real oasdiff on a generated spec (JSON loading, rule levels behind the noise filter, a pure `$ref` rename);
 FastAPI with pydantic v1; a real FastAPI app's import cost; Linux bwrap.
+
+**Process-group fix after Part B (2026-11-26, committed on main).** Part B's first CI run failed on Ubuntu: timed-out
+sandboxed children survived under bwrap 0.11.1 (found with a temporary `diag/ci-durations` branch, deleted afterwards).
+`os_sandbox.run` now kills the whole process group; see CLAUDE.md "Fix after Part B". Open: project code calling
+`os.setsid()` at import escapes the kill on Linux (`--unshare-pid` or refusing setsid/setpgid would close it); a hung
+child is no longer killed with the hook's process group on macOS or without an OS sandbox.
 
 **Next (start here):** 7.6 Part C, squawk for `.sql` files under `contracts.db` (Part A plan section 10: latest
 release v2.74.0 per the GitHub releases API at the time; `squawk --reporter json --stdin-filepath` per earlier research,
