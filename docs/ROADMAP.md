@@ -360,6 +360,14 @@ The app's generated spec is built in both trees by `runner/lg_openapi.py` (basel
 diffed with oasdiff or the parser; PostToolUse wake, Stop finding, CI annotation. Catches a schema-only change (a model
 field renamed) that no route or function diff sees. Sprint 7 items left: 7.6 C (squawk) and D (buf), 7.5, 7.7.
 
+**7.6 Part C done (2026-11-26):** plan `docs/research/2026-11-sprint7-6c-plan.md` (reviewed in 3 rounds; user decisions
+D8 one real-binary check, D7 `squawk-cli==2.74.0` in dev requirements and CI, D3 squawk's own break set). squawk
+lints `.sql` migrations under `contracts.db` in PreToolUse (0.8 s cap), Stop and CI, with our own config and ignore
+comments neutralised; its breaking rules add to the regex items, locking rules are notes; every failure falls back to
+the regexes. Real binary run once: JSON and positions confirmed, about 5 ms per run. Sprint 7 items left: 7.6 D (buf),
+7.5, 7.7. Follow-ups: a squawk veto of regex hits in comments and strings (D2 c); a version-gated short list of opt-in
+rules (D9).
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
 validation on the FastAPI and Flask apps picked in run 1's research.

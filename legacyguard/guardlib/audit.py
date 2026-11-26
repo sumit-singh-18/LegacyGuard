@@ -33,7 +33,7 @@ def _migrations(cfg):
     return reader
 
 
-def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None):
+def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None, tool_state=None):
     http = _baseline_http(cfg)
     reader = _migrations(cfg)
     seen_items = set()
@@ -42,6 +42,7 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None):
     timeout = contract_tools.settings(cfg)["timeout_s"]
     notes = notes if notes is not None else []
     static_oas: list = []  # (file, Break) from oasdiff on the static contract file, for the code-first dedupe (D5)
+    tool_state = {} if tool_state is None else tool_state  # Sprint 7.6 Part C: one per Stop (squawk's time rule)
     for rel in changed:
         before = baseline.read_baseline(cfg, rel)
         after = virtual.read_current(str(Path(cfg.root) / rel)) or ""
@@ -50,7 +51,8 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None):
                                evidence="The working tree differs from the baseline for a file on the frozen list.", item=rel, code_hash=symbols.sha(after))
             continue
         code_hash = symbols.sha(after)
-        for b in checks.run_checks(cfg, rel, before, after, http, reader, trees=trees, notes=notes, tool_timeout=timeout):
+        for b in checks.run_checks(cfg, rel, before, after, http, reader, trees=trees, notes=notes, tool_timeout=timeout,
+                                   tool_state=tool_state):
             seen_items.add((rel, b.item))
             if b.source == "oasdiff":
                 static_oas.append((rel, b))
@@ -63,11 +65,23 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None):
             ledger.add_finding(data, kind="contract_break", status=ledger.FAILURE, source=b.source, subject=b.subject, file=rel,
                                evidence=f"{b.text()}; found by the session audit, so the edit bypassed the pre-write check", item=b.item, code_hash=code_hash,
                                state="waived" if waived else "open", extra={"contract_kind": b.kind})
+    _squawk_kept(data, tool_state, seen_items)
     _drift_findings(cfg, data, drift, seen_items)
     _oas_findings(cfg, data, oas, seen_items, static_oas)
     for f in data["findings"]:
         if f["kind"] == "contract_break" and f["state"] in ("open", "applied") and (f["file"], f["item"]) not in seen_items:
             f["state"] = "not_applied"
+
+
+def _squawk_kept(data, tool_state: dict, seen_items: set) -> None:
+    """Sprint 7.6 Part C (D11): a .sql file squawk did not lint at this Stop (missing, timed out, failed, stopped by the
+    time rule, or no longer parsing) keeps its open squawk findings out of the not_applied sweep; squawk said nothing
+    about them. Switched off (kind `off`) keeps nothing, so the sweep closes them, as for drift."""
+    kinds = tool_state.get("squawk_unchecked_kind") or {}
+    for f in data["findings"]:
+        if (f["kind"] == "contract_break" and f.get("source") == "squawk" and f["state"] in ("open", "applied")
+                and kinds.get(f["file"]) not in (None, "off")):
+            seen_items.add((f["file"], f["item"]))
 
 
 def _drift_findings(cfg, data, drift, seen_items) -> None:

@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 633 tests after the 7.6 Part B process-group fix). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 705 tests after 7.6 Part C). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -420,6 +420,63 @@ only, M1 block the Stop once, D10 a paused check restarts only on a cache-key ch
   reasoning only, not run).
 - Tests: `tests/test_app_openapi.py` (21, real FastAPI; module skip without it, Flask test has its own importorskip),
   `tests/test_app_openapi_guard.py` (18, canned builds, no FastAPI).
+
+## Sprint 7.6 Part C (on main, 2026-11-26), squawk for SQL migrations
+
+Plan: docs/research/2026-11-sprint7-6c-plan.md (reviewer PASS round 3; user decisions D8 one real-binary check, D7 (b)
+`squawk-cli==2.74.0` in `requirements-dev.txt`, D3 squawk's own break set, the rest as recommended).
+- **Where:** `.sql` files under `contracts.db` only (a Django migration `.py` never runs squawk). PreToolUse (cap
+  `pre_edit_timeout_s`=0.8, skip rule per tool: `pre_edit_allowed(cfg, "squawk")`, `_bump_timeouts(..., tool)`), Stop
+  and `ci.run`, through `checks.run_checks(..., allow_squawk, tool_state)`; not PostToolUse (D1). Config
+  `contract_tools.squawk: auto|false|<path>`, optional `squawk_pg_version` (quoted string, `^[0-9]{1,4}(\.[0-9]{1,4}){0,2}$`;
+  ints taken, floats and bools refused with a note) and `squawk_assume_in_transaction` (default false) (D6).
+- **Run (`contract_tools.squawk_lint`):** `prepare()` strips a BOM, turns `\r\n` and lone `\r` into `\n` (squawk breaks
+  lines on all three) and rewrites `squawk-ignore*` comments to the same length so they silence nothing (D5). A fresh
+  `lg-squawk-*` folder is the cwd; squawk gets `--reporter json --config squawk.toml [before.sql] after.sql` (relative:
+  squawk globs every path), our own config file (so a project `.squawk.toml` found by squawk's walk-up search is
+  ignored), `input=b""`, no `--include`/`--exclude`, env without `GITHUB_ACTIONS` and `SQUAWK_*`. Through
+  `_run(cmd, timeout, cwd, env, input=None, text=True)` and `os_sandbox.run` (process-group kill); `text=False` decodes
+  UTF-8 with `errors="replace"`; oasdiff's call is unchanged. Results come from parsed JSON (exit code only checked for
+  consistency); any `level: "Error"` (syntax error) is a `parse` refusal.
+- **Mapping (D3, `SQUAWK_CLASSES`):** break = the 21 default-on rules squawk tags "backwards compatibility" plus
+  `ban-drop-column`; risk = locking and run-time rules, one context/report/CI note per file, never a finding (D4);
+  ignored = `prefer-*`, `ban-char-field`, timeout rules, enum ordering, `unused-ignore`; unknown rule names are counted
+  ("1 unknown rule ignored", capped list of 20 in `tools.json`). Opt-in rules are never enabled (D9).
+- **Items (D2 a, supplement):** the regex items (`contracts_parse.dangerous_statements`, now built on
+  `dangerous_statement_spans`) are unchanged; squawk adds `Break`s (source `squawk`, `Break.line` set) only for
+  violations in the new text that are not in the old. Key `squawk:<rule>:<window[:80]>:<sha12(window)>`, the window
+  being the enclosing statement found on comment-blanked text. A squawk item is dropped when one of the five overlapping
+  rules hits a statement a new regex item already covers, or when a `ban-drop-column`/`renaming-column` window names
+  the table and column of a new SQLite `column:<t>.<c>` item.
+- **Fail-open:** missing binary (one note per session, only when a `.sql` under `contracts.db` is checked, D10), bad
+  configured path, timeout, failed start, bad output, parse error or an exception: the regex check alone, one note per
+  kind, the file marked unchecked with a kind (`off, missing, timeout, unstartable, failed, parse, slow, stopped`).
+  **Time rule:** at Stop and in `ci.run` (one `tool_state` per run) the first timeout or failed start stops squawk for
+  the rest of the run; later files get the regex check only with one `squawk-stopped` note (bounds the time spent
+  under the ledger lock).
+- **Lifecycle (D11, `audit._squawk_kept`):** switched off (`squawk: false`) sweeps open squawk findings to `not_applied`
+  ("squawk switched off" in the report); every other unchecked kind keeps them open.
+- Also: `ledger.SOURCES` gains `squawk`; CI annotations carry `line=` when known; the "Contract tools" report line shows
+  a squawk part when `contracts.db` is set; the `--version` probe in `refresh` runs through `os_sandbox.run`.
+- Measured (squawk-cli 2.74.0, macOS arm64): direct run median 0.0046 s; `squawk_lint` 0.0066 s; whole `pre_edit.handle`
+  in process 0.008 s with squawk, 0.0015 s without. The real binary confirmed the JSON shape (squawk's own snapshots
+  byte for byte), zero-based lines and UTF-8 byte columns, BOM and CR handling, exit codes (1 for config, missing-file
+  and non-UTF-8 errors, 2 for usage errors), `--config` replacing the walk-up search, and that block comments and string
+  literals are not reported by squawk.
+- Limits: PostgreSQL only (SQLite `AUTOINCREMENT`, MySQL backticks fail to parse: regex check only, with a note); the
+  regex items still fire on statements inside `/* */` comments or strings (squawk does not; a veto is a follow-up, D2 c);
+  the 25 compatibility-tagged opt-in rules (e.g. `ban-drop-index`, `ban-drop-trigger`, `ban-set-default`) are not run;
+  squawk-only items exist only where squawk ran (a PreToolUse timeout followed by a clean Stop gives a new open finding
+  that blocks the Stop once; CI without squawk has none); waivers hold only while the file's hash is unchanged;
+  `_blank_comments` treats `--` or `/*` inside a string or dollar-quoted body as a comment, which can cut the key window
+  short (key stability, not detection); a binary that finishes each file just under the timeout is not stopped by the
+  time rule; a squawk found on a project-local `PATH` folder is trusted (regex items survive). With
+  `assume_in_transaction` true, squawk 2.74.0 reports `ban-concurrent-index-creation-in-transaction` only after an
+  explicit `BEGIN` (the plan's D6 text said every one). `ALTER TABLE t DROP identity` is a column drop to squawk; the
+  fake excludes that word. Unverified: Linux and musl builds before CI, a panic's exit code, no network calls (inferred),
+  hook timing as a separate process.
+- Tests: `tests/test_sql_migration_checks.py` (today's regex behaviour pinned first), `tests/test_squawk.py` (fake and
+  real binary; real tests find squawk on `PATH` or in pip's scripts folder), `tests/squawk_fake.py`.
 
 ## Sprint 7.1 (on main, 2026-11-22), impact on the resolved call graph
 

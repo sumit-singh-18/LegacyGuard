@@ -7,3 +7,5 @@ flask>=3.0
 requests>=2.31
 # Only for testing the Django model-drift check (guardlib/migration_drift.py, Sprint 7.6)
 django>=4.2
+# Only for testing the SQL migration check (squawk, Sprint 7.6 Part C); pinned: tests pin its JSON shape
+squawk-cli==2.74.0

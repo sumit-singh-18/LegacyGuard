@@ -252,3 +252,15 @@ until the reviewer passes it. Newest entries at the bottom.
   2 skipped in 270 s, no orphans. Reviewer: code correct; docs and limits (own session per child, `os.setsid` escape on
   Linux) recorded. 633 passed, 2 skipped on Python 3.12 and 3.10.
 
+- Task 7.6 Part C (2026-11-26): squawk for `.sql` migrations under `contracts.db`. Plan
+  docs/research/2026-11-sprint7-6c-plan.md went through three review rounds (round 1: lone-CR line breaks, spans and
+  windows on different texts, a 120-char key that could hide a new break, no time bound at Stop under the ledger lock,
+  D9's reason contradicted squawk's tags, absolute temp paths globbed, decoy configs in the real temp folder, undecided
+  lifecycle when squawk is off, a double finding with the SQLite diff; round 2: fake `--version` calls counted, a missing
+  unchecked kind, stale summary, `_run` text mode). User decisions: D8 one real-binary check, D7 squawk-cli 2.74.0 in
+  dev requirements and CI, D3 squawk's own break set, the rest as recommended. Built in `contract_tools`, `checks`,
+  `pre_edit`, `audit`, `ci`; regex items unchanged, squawk adds breaks. Real binary: JSON shape and positions confirmed,
+  median 0.0046 s per run. 704 passed, 2 skipped on Python 3.12 and 3.10.
+- Task 7.6 Part C build review round 1: REVISE (test 7 asserted no `GITHUB_*` names reach squawk, which fails on
+  every Actions runner). Fixed, plus a BOM escape, the pg-version note only when squawk runs, a warm-up in the timing
+  test. Round 2: PASS. 705 passed, 2 skipped on Python 3.12 and 3.10.

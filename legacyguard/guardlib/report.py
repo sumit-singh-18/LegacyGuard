@@ -158,10 +158,10 @@ def isolation_line(data: dict) -> str:
 
 
 def tools_line(data: dict, cfg) -> str:
-    """Sprint 7.6: which contract tools ran (oasdiff, makemigrations --check), or "" when none applies here."""
+    """Sprint 7.6: which contract tools ran (oasdiff, squawk, makemigrations --check), or "" when none applies here."""
     try:
         from guardlib import contract_tools
-        if not (cfg.contract_path("http") or (data.get("contract_tools") or {}).get("makemigrations")
+        if not (cfg.contract_path("http") or cfg.contract_path("db") or (data.get("contract_tools") or {}).get("makemigrations")
                 or (data.get("contract_tools") or {}).get("notes") or (data.get("contract_tools") or {}).get("app_openapi")
                 or data.get("app_openapi")):
             return ""

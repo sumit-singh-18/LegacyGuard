@@ -120,6 +120,11 @@ def handle(event: dict):
         from guardlib import contract_tools
         kwargs = {"trees": (root, root), "notes": tool_notes, "tool_timeout": contract_tools.settings(cfg)["pre_edit_timeout_s"],
                   "allow_oasdiff": contract_tools.pre_edit_allowed(cfg), "pre_edit": True}
+    elif rel.endswith(".sql") and checks.is_under(rel, cfg.contract_path("db")):
+        # Sprint 7.6 Part C: squawk on a SQL migration, same cap and skip rule, the regex patterns as fallback
+        from guardlib import contract_tools
+        kwargs = {"trees": (root, root), "notes": tool_notes, "tool_timeout": contract_tools.settings(cfg)["pre_edit_timeout_s"],
+                  "allow_squawk": contract_tools.pre_edit_allowed(cfg, "squawk"), "pre_edit": True, "tool_state": {}}
     breaks = checks.run_checks(cfg, rel, current, after, _http_map(cfg), lambda r, b, a: _read_migrations(cfg, r, b, a), **kwargs)
     code_hash = symbols.sha(after)
     with ledger.locked(cfg.state_dir) as data:

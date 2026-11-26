@@ -1,4 +1,7 @@
-"""External contract tools (Sprint 7.6 Part A): find a tool, cache what was found, run it, never raise.
+"""External contract tools (Sprint 7.6 Parts A and C): find a tool, cache what was found, run it, never raise.
+
+squawk (Part C) lints `.sql` files under `contracts.db` (PostgreSQL only); its breaking rules add to the built-in
+regex items, they never replace them (`squawk_lint`, `squawk_items`, `checks._squawk_breaks`).
 
 oasdiff (`oasdiff breaking <base> <revision> -f json`) replaces the built-in OpenAPI parser for the configured
 contract file when it is installed. Every public function here catches `Exception` and returns None or a safe value.
@@ -44,7 +47,7 @@ MAX_REF_BYTES = 5 * 2**20
 MAX_DEPTH = 200
 SKIP_AFTER_TIMEOUTS = 2
 VERSION_TIMEOUT_S = 2
-TOOLS = ("oasdiff",)
+TOOLS = ("oasdiff", "squawk")  # Sprint 7.6 Part C: squawk for .sql files under contracts.db
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _LEVELS = {"ERR": 3, "err": 3, "error": 3, "WARN": 2, "warn": 2, "warning": 2, "INFO": 1, "info": 1}
 
@@ -77,22 +80,28 @@ class OasResult:
 
 @dataclass
 class Refusal:
-    """oasdiff did not give a usable result. kind: skip (new contract file, no note), off (switched off, no note),
-    missing, refused, failed, timeout. reason is the note text without the "LegacyGuard: " prefix."""
+    """A tool did not give a usable result. kind: skip (new contract file, no note), off (switched off, no note),
+    missing, refused, failed, timeout; squawk also unstartable and parse. reason is the note text without the
+    "LegacyGuard: " prefix."""
     reason: str
     kind: str = "refused"
 
 
 @dataclass
 class ToolContext:
-    """What check_http_file needs to run a tool: trees = (base tree, revision tree) for sibling `$ref` files; notes
-    collects (kind, text) pairs, kind None for notes that are shown every time."""
+    """What check_http_file (oasdiff) and check_migration (squawk) need to run a tool: trees = (base tree, revision
+    tree) for sibling `$ref` files; notes collects (kind, text) pairs, kind None for notes that are shown every time.
+    state (Sprint 7.6 Part C): one dict per Stop, ci.run or hook call, shared by every file of that run: the files
+    squawk did not lint (`squawk_unchecked`, with the reason in `squawk_unchecked_kind`) and the time rule
+    (`squawk_stopped`: the file whose timeout or failed start stopped squawk for the rest of the run)."""
     cfg: object
     trees: tuple
     timeout: float
     notes: list = field(default_factory=list)
     allow_oasdiff: bool = True
     pre_edit: bool = False
+    allow_squawk: bool = True
+    state: dict | None = None
 
 
 def settings(cfg) -> dict:
@@ -103,6 +112,9 @@ def settings(cfg) -> dict:
     out.setdefault("oasdiff", "auto")
     out.setdefault("makemigrations", "auto")
     out.setdefault("openapi_from_app", "auto")  # Sprint 7.6 Part B (D8): auto | false
+    out.setdefault("squawk", "auto")  # Sprint 7.6 Part C: auto | false | <path>
+    out.setdefault("squawk_pg_version", None)
+    out.setdefault("squawk_assume_in_transaction", False)
     out.setdefault("pre_edit_timeout_s", 0.8)
     out.setdefault("timeout_s", 20)
     return out
@@ -227,7 +239,8 @@ def refresh(cfg, reset_counters: bool) -> None:
                 e["pre_edit_timeouts"] = 0
             if e.get("path"):
                 try:
-                    res = subprocess.run([e["path"], "--version"], capture_output=True, text=True, timeout=VERSION_TIMEOUT_S)
+                    from runner import os_sandbox  # the probe's whole process group is killed on a timeout
+                    res = os_sandbox.run([e["path"], "--version"], VERSION_TIMEOUT_S, capture_output=True, text=True)
                     words = (res.stdout or "").strip().splitlines()[:1]
                     e["version"] = words[0].split()[-1] if words and words[0].split() else None
                 except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -239,17 +252,17 @@ def refresh(cfg, reset_counters: bool) -> None:
         pass
 
 
-def pre_edit_allowed(cfg) -> bool:
+def pre_edit_allowed(cfg, name: str = "oasdiff") -> bool:
     """False after SKIP_AFTER_TIMEOUTS pre-edit timeouts in a row this session (with this binary and config value)."""
     try:
-        return int(_entry(cfg, "oasdiff").get("pre_edit_timeouts") or 0) < SKIP_AFTER_TIMEOUTS
+        return int(_entry(cfg, name).get("pre_edit_timeouts") or 0) < SKIP_AFTER_TIMEOUTS
     except Exception:  # noqa: BLE001
         return True
 
 
-def _bump_timeouts(cfg, timed_out: bool) -> None:
+def _bump_timeouts(cfg, timed_out: bool, name: str = "oasdiff") -> None:
     data = _load(cfg)
-    e = data.get("oasdiff")
+    e = data.get(name)
     if isinstance(e, dict):
         e["pre_edit_timeouts"] = int(e.get("pre_edit_timeouts") or 0) + 1 if timed_out else 0
         _save(cfg, data)
@@ -257,16 +270,23 @@ def _bump_timeouts(cfg, timed_out: bool) -> None:
 
 # ---- running ----
 
-def _run(cmd: list[str], timeout: float, cwd: str | None, env: dict | None) -> tuple[Completed | None, str, bool]:
+def _run(cmd: list[str], timeout: float, cwd: str | None, env: dict | None, input=None,
+         text: bool = True) -> tuple[Completed | None, str, bool]:
+    """input None: the child inherits stdin. text=False: output is read as bytes and decoded here as UTF-8 with
+    errors="replace", so Completed.stdout/stderr are always str and a stray byte never raises."""
     started = time.time()
     try:
         from runner import os_sandbox  # kills the whole process group on a timeout (a sandboxed oasdiff too)
-        res = os_sandbox.run(cmd, timeout, capture_output=True, text=True, cwd=cwd, env=env)
+        res = os_sandbox.run(cmd, timeout, input=input, capture_output=True, text=text, cwd=cwd, env=env)
     except subprocess.TimeoutExpired:
         return None, f"timed out after {timeout} s", True
     except (OSError, ValueError) as exc:
         return None, f"could not start: {type(exc).__name__}: {exc}"[:300], False
-    return Completed(res.returncode, res.stdout or "", res.stderr or "", round(time.time() - started, 3)), "", False
+    out, err = res.stdout or "", res.stderr or ""
+    if not text:
+        out = out.decode("utf-8", errors="replace") if isinstance(out, bytes) else out
+        err = err.decode("utf-8", errors="replace") if isinstance(err, bytes) else err
+    return Completed(res.returncode, out, err, round(time.time() - started, 3)), "", False
 
 
 def run(cmd: list[str], timeout: float, cwd: str | None, env: dict | None = None, cfg=None, name: str | None = None) -> Completed | None:
@@ -483,6 +503,257 @@ def break_fields(rel: str, change: dict) -> tuple[str, str]:
     return item, subject
 
 
+# ---- squawk (Sprint 7.6 Part C) ----
+
+SQUAWK_MISSING_NOTE = ("LegacyGuard: squawk was not found, so the SQL migration check used its built-in patterns. Install "
+                       "squawk (`pip install squawk-cli`) or set contract_tools.squawk in .legacyguard/config.yaml.")
+SQUAWK_CONFIG_NOTE = ('LegacyGuard: contract_tools.squawk_pg_version must be a quoted version like "13" or "13.4"; squawk '
+                      "used its default, Postgres 15.")
+SQUAWK_FILES = ("before.sql", "after.sql")
+MAX_UNKNOWN_RULES = 20
+_PG_VERSION = re.compile(r"^[0-9]{1,4}(\.[0-9]{1,4}){0,2}$")
+_IGNORE_COMMENT = re.compile(r"squawk-(ignore|disable-assume-in-transaction)", re.I)
+_SQL_COMMENT = re.compile(rb"--[^\n]*|/\*.*?(?:\*/|\Z)", re.S)
+
+# Classes from squawk's own tags at v2.74.0 (docs/src/pages/index.js), D3: break = the default-on "backwards
+# compatibility" rules plus ban-drop-column; risk = locking and run-time rules; ignored = style, timeouts and any name
+# not listed here (a newer squawk's rule, counted in tools.json squawk.unknown_rules).
+_BREAK_RULES = ("ban-drop-column", "renaming-column", "renaming-table", "ban-drop-table", "changing-column-type",
+                "adding-required-field", "ban-drop-database", "ban-drop-not-null", "ban-truncate-cascade", "ban-drop-view",
+                "ban-drop-function", "ban-drop-type", "ban-drop-default", "ban-drop-schema", "ban-drop-sequence",
+                "ban-drop-domain", "ban-drop-constraint", "ban-drop-generated-expression", "renaming-object",
+                "ban-set-schema", "ban-alter-identity", "ban-drop-extension")
+_RISK_RULES = ("adding-field-with-default", "adding-foreign-key-constraint", "adding-not-nullable-field",
+               "adding-serial-primary-key-field", "constraint-missing-not-valid", "disallowed-unique-constraint",
+               "require-concurrent-index-creation", "require-concurrent-index-deletion",
+               "require-concurrent-partition-detach", "require-concurrent-reindex", "transaction-nesting",
+               "ban-concurrent-index-creation-in-transaction", "ban-uncommitted-transaction",
+               "ban-create-domain-with-constraint", "ban-alter-domain-with-add-constraint", "identifier-too-long",
+               "ban-duplicate-column-assignments")
+_IGNORED_RULES = ("prefer-robust-stmts", "prefer-repack", "prefer-text-field", "require-lock-timeout",
+                  "require-statement-timeout", "prefer-bigint-over-int", "prefer-bigint-over-smallint", "prefer-identity",
+                  "prefer-timestamp-tz", "prefer-timestamptz", "ban-char-field", "require-enum-value-ordering",
+                  "unused-ignore", "syntax-error")
+SQUAWK_CLASSES = {**{r: "break" for r in _BREAK_RULES}, **{r: "risk" for r in _RISK_RULES},
+                  **{r: "ignored" for r in _IGNORED_RULES}}
+
+
+@dataclass
+class SquawkResult:
+    before: list[dict]   # violations in the old text (empty for a new file)
+    after: list[dict]
+    seconds: float
+
+
+@dataclass
+class SquawkItem:
+    key: str        # squawk:<rule>:<window[:80]>:<sha12(window)>
+    rule: str
+    cls: str        # break | risk | ignored
+    line: int       # 1-based, in the prepared text
+    message: str
+    window: str     # the normalised enclosing statement
+    span: tuple     # (start, end) character offsets of that statement in the prepared after text
+
+
+def prepare(text: str | None) -> str:
+    """The text squawk sees, and every offset is computed on: one leading BOM stripped, `\\r\\n` and a lone `\\r` turned
+    into `\\n` (squawk's line index breaks lines at all three), and `squawk-ignore...` /
+    `squawk-disable-assume-in-transaction` comments neutralised by a same-length rewrite (`-` to `_`)."""
+    s = text or ""
+    if s.startswith("\ufeff"):
+        s = s[1:]
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return _IGNORE_COMMENT.sub(lambda m: m.group(0).replace("-", "_"), s)
+
+
+def squawk_pg_version(cfg) -> tuple[str | None, str | None]:
+    """(value to pass as --pg-version or None, note text or None). A YAML float (13.4, 13.10) is refused: it may no longer
+    be what the user wrote. A string must be ASCII digits, at most 4 per part, at most three parts."""
+    value = settings(cfg).get("squawk_pg_version")
+    if value is None:
+        return None, None
+    if isinstance(value, bool) or isinstance(value, float):
+        return None, SQUAWK_CONFIG_NOTE
+    if isinstance(value, int):
+        value = str(value)
+    if isinstance(value, str) and _PG_VERSION.match(value.strip()):
+        return value.strip(), None
+    return None, SQUAWK_CONFIG_NOTE
+
+
+def _assume_in_transaction(cfg) -> bool:
+    return settings(cfg).get("squawk_assume_in_transaction") is True
+
+
+def _int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def parse_squawk(stdout: str) -> list[dict] | None:
+    """The violations from `squawk --reporter json` (one flat array over all files), or None when any element is not the
+    v2.74.0 shape. Positions are zero-based (line; column as a UTF-8 byte offset in that line)."""
+    try:
+        data = json.loads(stdout)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, list):
+        return None
+    out = []
+    for x in data:
+        if not isinstance(x, dict):
+            return None
+        if not (isinstance(x.get("file"), str) and _int(x.get("line")) and _int(x.get("column"))
+                and x.get("level") in ("Warning", "Error") and isinstance(x.get("rule_name"), str)
+                and isinstance(x.get("message"), str)):
+            return None
+        line_end = x.get("line_end", x["line"])
+        column_end = x.get("column_end", x["column"])
+        if not (_int(line_end) and _int(column_end)):
+            return None
+        if any(x.get(k) is not None and not isinstance(x.get(k), str) for k in ("note", "help")):
+            return None
+        out.append({"file": x["file"], "line": x["line"], "column": x["column"], "level": x["level"],
+                    "message": x["message"], "note": x.get("note"), "help": x.get("help"), "rule_name": x["rule_name"],
+                    "line_end": line_end, "column_end": column_end})
+    return out
+
+
+def squawk_lint(cfg, rel: str, before: str | None, after: str, timeout: float, pre_edit: bool = False):
+    """SquawkResult or Refusal (kinds off, missing, unstartable, timeout, failed, parse). Never raises.
+    squawk runs once, in a fresh temp folder that is its cwd, on the relative names before.sql (only when the old text
+    has content) and after.sql, with our own --config file (so no .squawk.toml above the folder is read), stdin empty,
+    and no GITHUB_ACTIONS or SQUAWK_* variables. pre_edit: a timeout adds 1 to squawk's pre-edit counter, a run in time
+    sets it to 0."""
+    tmp = None
+    try:
+        tool = find("squawk", cfg)
+        if tool is None:
+            reason = find_reason("squawk", cfg)
+            if reason == "switched off":
+                return Refusal("", "off")
+            if reason.startswith("configured path"):
+                return Refusal(f"squawk {reason}, so the SQL migration check used its built-in patterns.", "missing")
+            return Refusal(SQUAWK_MISSING_NOTE[len("LegacyGuard: "):], "missing")
+        try:
+            after_bytes = prepare(after).encode("utf-8")
+            before_bytes = prepare(before).encode("utf-8") if before and before.strip() else None
+        except UnicodeError:
+            return Refusal(f"squawk was not run on {rel}: the text is not valid UTF-8; the built-in patterns were used.",
+                           "failed")
+        tmp = tempfile.mkdtemp(prefix="lg-squawk-")
+        with open(os.path.join(tmp, "after.sql"), "wb") as fh:
+            fh.write(after_bytes)
+        if before_bytes is not None:
+            with open(os.path.join(tmp, "before.sql"), "wb") as fh:
+                fh.write(before_bytes)
+        assume = _assume_in_transaction(cfg)
+        with open(os.path.join(tmp, "squawk.toml"), "w") as fh:
+            fh.write(f"assume_in_transaction = {'true' if assume else 'false'}\n")
+        cmd = [tool.path, "--reporter", "json", "--config", "squawk.toml"]
+        version, _ = squawk_pg_version(cfg)
+        if version:
+            cmd += ["--pg-version", version]
+        if assume:
+            cmd.append("--assume-in-transaction")
+        cmd += (["before.sql"] if before_bytes is not None else []) + ["after.sql"]
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS" and not k.startswith("SQUAWK_")}
+        env["SQUAWK_DISABLE_GITHUB_ANNOTATIONS"] = "1"
+        done, reason, timed_out = _run(cmd, timeout, tmp, env, input=b"", text=False)
+        _update(cfg, "squawk", last_seconds=done.seconds if done else None,
+                last_error=None if done else ("timeout: " if timed_out else "") + reason)
+        if pre_edit and (done is not None or timed_out):
+            _bump_timeouts(cfg, timed_out, "squawk")
+        if done is None:
+            if timed_out:
+                return Refusal(f"squawk took longer than {timeout:g} s on {rel}; the built-in patterns were used.", "timeout")
+            return Refusal(f"squawk could not run ({reason}); the built-in patterns were used.", "unstartable")
+        found = parse_squawk(done.stdout)
+        if found is None:
+            first = (done.stderr or "").strip().splitlines()[:1]
+            if done.returncode and first:
+                return Refusal(f"squawk could not check {rel}: {first[0][:200]}; the built-in patterns were used.", "failed")
+            return Refusal("squawk printed output LegacyGuard could not read; the built-in patterns were used.", "failed")
+        if done.returncode not in (0, 1) or (done.returncode == 0) != (not found):
+            return Refusal(f"squawk exited with code {done.returncode}; the built-in patterns were used.", "failed")
+        sides = {"before.sql": [], "after.sql": []}
+        for v in found:
+            if v["file"] not in sides:  # squawk prints each path as given; anything else is not our file
+                return Refusal("squawk reported a file LegacyGuard did not give it; the built-in patterns were used.", "failed")
+            sides[v["file"]].append(v)
+        for name, side in (("after.sql", "the new text"), ("before.sql", "the old text")):
+            err = next((v for v in sides[name] if v["level"] == "Error"), None)
+            if err is not None:
+                return Refusal(f"squawk could not parse {side} of {rel} as PostgreSQL (line {err['line'] + 1}: "
+                               f"{err['message'][:120]}); the built-in patterns were used.", "parse")
+        return SquawkResult(sides["before.sql"], sides["after.sql"], done.seconds)
+    except Exception as exc:  # noqa: BLE001
+        return Refusal(f"squawk step failed (internal error: {type(exc).__name__}); the built-in patterns were used.", "failed")
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _blank_comments(b: bytes) -> bytes:
+    """b with every `--` comment and `/* */` comment (not nested; an unclosed one runs to the end) overwritten with
+    spaces of the same byte length, newlines kept."""
+    return _SQL_COMMENT.sub(lambda m: re.sub(rb"[^\n]", b" ", m.group()), b)
+
+
+def _windows(prepared: str, violations: list[dict]) -> list[tuple[dict, str, tuple]]:
+    """(violation, normalised enclosing statement, (start, end) character span of that statement) per violation."""
+    b = prepared.encode("utf-8")
+    blank = _blank_comments(b)
+    starts = [0] + [i + 1 for i, ch in enumerate(b) if ch == 0x0A]
+    out = []
+
+    def offset(line, column):
+        return min(starts[line] + column, len(b)) if line < len(starts) else len(b)
+
+    def chars(n):
+        return len(b[:n].decode("utf-8", errors="ignore"))
+    for v in violations:
+        start = offset(v["line"], v["column"])
+        end = max(start, offset(v["line_end"], v["column_end"]))
+        lo = blank.rfind(b";", 0, start) + 1
+        hi = blank.find(b";", max(start, end - 1))
+        hi = len(blank) if hi < 0 else hi
+        window = " ".join(blank[lo:hi].decode("utf-8", errors="replace").replace('"', "").replace("`", "").split()).lower()
+        out.append((v, window or f"line-{v['line'] + 1}", (chars(lo), chars(hi))))
+    return out
+
+
+def squawk_items(before: str | None, after: str, result: SquawkResult) -> tuple[list[SquawkItem], list[str]]:
+    """(the items new in after, in file order, one per key; unknown rule names seen in after). Item key =
+    squawk:<rule>:<first 80 characters of the normalised statement>:<sha12 of the whole statement>."""
+    old = {f"squawk:{v['rule_name']}:{w[:80]}:{_sha12(w)}" for v, w, _ in _windows(prepare(before), result.before)}
+    items: dict[str, SquawkItem] = {}
+    unknown: list[str] = []
+    for v, w, span in _windows(prepare(after), result.after):
+        rule = v["rule_name"]
+        cls = SQUAWK_CLASSES.get(rule)
+        if cls is None:
+            unknown.append(rule)
+            cls = "ignored"
+        key = f"squawk:{rule}:{w[:80]}:{_sha12(w)}"
+        if key in old or key in items:
+            continue
+        items[key] = SquawkItem(key, rule, cls, v["line"] + 1, v["message"], w, span)
+    return list(items.values()), sorted(set(unknown))
+
+
+def record_unknown_rules(cfg, names: list[str]) -> None:
+    """Add rule names squawk reported that SQUAWK_CLASSES does not know to tools.json (capped), for the report."""
+    if not names:
+        return
+    data = _load(cfg)
+    e = data.get("squawk")
+    if isinstance(e, dict):
+        known = list(e.get("unknown_rules") or [])
+        e["unknown_rules"] = (known + [n for n in names if n not in known])[:MAX_UNKNOWN_RULES]
+        _save(cfg, data)
+
+
 def take_notes(data: dict, notes: list) -> list[str]:
     """The note texts to show now: kind None always; any other kind once per session (session.json tool_notes)."""
     out = []
@@ -517,6 +788,27 @@ def _app_openapi_part(data: dict) -> str:
     return f"app OpenAPI: {count}"
 
 
+def _squawk_part(cfg) -> str:
+    """Sprint 7.6 Part C: the squawk part of the "Contract tools" line, only when contracts.db is set (D10)."""
+    if not cfg.contract_path("db"):
+        return ""
+    e = _load(cfg).get("squawk") or {}
+    if e.get("path"):
+        text = f"squawk {e.get('version') or '(version unknown)'} ({e['path']})"
+        if e.get("last_seconds") is not None:
+            text += f", last run {e['last_seconds']:.2f} s"
+        elif e.get("last_error"):
+            text += f", last run failed ({e['last_error'][:80]})"
+    elif e.get("reason") == "switched off" or str(_config_value(cfg, "squawk")).lower() in ("false", "off", "no"):
+        text = "squawk switched off"
+    else:
+        text = "squawk not found"
+    n = len(e.get("unknown_rules") or [])
+    if n:
+        text += f", {n} unknown rule{'s' if n != 1 else ''} ignored"
+    return text
+
+
 def report_line(cfg, data: dict) -> str:
     """The "Contract tools" line of the session report."""
     try:
@@ -533,6 +825,9 @@ def report_line(cfg, data: dict) -> str:
             parts.append("oasdiff switched off")
         else:
             parts.append("oasdiff not found")
+        squawk = _squawk_part(cfg)
+        if squawk:
+            parts.append(squawk)
         mig = (data.get("contract_tools") or {}).get("makemigrations") or {}
         if mig.get("runs"):
             parts.append(f"makemigrations --check: Django {mig.get('django') or '?'}, {mig['runs']} run{'s' if mig['runs'] != 1 else ''}")

@@ -2,7 +2,7 @@
 
 Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read docs/HANDOFF.md and continue."
 
-**Next task: Sprint 7.6 Part C (squawk for `.sql` under `contracts.db`).** See "Next (start here)" below. Run it with `/sprint-loop`
+**Next task: Sprint 7.6 Part D (buf for `.proto` contracts, Stop only).** See "Next (start here)" below. Run it with `/sprint-loop`
 (plan first, reviewed, user decisions asked, then build and review).
 
 ## Rules the user set (keep these)
@@ -27,17 +27,18 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` with **7.6 Part B** on top of e90ff7f (7.6 Part A). CI was green on all 6 jobs (macOS and Ubuntu, Python
+- `main` is pushed to `origin/main` with **7.6 Part C** (squawk) on top of 7.6 Part B and the process-group fix. CI was green on all 6 jobs (macOS and Ubuntu, Python
   3.10, 3.12, 3.13; the `guard` job runs on PRs only). Working tree clean apart from the runtime folders
   `.legacyguard/` and `.claude/worktrees/` (never commit them). Recent commits: e839724 7.2b, ebd86f6 7.4 Part B,
-  c3fe2f0 7.1, e90ff7f 7.6 Part A, then 7.6 Part B (see `git log`).
-- **633 tests** (2 skipped: the real-oasdiff tests, no binary here) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
+  c3fe2f0 7.1, e90ff7f 7.6 Part A, fe0d0c5 7.6 Part B, ab1edb3 process-group fix, then 7.6 Part C (see `git log`).
+- **705 tests** (2 skipped: the real-oasdiff tests, no binary here; squawk-cli 2.74.0 is installed in both venvs, so its
+  real-binary tests run) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
   about 230 to 300 s, Django 6.1.3 installed) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`).
   **The 3.10 venv was recreated on 2026-11-26** (it was corrupt again: no `pyvenv.cfg`); FastAPI 0.162.5, Django 5.2.19
   installed. If tests import-fail there, do `/private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`. If the venv is gone, recreate it with
   `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310` and the same pip line. Without Django the drift
   tests skip instead of failing, so check the skip count (expect 2).
-- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1, 7.6 Part A and Part B are done. Left: 7.6 Parts C and D, 7.5, 7.7
+- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1, 7.6 Parts A, B and C are done. Left: 7.6 Part D, 7.5, 7.7
   (see "Next" below).
 - The run 3 and run 4 write-ups and the README headline (held-out set 2) are committed.
 
@@ -159,11 +160,18 @@ sandboxed children survived under bwrap 0.11.1 (found with a temporary `diag/ci-
 `os.setsid()` at import escapes the kill on Linux (`--unshare-pid` or refusing setsid/setpgid would close it); a hung
 child is no longer killed with the hook's process group on macOS or without an OS sandbox.
 
-**Next (start here):** 7.6 Part C, squawk for `.sql` files under `contracts.db` (Part A plan section 10: latest
-release v2.74.0 per the GitHub releases API at the time; `squawk --reporter json --stdin-filepath` per earlier research,
-flags and JSON fields **unverified**; would replace the regexes in `contracts_parse.dangerous_statements` for SQL when
-present; PreToolUse-capable if fast). It needs its own short plan and review, like Part B. Then Part D buf (Stop only;
-flags and JSON unverified). After 7.6: 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`). The 7.4 follow-ups
+**7.6 Part C done (2026-11-26, plan reviewed in 3 rounds, build reviewer PASS round 2, committed on main).** See
+CLAUDE.md "Sprint 7.6 Part C" and `docs/research/2026-11-sprint7-6c-plan.md` (user decisions at its top). squawk lints
+`.sql` migrations under `contracts.db` (PreToolUse, Stop, CI), adds its breaking rules to the regex items, and falls
+back to the regexes on any failure. The real squawk 2.74.0 was run once (JSON and positions confirmed, about 5 ms) and
+is now in `requirements-dev.txt`, so CI runs the real-binary tests. Optional follow-ups: a squawk veto of regex hits in
+comments and strings (D2 c); a version-gated short list of opt-in rules (D9); refusing a tool binary resolved inside
+the project (squawk and oasdiff).
+
+**Next (start here):** 7.6 Part D, buf (latest v1.75.0 per Part A plan section 10) at Stop only: `buf breaking <tree>
+--against <baseline dir> --error-format json` per earlier research; flags and JSON **unverified**; needs a `buf.yaml`
+in the project. It needs its own short plan and review, like Parts B and C (ask the user before any download, as D8
+was asked for squawk). After 7.6: 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`). The 7.4 follow-ups
 (7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd masking) stay queued. 7.6 Part A optional follow-ups: run
 the real oasdiff once (timing, JSON shape against `tests/oasdiff_fake.py`); Linux bwrap sibling-ref path; Django 6.0
 and a real Django project; Stop end to end through `stop_audit.handle`; dedupe "not checked" notes at Stop.

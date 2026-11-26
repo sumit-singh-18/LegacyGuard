@@ -157,13 +157,14 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
     # base worktree is rebuilt per run, and this one block already clones it once for the whole run.
     tool_notes: list = []
     tool_timeout = contract_tools.settings(cfg)["timeout_s"]
+    tool_state: dict = {}  # Sprint 7.6 Part C: one per run (squawk's time rule)
     with scratch.for_trees(cfg, str(base_dir), root):
         for rel in changed + contract_files:
             before = baseline.read_baseline(cfg, rel)
             after_path = Path(root) / rel
             after = after_path.read_text(errors="replace") if after_path.exists() else ""
             for b in checks.run_checks(cfg, rel, before, after, http, trees=(str(base_dir), root), notes=tool_notes,
-                                       tool_timeout=tool_timeout):
+                                       tool_timeout=tool_timeout, tool_state=tool_state):
                 if not waivers.is_waived(cfg, "contract_break", rel, b.item, symbols.sha(after)):
                     out.breaks.append((rel, b))
             if rel not in changed or not engine.is_guarded_source(cfg, rel) or before is None or not after:
@@ -265,7 +266,8 @@ def annotations(cfg, out: Outcome) -> list[str]:
         if rel.startswith(("django-app:", "app:")):  # drift in a third-party app, or an app ref: not a path GitHub can attach to
             lines.append(f"::warning title=LegacyGuard contract::{_esc(rel + ': ' + b.text())}")
         else:
-            lines.append(f"::warning file={rel},title=LegacyGuard contract::{_esc(b.text())}")
+            where = f"file={rel},line={b.line}" if getattr(b, "line", None) else f"file={rel}"
+            lines.append(f"::warning {where},title=LegacyGuard contract::{_esc(b.text())}")
     return lines
 
 

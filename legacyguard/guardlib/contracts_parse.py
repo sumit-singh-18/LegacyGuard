@@ -77,14 +77,20 @@ _DANGEROUS = [(re.compile(r"\bDROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?[\"`]?(\w+)", r
               (re.compile(r"\b(?:migrations\.)?RenameModel\s*\([^)]*old_name\s*=\s*['\"](\w+)", re.S), "table renamed")]
 
 
+def dangerous_statement_spans(text: str) -> dict[str, list[int]]:
+    """{statement item: [character offset of each match]} in one migration's text. `--` comments are blanked with
+    spaces (same length, newlines kept), not removed, so every offset points into the original text (Sprint 7.6 C)."""
+    blanked = re.sub(r"--[^\n]*", lambda m: " " * len(m.group()), text)
+    out: dict[str, list[int]] = {}
+    for pattern, label in _DANGEROUS:
+        for m in pattern.finditer(blanked):
+            out.setdefault(f"{label}:{m.group(1)}", []).append(m.start())
+    return out
+
+
 def dangerous_statements(text: str) -> dict[str, str]:
     """{statement item: description} found in one migration's text. Works for SQL and Django migrations."""
-    no_comments = re.sub(r"--[^\n]*", "", text)
-    out: dict[str, str] = {}
-    for pattern, label in _DANGEROUS:
-        for m in pattern.finditer(no_comments):
-            out[f"{label}:{m.group(1)}"] = label
-    return out
+    return {item: item.split(":", 1)[0] for item in dangerous_statement_spans(text)}
 
 
 def sql_schema(scripts: list[str]) -> dict[str, str] | None:
