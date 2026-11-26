@@ -4,6 +4,15 @@ The fake is a Python script at <base>/bin/oasdiff. It appends its argv, cwd and 
 <base>/calls.jsonl (best effort: inside the OS sandbox that file is not writable), then behaves per <base>/mode.
 The pinned sample has the fields and types of `formatters.Change` at oasdiff v1.39.0 (`level` an integer); the ids
 are illustrative and no test depends on real rule ids.
+
+Part B modes (the two spec files are read as JSON):
+- `diff` mirrors oasdiff's levels as read in checker/rules.go at v1.39.0: for every schema present in both
+  `components.schemas`, a removed property is level 3 ("property '<p>' removed from <schema>", at the first operation
+  that refers to the schema); a changed `default` is level 1 (INFO, as ResponsePropertyDefaultValueChangedId); a
+  changed `operationId` is level 1 (as APIOperationIdRemovedId/AddId). `breaking` prints WARN and up, so only levels
+  >= 2 are printed: an all-INFO diff prints `[]`.
+- `diff-loud`: the same, but a changed `default` is level 2 at the first operation whose request body refers to the
+  schema. A stand-in to exercise the hedge path; real oasdiff gives INFO for a default change.
 """
 from __future__ import annotations
 
@@ -61,13 +70,54 @@ elif mode == "slow":
     print(json.dumps(sample))
 '''
 
+DIFF_CODE = r'''
+if mode in ("diff", "diff-loud"):
+    with open(sys.argv[2]) as fh:
+        old = json.load(fh)
+    with open(sys.argv[3]) as fh:
+        new = json.load(fh)
+
+    def where(spec, name, body_only):
+        ref = json.dumps("#/components/schemas/" + name)
+        for path in sorted(spec.get("paths") or {}):
+            for method in sorted(spec["paths"][path] or {}):
+                op = spec["paths"][path][method]
+                part = op.get("requestBody") if body_only else op
+                if part is not None and ref in json.dumps(part):
+                    return method.upper(), path
+        return "", ""
+
+    out = []
+    sa = (old.get("components") or {}).get("schemas") or {}
+    sb = (new.get("components") or {}).get("schemas") or {}
+    for name in sorted(set(sa) & set(sb)):
+        pa, pb = sa[name].get("properties") or {}, sb[name].get("properties") or {}
+        for p in sorted(set(pa) - set(pb)):
+            op, path = where(old, name, False)
+            out.append({"id": "fake-property-removed", "text": "property '%s' removed from %s" % (p, name), "level": 3,
+                        "operation": op, "path": path, "section": "components"})
+        for p in sorted(set(pa) & set(pb)):
+            if (pa[p] or {}).get("default") != (pb[p] or {}).get("default"):
+                loud = mode == "diff-loud"
+                op, path = where(old, name, True) if loud else where(old, name, False)
+                out.append({"id": "fake-default-changed", "text": "default of '%s' changed in %s" % (p, name),
+                            "level": 2 if loud else 1, "operation": op, "path": path, "section": "components"})
+    for path in sorted(set(old.get("paths") or {}) & set(new.get("paths") or {})):
+        for method in sorted(set(old["paths"][path] or {}) & set(new["paths"][path] or {})):
+            a, b = old["paths"][path][method].get("operationId"), new["paths"][path][method].get("operationId")
+            if a != b:
+                out.append({"id": "fake-operation-id-changed", "text": "operationId changed", "level": 1,
+                            "operation": method.upper(), "path": path, "section": "paths"})
+    print(json.dumps([x for x in out if x["level"] >= 2]))
+'''
+
 
 def install(base: Path, mode: str = "ok") -> Path:
     """Write the fake to base/bin/oasdiff and set its mode. Returns the bin folder."""
     bin_dir = base / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     path = bin_dir / "oasdiff"
-    path.write_text(SCRIPT.format(python=sys.executable, base=str(base), sample=json.dumps(SAMPLE)))
+    path.write_text(SCRIPT.format(python=sys.executable, base=str(base), sample=json.dumps(SAMPLE)) + DIFF_CODE)
     os.chmod(path, 0o755)
     set_mode(base, mode)
     return bin_dir

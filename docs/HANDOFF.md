@@ -1,8 +1,8 @@
-# Handoff (2026-11-25)
+# Handoff (2026-11-26)
 
 Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read docs/HANDOFF.md and continue."
 
-**Next task: Sprint 7.6 Part B (code-first OpenAPI).** See "Next (start here)" below. Run it with `/sprint-loop`
+**Next task: Sprint 7.6 Part C (squawk for `.sql` under `contracts.db`).** See "Next (start here)" below. Run it with `/sprint-loop`
 (plan first, reviewed, user decisions asked, then build and review).
 
 ## Rules the user set (keep these)
@@ -27,17 +27,17 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` at **e90ff7f** (7.6 Part A). CI was green on all 6 jobs (macOS and Ubuntu, Python
+- `main` is pushed to `origin/main` with **7.6 Part B** on top of e90ff7f (7.6 Part A). CI was green on all 6 jobs (macOS and Ubuntu, Python
   3.10, 3.12, 3.13; the `guard` job runs on PRs only). Working tree clean apart from the runtime folders
   `.legacyguard/` and `.claude/worktrees/` (never commit them). Recent commits: e839724 7.2b, ebd86f6 7.4 Part B,
-  c3fe2f0 7.1, e90ff7f 7.6 Part A.
-- **591 tests** (2 skipped: the real-oasdiff tests, no binary here) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
+  c3fe2f0 7.1, e90ff7f 7.6 Part A, then 7.6 Part B (see `git log`).
+- **630 tests** (2 skipped: the real-oasdiff tests, no binary here) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
   about 230 to 300 s, Django 6.1.3 installed) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`).
-  **The 3.10 venv lost Django** (temp cleanup; seen 2026-11-25): before running it, do
-  `/private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`. If the venv is gone, recreate it with
+  **The 3.10 venv was recreated on 2026-11-26** (it was corrupt again: no `pyvenv.cfg`); FastAPI 0.162.5, Django 5.2.19
+  installed. If tests import-fail there, do `/private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`. If the venv is gone, recreate it with
   `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310` and the same pip line. Without Django the drift
   tests skip instead of failing, so check the skip count (expect 2).
-- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1 and 7.6 Part A are done. Left: 7.6 Parts B to D, 7.5, 7.7
+- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1, 7.6 Part A and Part B are done. Left: 7.6 Parts C and D, 7.5, 7.7
   (see "Next" below).
 - The run 3 and run 4 write-ups and the README headline (held-out set 2) are committed.
 
@@ -145,18 +145,22 @@ hook end-to-end and ledger-lock hold time not measured; a per-session parse cach
 in `requirements-dev.txt` (installed in `.venv-dev` 6.1.3 and the 3.10 venv 5.2.19). Unverified: the real oasdiff
 binary (never run here), Linux bwrap sibling-ref path, Django 6.0, a real Django project.
 
-**Next (start here):** 7.6 Part B, code-first OpenAPI (plan `docs/research/2026-11-sprint7-6-plan.md` section 10):
-a worker spec `kind: "openapi"` that loads the app with `lg_worker.load_app` in both trees (as routes do, with
-`setup_phase()` and the OS sandbox) and returns `json.dumps(app.openapi())` (FastAPI; Flask has no built-in spec), then
-`contract_tools.oasdiff_breaking` on the two JSON texts (`--allow-external-refs=false`, refs are internal). Runs at
-PostToolUse/Stop when a guarded file under `app:`'s package changed; it can wake but cannot block. It would catch a
-schema-only change (a model field renamed) that no route diff sees. Part B needs its own short plan and review (the
-section 10 sketch is not reviewed). Then Part C squawk (`.sql` under `contracts.db`; flags and JSON unverified) and
-Part D buf (Stop only; flags and JSON unverified). After 7.6: 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`),
-which wait for the runnability and determinism fixes. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports,
-empty-mode rule, cwd masking) stay queued. 7.6 Part A optional follow-ups: run the real oasdiff once (timing, JSON
-shape against `tests/oasdiff_fake.py`); Linux bwrap sibling-ref path; Django 6.0 and a real Django project; Stop end to
-end through `stop_audit.handle`; dedupe "not checked" notes at Stop.
+**7.6 Part B done (2026-11-26, plan reviewed in 3 rounds, build reviewer PASS round 2, committed on main).** See
+CLAUDE.md "Sprint 7.6 Part B" and `docs/research/2026-11-sprint7-6b-plan.md` (user decisions at its top). The app's
+generated OpenAPI (`app.openapi()`, FastAPI only) is built in both trees by `runner/lg_openapi.py` (baseline twice as a
+noise filter, cached per session in `.legacyguard/app_openapi_base.json`) and diffed with oasdiff or the parser;
+PostToolUse wake (also with no function targets), Stop finding that blocks once, CI annotation. Optional follow-ups:
+run the real oasdiff on a generated spec (JSON loading, rule levels behind the noise filter, a pure `$ref` rename);
+FastAPI with pydantic v1; a real FastAPI app's import cost; Linux bwrap.
+
+**Next (start here):** 7.6 Part C, squawk for `.sql` files under `contracts.db` (Part A plan section 10: latest
+release v2.74.0 per the GitHub releases API at the time; `squawk --reporter json --stdin-filepath` per earlier research,
+flags and JSON fields **unverified**; would replace the regexes in `contracts_parse.dangerous_statements` for SQL when
+present; PreToolUse-capable if fast). It needs its own short plan and review, like Part B. Then Part D buf (Stop only;
+flags and JSON unverified). After 7.6: 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`). The 7.4 follow-ups
+(7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd masking) stay queued. 7.6 Part A optional follow-ups: run
+the real oasdiff once (timing, JSON shape against `tests/oasdiff_fake.py`); Linux bwrap sibling-ref path; Django 6.0
+and a real Django project; Stop end to end through `stop_audit.handle`; dedupe "not checked" notes at Stop.
 
 **Flaky test to harden:** `tests/test_warm.py` process-id tests fail when the OS pid counter has wrapped below 1000
 (pids under `PID_MASK_MIN` are deliberately not masked, the 6.8d limit). Seen once on 2026-11-21 (pytest ran as pid

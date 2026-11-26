@@ -162,7 +162,8 @@ def tools_line(data: dict, cfg) -> str:
     try:
         from guardlib import contract_tools
         if not (cfg.contract_path("http") or (data.get("contract_tools") or {}).get("makemigrations")
-                or (data.get("contract_tools") or {}).get("notes")):
+                or (data.get("contract_tools") or {}).get("notes") or (data.get("contract_tools") or {}).get("app_openapi")
+                or data.get("app_openapi")):
             return ""
         return contract_tools.report_line(cfg, data)
     except Exception:  # noqa: BLE001 - the report never fails on this line

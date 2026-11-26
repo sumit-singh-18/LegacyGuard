@@ -102,6 +102,7 @@ def settings(cfg) -> dict:
         out = {}
     out.setdefault("oasdiff", "auto")
     out.setdefault("makemigrations", "auto")
+    out.setdefault("openapi_from_app", "auto")  # Sprint 7.6 Part B (D8): auto | false
     out.setdefault("pre_edit_timeout_s", 0.8)
     out.setdefault("timeout_s", 20)
     return out
@@ -397,10 +398,14 @@ def _sha12(text: str) -> str:
 
 
 def oasdiff_breaking(cfg, rel: str, before: str | None, after: str, trees, timeout: float, specs=None,
-                     pre_edit: bool = False):
+                     pre_edit: bool = False, internal_only: bool = False, label: str | None = None):
     """OasResult, or a Refusal (with the note text). Never raises. specs: the already-parsed (before, after) dicts.
-    pre_edit: a timeout adds 1 to the pre-edit counter, a run that returns in time sets it to 0."""
+    pre_edit: a timeout adds 1 to the pre-edit counter, a run that returns in time sets it to 0.
+    internal_only (Sprint 7.6 Part B, the app's generated spec): any `$ref` that names a file or URL is refused before
+    anything is copied or run, so `--allow-external-refs=false` is always passed and `trees` is unused.
+    label: the name used for rel in every refusal text (the generated spec's temp file name is never shown)."""
     tmp = None
+    name = label or rel
     try:
         if not before or not str(before).strip():
             return Refusal("", "skip")
@@ -413,13 +418,21 @@ def oasdiff_breaking(cfg, rel: str, before: str | None, after: str, trees, timeo
                 return Refusal(f"oasdiff {reason}, so the OpenAPI check used its built-in parser.", "missing")
             return Refusal(MISSING_NOTE[len("LegacyGuard: "):], "missing")
         a_spec, b_spec = specs if specs is not None else (_parse_yaml(before), _parse_yaml(after))
+        if internal_only:
+            try:
+                external = next((r for spec in (a_spec, b_spec) for r in _refs(spec) if r.split("#", 1)[0]), None)
+            except _Refused as exc:
+                return Refusal(f"oasdiff was not run on {name}: {exc}, so the built-in parser was used.", "refused")
+            if external is not None:
+                return Refusal(f"oasdiff was not run: {name} refers to {external}; LegacyGuard gives oasdiff only specs with "
+                               "internal references, so the built-in parser was used.", "refused")
         tmp = tempfile.mkdtemp(prefix="lg-oas-")
         budget = {"files": 0, "bytes": 0}
         try:
             refs_a = _materialise(rel, before, a_spec, str(trees[0]), os.path.join(tmp, "base"), budget)
             refs_b = _materialise(rel, after, b_spec, str(trees[1]), os.path.join(tmp, "rev"), budget)
         except _Refused as exc:
-            return Refusal(f"oasdiff was not run on {rel}: {exc}, so the built-in parser was used.", "refused")
+            return Refusal(f"oasdiff was not run on {name}: {exc}, so the built-in parser was used.", "refused")
         cmd = [tool.path, "breaking", os.path.join(tmp, "base", rel), os.path.join(tmp, "rev", rel), "-f", "json"]
         if not (refs_a or refs_b):
             cmd.append("--allow-external-refs=false")
@@ -427,7 +440,7 @@ def oasdiff_breaking(cfg, rel: str, before: str | None, after: str, trees, timeo
             from runner import os_sandbox
             mode = str((cfg.raw.get("behavioral_diff") or {}).get("os_sandbox", "auto"))
             if not os_sandbox.active(sys.executable, mode):
-                return Refusal(f"the spec {rel} refers to other files and no OS sandbox is available here, so oasdiff "
+                return Refusal(f"the spec {name} refers to other files and no OS sandbox is available here, so oasdiff "
                                "was not run and the built-in parser was used.", "refused")
             cmd = os_sandbox.wrap(cmd, sys.executable, writable=[tmp], readonly=[str(t) for t in trees], mode=mode)
         env = {k: v for k, v in os.environ.items() if k != "OASDIFF_CONFIG"}
@@ -438,13 +451,17 @@ def oasdiff_breaking(cfg, rel: str, before: str | None, after: str, trees, timeo
             _bump_timeouts(cfg, timed_out)
         if done is None:
             if timed_out:
-                return Refusal(f"oasdiff took longer than {timeout} s on {rel}, so the built-in parser was used.", "timeout")
+                return Refusal(f"oasdiff took longer than {(f'{timeout:.0f}' if label else timeout)} s on {name}, so the built-in parser was used.", "timeout")
             return Refusal(f"oasdiff could not run ({reason}); the built-in parser was used.", "failed")
         parsed = parse_changes(done.stdout)
         if parsed is None:
             first = (done.stderr or "").strip().splitlines()[:1]
             if done.returncode and first:
-                return Refusal(f"oasdiff could not load the spec: {first[0][:200]}; the built-in parser was used.", "failed")
+                msg = first[0]
+                if label:  # oasdiff names the files it read; those are temp paths here
+                    for side in ("base", "rev"):
+                        msg = msg.replace(os.path.join(tmp, side, rel), label)
+                return Refusal(f"oasdiff could not load the spec: {msg[:200]}; the built-in parser was used.", "failed")
             return Refusal("oasdiff printed output LegacyGuard could not read; the built-in parser was used.", "failed")
         if done.returncode:  # we never pass --fail-on, so a non-zero exit is a failure even with readable output
             return Refusal(f"oasdiff exited with code {done.returncode}; the built-in parser was used.", "failed")
@@ -481,6 +498,24 @@ def take_notes(data: dict, notes: list) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _app_openapi_part(data: dict) -> str:
+    """Sprint 7.6 Part B: the code-first OpenAPI part of the "Contract tools" line, or ""."""
+    oas = (data.get("contract_tools") or {}).get("app_openapi") or {}
+    state = data.get("app_openapi") or {}
+    failed = state.get("failed") or {}
+    if failed.get("paused"):
+        return f"app OpenAPI: paused ({failed.get('detail') or 'unknown'})"
+    if oas.get("kind") == "none" or state.get("kind") == "none":
+        return "app OpenAPI: not available for this app (no openapi() method)"
+    runs = int(oas.get("runs") or 0)
+    if not runs:
+        return ""
+    count = f"{runs} run{'s' if runs != 1 else ''}"
+    if oas.get("kind") == "fastapi":
+        return f"app OpenAPI: FastAPI {(oas.get('versions') or {}).get('fastapi') or '?'}, {count}"
+    return f"app OpenAPI: {count}"
+
+
 def report_line(cfg, data: dict) -> str:
     """The "Contract tools" line of the session report."""
     try:
@@ -500,6 +535,9 @@ def report_line(cfg, data: dict) -> str:
         mig = (data.get("contract_tools") or {}).get("makemigrations") or {}
         if mig.get("runs"):
             parts.append(f"makemigrations --check: Django {mig.get('django') or '?'}, {mig['runs']} run{'s' if mig['runs'] != 1 else ''}")
+        app = _app_openapi_part(data)
+        if app:
+            parts.append(app)
         line = "Contract tools: " + "; ".join(parts) + "."
         notes = (data.get("contract_tools") or {}).get("notes") or []
         if notes:

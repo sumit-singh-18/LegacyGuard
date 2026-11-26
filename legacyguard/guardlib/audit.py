@@ -33,7 +33,7 @@ def _migrations(cfg):
     return reader
 
 
-def _contract_findings(cfg, data, changed, drift=None, notes=None):
+def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None):
     http = _baseline_http(cfg)
     reader = _migrations(cfg)
     seen_items = set()
@@ -41,6 +41,7 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None):
     trees = (str(baseline.baseline_dir(cfg)), cfg.root)
     timeout = contract_tools.settings(cfg)["timeout_s"]
     notes = notes if notes is not None else []
+    static_oas: list = []  # (file, Break) from oasdiff on the static contract file, for the code-first dedupe (D5)
     for rel in changed:
         before = baseline.read_baseline(cfg, rel)
         after = virtual.read_current(str(Path(cfg.root) / rel)) or ""
@@ -51,6 +52,8 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None):
         code_hash = symbols.sha(after)
         for b in checks.run_checks(cfg, rel, before, after, http, reader, trees=trees, notes=notes, tool_timeout=timeout):
             seen_items.add((rel, b.item))
+            if b.source == "oasdiff":
+                static_oas.append((rel, b))
             known = next((f for f in data["findings"] if f["kind"] == "contract_break" and f["file"] == rel and f["item"] == b.item), None)
             if known is not None:
                 if known["state"] == "not_applied":
@@ -61,6 +64,7 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None):
                                evidence=f"{b.text()}; found by the session audit, so the edit bypassed the pre-write check", item=b.item, code_hash=code_hash,
                                state="waived" if waived else "open", extra={"contract_kind": b.kind})
     _drift_findings(cfg, data, drift, seen_items)
+    _oas_findings(cfg, data, oas, seen_items, static_oas)
     for f in data["findings"]:
         if f["kind"] == "contract_break" and f["state"] in ("open", "applied") and (f["file"], f["item"]) not in seen_items:
             f["state"] = "not_applied"
@@ -90,6 +94,98 @@ def _drift_findings(cfg, data, drift, seen_items) -> None:
         ledger.add_finding(data, kind="contract_break", status=ledger.FAILURE, source="makemigrations", subject=b.subject, file=file,
                            evidence=f"{b.subject}; found by makemigrations --check --dry-run (no database), new since the baseline",
                            item=b.item, code_hash=code_hash, state="waived" if waived else "open", extra={"contract_kind": "db"})
+
+
+def _static_key(b):
+    """(oasdiff id, subject) of a static-file oasdiff break: item oasdiff:<id>:<op path>:<fingerprint>."""
+    parts = b.item.split(":")
+    return (parts[1] if len(parts) > 1 else "", b.subject)
+
+
+def _oas_findings(cfg, data, oas, seen_items, static_oas) -> None:
+    """Sprint 7.6 Part B: the app's generated spec as contract_break findings (source app-openapi), before the
+    not_applied sweep. A standing break is FAILURE/open (blocks the Stop once); a hedged one RISK/recorded (never
+    blocks); a known finding follows its hedge both ways, waived ones stay waived. Recorded findings no longer reported
+    go to not_applied. A not-checked or paused run leaves every app-openapi finding as it is."""
+    from guardlib import app_openapi
+    mine = [f for f in data["findings"] if f["kind"] == "contract_break" and f.get("source") == app_openapi.SOURCE]
+    if oas is not None and oas.state == "not_checked":
+        for f in mine:
+            if f["state"] in ("open", "applied", "recorded"):
+                seen_items.add((f["file"], f["item"]))
+        return
+    reported = set()
+    static = {}
+    for rel, b in static_oas:
+        static.setdefault(_static_key(b), (rel, b))
+    rows = [(file, b, False) for file, b in (oas.breaks if oas is not None else [])]
+    rows += [(file, b, True) for file, b in (oas.hedged if oas is not None else [])]
+    how = "oasdiff" if oas is not None and oas.via == "oasdiff" else "the built-in parser"
+    for file, b, hedged in rows:
+        key = b.dedupe_key()
+        if key is not None and key in static:  # D5: the same change in the static contract file is reported there
+            rel, sb = static[key]
+            sf = next((f for f in data["findings"] if f["kind"] == "contract_break" and f["file"] == rel and f["item"] == sb.item), None)
+            if sf is not None and "also in the app's generated spec" not in sf["evidence"]:
+                sf["evidence"] += "; also in the app's generated spec"
+            continue
+        seen_items.add((file, b.item))
+        reported.add((file, b.item))
+        evidence = f"{b.subject}; found by comparing the OpenAPI spec the app generates in the baseline and now ({how})"
+        if hedged:
+            evidence += f"; {b.hedge}"
+        known = next((f for f in data["findings"] if f["kind"] == "contract_break" and f["file"] == file and f["item"] == b.item), None)
+        if known is not None:
+            if known["state"] == "waived":
+                continue
+            known["evidence"] = evidence  # rebuilt each run, so the hedge is said exactly when it holds
+            if hedged:
+                known["status"], known["hedged"] = ledger.RISK, True
+                if known["state"] in ("open", "applied", "not_applied"):
+                    known["state"] = "recorded"
+            else:
+                known["status"], known["hedged"] = ledger.FAILURE, False
+                if known["state"] in ("recorded", "not_applied"):
+                    known["state"] = "open"
+            continue
+        code_hash = app_openapi.code_hash(b)
+        waived = waivers.is_waived(cfg, "contract_break", file, b.item, code_hash)
+        ledger.add_finding(data, kind="contract_break", status=ledger.RISK if hedged else ledger.FAILURE, source=app_openapi.SOURCE,
+                           subject=b.subject, file=file, evidence=evidence, item=b.item, code_hash=code_hash,
+                           state="waived" if waived else ("recorded" if hedged else "open"),
+                           extra={"contract_kind": "http", "hedged": hedged})
+    for f in mine:
+        if f["state"] == "recorded" and (f["file"], f["item"]) not in reported:
+            f["state"] = "not_applied"
+
+
+def _app_openapi(cfg, data, changed, log=None):
+    """(outcome, notes) for this Stop. outcome None: no changed file can affect the generated spec. A paused check
+    with some guarded source changed gives a not_checked outcome, so findings are left as they are."""
+    from guardlib import app_openapi
+    try:
+        if not app_openapi.enabled(cfg):
+            return None, []
+        guarded = [rel for rel in changed if engine.is_guarded_source(cfg, rel)]
+        if not guarded:
+            return None, []
+        state = data.get("app_openapi")
+        snapshot = {"baseline_commit": data.get("baseline_commit")}
+        if app_openapi.is_paused(cfg, state, snapshot):
+            oas = app_openapi.paused_outcome(state)
+            return oas, list(oas.notes)
+        if not any(app_openapi.applies(cfg, rel, state, snapshot) for rel in guarded):
+            return None, []
+        oas = app_openapi.compute(cfg, str(baseline.baseline_dir(cfg)), cfg.root, state, snapshot)
+        app_openapi.write_cache(cfg, oas)
+    except Exception as exc:  # noqa: BLE001 - hooks fail open: a failed run leaves the findings unchanged
+        if log:
+            log(f"app openapi: {type(exc).__name__}: {exc}")
+        oas = app_openapi.SpecOutcome("not_checked", notes=[("app-openapi-internal", "LegacyGuard: the app's OpenAPI check "
+                                                                                    "failed inside LegacyGuard.")])
+    notes = app_openapi.record_run(data, oas)
+    context = app_openapi.context_text(oas, [b.item for _, b in oas.breaks])  # hedged and WARN lines for the report
+    return oas, notes + ([(None, context)] if context else [])
 
 
 def _drift(cfg, data, changed, log=None):
@@ -174,10 +270,10 @@ def _stale_callers(cfg, data, changed):
         conn.close()
 
 
-def _report_notes(data, notes: list, drift) -> None:
+def _report_notes(data, notes: list, drift, oas_notes=None) -> None:
     """Contract-tool notes for the session report (Sprint 7.6), each text once."""
     ct = data.setdefault("contract_tools", {})
-    texts = [t for _, t in notes] + ([drift.note] if drift is not None and drift.note else [])
+    texts = [t for _, t in notes] + ([drift.note] if drift is not None and drift.note else []) + [t for _, t in oas_notes or []]
     ct["notes"] = list(dict.fromkeys(texts))
 
 
@@ -192,8 +288,9 @@ def run(cfg, data: dict, log=None) -> list[dict]:
     notes: list = []
     with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), cfg.root, session_cache=True):
         drift = _drift(cfg, data, changed, log)
-        _contract_findings(cfg, data, changed, drift=drift, notes=notes)
-        _report_notes(data, notes, drift)
+        oas, oas_notes = _app_openapi(cfg, data, changed, log)  # Sprint 7.6 Part B: the app's generated spec
+        _contract_findings(cfg, data, changed, drift=drift, notes=notes, oas=oas)
+        _report_notes(data, notes, drift, oas_notes)
         _behavior_findings(cfg, data, changed)
     _test_with_code(cfg, data, changed)
     _stale_callers(cfg, data, changed)

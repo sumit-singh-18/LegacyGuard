@@ -136,6 +136,11 @@ def start_session(cfg, event):
     with ledger.locked(cfg.state_dir) as data:
         data.clear()
         data.update(fresh)
+    try:  # Sprint 7.6 Part B: a new session never reads an old session's generated-spec baseline
+        from guardlib import app_openapi
+        app_openapi.drop_cache(cfg)
+    except Exception as exc:  # noqa: BLE001
+        log_error(cfg.root, f"session_start: app openapi cache: {exc!r}")
     scratch.drop_session_cache(cfg)
     if fresh["baseline_ok"]:
         refresh(cfg)

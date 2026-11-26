@@ -354,6 +354,12 @@ Stop finding; D3 Django in dev requirements; D4 no oasdiff in CI). `contract_too
 file, Django `makemigrations --check` drift (new in the working tree only, no database). Later parts (plan section
 10): B code-first OpenAPI (`app.openapi()` in both trees), C squawk, D buf. Sprint 7 items left: 7.6 B-D, 7.5, 7.7.
 
+**7.6 Part B done (2026-11-26):** plan `docs/research/2026-11-sprint7-6b-plan.md` (reviewed in 3 rounds; user decisions
+D1 FastAPI-style `app.openapi()` only, M1 block the Stop once, D10 a paused check restarts only on a cache-key change).
+The app's generated spec is built in both trees by `runner/lg_openapi.py` (baseline twice, as a noise filter) and
+diffed with oasdiff or the parser; PostToolUse wake, Stop finding, CI annotation. Catches a schema-only change (a model
+field renamed) that no route or function diff sees. Sprint 7 items left: 7.6 C (squawk) and D (buf), 7.5, 7.7.
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
 validation on the FastAPI and Flask apps picked in run 1's research.

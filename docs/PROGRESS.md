@@ -232,3 +232,16 @@ until the reviewer passes it. Newest entries at the bottom.
 - Task 7.6 Part A review round 1: REVISE, docs only (criterion 8). Optional items taken: a hook-side test for the
   migration fix; Stop and CI refresh no longer re-run `oasdiff --version` unless the binary or config changed. 591
   passed, 2 skipped on 3.12 and 3.10.
+- Task 7.6 Part B (2026-11-26): code-first OpenAPI. Plan docs/research/2026-11-sprint7-6b-plan.md went through three
+  review rounds (round 1: the noise hedge turned real breaks into notes on apps with import-time defaults, the trigger
+  missed models outside the app package and in CI, the wake sat after the no-targets return, worst-case time, half-built
+  baseline cached, coarse dedupe key, silent parser drop; round 2: a baseline that never builds re-ran on every edit,
+  hedged findings had no lifecycle). User decisions D1 FastAPI only, M1 block once, D10 restart on key change, rest as
+  recommended. Built `runner/lg_openapi.py`, `guardlib/app_openapi.py`, wiring in post_edit, audit, ci, session_start.
+  Measured: spec build 0.22 to 0.23 s per tree; PostToolUse check 0.38 s first, 0.26 s cached. 630 passed, 2 skipped on
+  Python 3.12 and 3.10 (the 3.10 venv was recreated: corrupt, no pyvenv.cfg).
+- Task 7.6 Part B review round 1: REVISE. Fixed: (1) test 18's lock probe raced with itself across the three parallel
+  builds (1 in 25 runs failed); it now probes with a shared lock; (2) a finding's evidence kept its first hedge text when
+  its status changed; evidence is now rebuilt on every transition and test 11c checks it. Round 2: PASS. 630 passed, 2
+  skipped on Python 3.12 and 3.10; test 18 passed 40 of 40 solo runs. Tuning set not re-run (no tuning case has `app:`).
+

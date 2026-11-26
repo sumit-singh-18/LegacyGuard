@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 591 tests after Sprint 7.6 Part A). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 630 tests after Sprint 7.6 Part B). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -342,6 +342,67 @@ Plan: docs/research/2026-11-sprint7-6-plan.md (reviewer PASS round 3; user decis
   drift findings to `not_applied` (reads as fixed).
 - Tests: `tests/test_contract_tools.py`, `tests/test_pre_edit_oasdiff.py`, `tests/test_migration_drift.py`
   (`tests/oasdiff_fake.py` pins the v1.39.0 JSON shape).
+
+## Sprint 7.6 Part B (on main, 2026-11-26), code-first OpenAPI
+
+Plan: docs/research/2026-11-sprint7-6b-plan.md (reviewer PASS round 3; user decisions D1 FastAPI-style `app.openapi()`
+only, M1 block the Stop once, D10 a paused check restarts only on a cache-key change, the rest as recommended).
+- **Why a separate script:** a model-only edit (a pydantic field renamed) gives no behavioural targets
+  (`changed_targets` excludes classes), so the spec is built by `runner/lg_openapi.py` (target side, stdlib), not a
+  worker spec. It runs `lg_worker.prepare` (blocks, stubs, scratch, OS sandbox, throwaway cwd), `reset_determinism`,
+  then `load_app` and `app.openapi()` under `setup_phase()`; writes canonical JSON (`jsonable_encoder` only when FastAPI
+  is loaded) plus the project files it imported, the app file, FastAPI/pydantic versions and blocks.
+- **`guardlib/app_openapi.py`** (guard side): `enabled` (config `contract_tools.openapi_from_app: auto|false`),
+  `applies` (D6 trigger), `cache_key`, `run_tree`, `compute` (one deadline `SPEC_BUDGET_S`=45 s; the baseline built twice
+  in parallel with the working tree; a half-built baseline retried once and never cached; byte-equal specs skip the
+  tool; old-A vs old-B diffed once per session and cached as the noise list; oasdiff with `internal_only`
+  (`--allow-external-refs=false`) or the parser fallback), the cache file `.legacyguard/app_openapi_base.json` (M3;
+  deleted at SessionStart after the ledger reset), failure memory, wake/context texts, `record_run`.
+- **Noise rule (D4):** an old-vs-new break that old-vs-old also reports is dropped; a break is hedged only when it shares
+  `(operation, path)` with a WARN/ERR old-vs-old change. Default-value and operationId changes are INFO in oasdiff
+  (read in rules.go, not run), so import-time defaults do not hedge real breaks.
+- **Trigger (D6):** no cache or a different key: any guarded source edit runs the check once (that builds the cache);
+  then only files in the baseline's import set, the last complete working-tree run's import set, or the app module. A
+  cached `kind: none` (no `openapi()`) stops later runs, so an app that gains `openapi()` during the session is not
+  checked until the next session. **Pause (D10):** a check whose baseline was not fully built
+  records `app_openapi.failed {attempts, detail, paused}` under the key (updated under the store lock from the
+  session.json read there); after `MAX_BASE_ATTEMPTS`=2 the check is paused until the key changes, with one
+  `app-openapi-paused` note and a "paused" report line. If both attempts built one identical text it is cached with
+  `stable: None` instead: every later break of the session is hedged (non-blocking RISK, never a wake).
+- **PostToolUse:** `compute` runs outside the lock inside the check's `for_trees` block; the wake (D3: new ERR items,
+  once per item per session, re-checked against `app_openapi_seen` under the store lock) is raised before the
+  no-targets return, so a model-only edit wakes; `wakeups` goes up once if either the diff or the spec wakes. WARN and
+  hedged breaks are context notes.
+- **Stop:** `audit._app_openapi` after the drift check; findings are `contract_break`, source `app-openapi` (D9),
+  `contract_kind: "http"`. Lifecycle (`_oas_findings`): standing -> FAILURE, `recorded`/`not_applied` -> `open` (blocks
+  once, M1); hedged -> RISK `hedged`, `open`/`applied`/`not_applied` -> `recorded` (M2); `waived` stays; `recorded`
+  findings no longer reported go to `not_applied`. A not-checked or paused run sweeps nothing. D5: a code-first break
+  equal on `(id, operation, path, text)` to an oasdiff break of the static `contracts.http` file in the same run is
+  dropped.
+- **CI:** `ci._app_openapi` runs once whenever a guarded `.py` changed (no cache); standing breaks after the waiver key,
+  hedged lines and notes in `out.notes`; `app:` pseudo-files annotated without `file=`; counts toward failure only
+  under `fail_on: any` (M4).
+- Also: `oasdiff_breaking(internal_only=, label=)` (refusal texts say "the app's generated spec", temp paths stripped);
+  `ledger.SOURCES` gains `app-openapi`, session keys `app_openapi`, `app_openapi_seen`; the report's "Contract tools"
+  line has an "app OpenAPI: ..." part; `tests/oasdiff_fake.py` gains `diff` (oasdiff levels) and `diff-loud` (a default
+  change at level 2, a stand-in for the hedge path, not oasdiff's real level) modes.
+- Measured (this Mac, fixture): spec build 0.22 to 0.23 s per tree; whole PostToolUse check 0.38 to 0.39 s on the first
+  check of a session, about 0.26 s later (cached baseline).
+- Limits: FastAPI-shaped `app.openapi()` only; mounted sub-apps and `include_in_schema=False` routes are not in the
+  spec; a project that replaces `openapi()` is compared on what it returns; reordering `methods=[...]` changes the
+  operationId (INFO, not reported); a baseline that cannot be built costs the first two guarded edits up to 45 s each,
+  then the check pauses (a transient failure is not retried until the key changes); pydantic renames a component when a
+  second model of the same name appears, and the parser fallback then compares none of its fields (it names them in a
+  note); only the baseline is built twice, so a nondeterministic working tree with a stable baseline is not detected;
+  a wake can repeat a break the PreToolUse oasdiff check already asked about (D5 dedupes only at Stop and in CI);
+  waiver items differ between oasdiff and the parser; the trigger set misses modules imported only inside functions;
+  CI runs it on every PR that changes a guarded `.py`; the worst-case PostToolUse sum (85 s first check, 60 s later,
+  before the diff) can still pass the 150 s hook limit with a large diff (fails open; Stop repeats it); at the deadline
+  a `run_tree` thread is not waited for. Unverified: the real oasdiff binary (JSON loading, timing, rule output for a
+  rename, default change, pure component rename), FastAPI with pydantic v1 or versions other than 0.162.x, Linux
+  bubblewrap. Do not validate it on held-out set 2.
+- Tests: `tests/test_app_openapi.py` (21, real FastAPI; module skip without it, Flask test has its own importorskip),
+  `tests/test_app_openapi_guard.py` (18, canned builds, no FastAPI).
 
 ## Sprint 7.1 (on main, 2026-11-22), impact on the resolved call graph
 

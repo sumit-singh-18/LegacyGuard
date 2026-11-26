@@ -183,6 +183,7 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
                 sym = next((s for s in symbols.extract(text)[0] if s.qualname == t.qualname), None)
                 out.lines[f"{t.file}::{t.qualname}"] = sym.line_start if sym else 1
         _drift(cfg, out, str(base_dir), root, changed + contract_files)
+        _app_openapi(cfg, out, str(base_dir), root, changed)
     out.notes = list(dict.fromkeys([t for _, t in tool_notes] + out.notes))
     return cfg, out
 
@@ -201,6 +202,34 @@ def _drift(cfg, out: Outcome, base_dir: str, root: str, files: list[str]) -> Non
         out.notes.append(drift.note)
     for file, b in drift.breaks:
         if not waivers.is_waived(cfg, "contract_break", file, b.item, migration_drift.code_hash(b)):
+            out.breaks.append((file, b))
+
+
+def _app_openapi(cfg, out: Outcome, base_dir: str, root: str, changed: list[str]) -> None:
+    """Sprint 7.6 Part B: breaks in the app's generated OpenAPI spec, base against head. Runs once when any guarded
+    `.py` changed (D6: no trigger set and no cache in CI); standing breaks after the waiver check, hedged breaks and
+    every note in out.notes. A code-first break equal to an oasdiff break on the static contract file is left out (D5)."""
+    from guardlib import app_openapi
+    try:
+        if not app_openapi.enabled(cfg) or not any(engine.is_guarded_source(cfg, rel) for rel in changed):
+            return
+        oas = app_openapi.compute(cfg, base_dir, root, None, {"baseline_commit": out.base}, use_cache=False)
+    except Exception as exc:  # noqa: BLE001 - fails open: a note, no break
+        out.notes.append(f"LegacyGuard: the app's OpenAPI check failed ({type(exc).__name__}).")
+        return
+    out.notes += [t for _, t in oas.notes]
+    context = app_openapi.context_text(oas, [b.item for _, b in oas.breaks])
+    if context:
+        out.notes += context.split("\n")
+    static = set()
+    for _, b in out.breaks:
+        if b.source == "oasdiff":
+            parts = b.item.split(":")
+            static.add((parts[1] if len(parts) > 1 else "", b.subject))
+    for file, b in oas.breaks:
+        if b.dedupe_key() is not None and b.dedupe_key() in static:
+            continue
+        if not waivers.is_waived(cfg, "contract_break", file, b.item, app_openapi.code_hash(b)):
             out.breaks.append((file, b))
 
 
@@ -233,7 +262,7 @@ def annotations(cfg, out: Outcome) -> list[str]:
         line = out.lines.get(f"{r.file}::{r.qualname}", 1)
         lines.append(f"::warning file={r.file},line={line},title=LegacyGuard: {r.qualname} differs on a placeholder instance::{_esc(msg)}")
     for rel, b in out.breaks:
-        if rel.startswith("django-app:"):  # drift in a third-party app: not a path GitHub can attach to
+        if rel.startswith(("django-app:", "app:")):  # drift in a third-party app, or an app ref: not a path GitHub can attach to
             lines.append(f"::warning title=LegacyGuard contract::{_esc(rel + ': ' + b.text())}")
         else:
             lines.append(f"::warning file={rel},title=LegacyGuard contract::{_esc(b.text())}")
