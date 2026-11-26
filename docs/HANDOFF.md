@@ -1,6 +1,9 @@
-# Handoff (2026-11-22)
+# Handoff (2026-11-25)
 
 Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read docs/HANDOFF.md and continue."
+
+**Next task: Sprint 7.6 Part B (code-first OpenAPI).** See "Next (start here)" below. Run it with `/sprint-loop`
+(plan first, reviewed, user decisions asked, then build and review).
 
 ## Rules the user set (keep these)
 - **Authorship:** every commit is by the user only. No Claude co-author trailer and no PR attribution. Commit to `main` directly; no pull requests.
@@ -19,14 +22,38 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `CLAUDE.md`: what the plugin does, each sprint's changes (Sprint 6.8 has entries for 6.8a to 6.8f), conventions.
 - `docs/ROADMAP.md` section 3d: Sprint 6.8 (added after run 3) and the revised Sprint 7 order.
 - `docs/PROGRESS.md`: the running log.
+- `docs/research/`: the reviewed build plans (`2026-11-sprint7-2-plan.md`, `-7-4-plan.md`, `-7-6-plan.md`).
 - `docs/validation/2026-11-run3.md`: the write-up that motivated Sprint 6.8. Raw data in `2026-11-run3-raw.md` and `-results.json`.
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` at a467802: Sprint 6.8 done, the frozen-pid fix (193f183), 7.4 Part A (3385224), 7.2a (1c78663) the 3.12+ trace-leak CI fix (a467802) 7.2b and 7.4 Part B (see git log). Check CI with `gh run list --limit 3`; a467802 is the first commit expected green after 1c78663 failed on Linux 3.12/3.13.
-- 519 tests pass on Python 3.12 (`.venv-dev/bin/python -m pytest -q`, about 185 s) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`; if missing, recreate with `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310 && /private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`).
-- The run 3 write-up and the README headline (held-out number, "1 of 10 either way") are committed and were reviewer-checked (PASS, round 2).
-- Run 4 (6.8f) is done and committed (8a7b947): `holdout2.yaml` and patches, the `holdout2` set in `tools/validate.py`, the run 4 raw results and write-up, and the README headline now on held-out set 2 ("8 of 9 not checked; 1 of 9 without the fix's tests, 2 of 9 with").
+- `main` is pushed to `origin/main` at **e90ff7f** (7.6 Part A). CI was green on all 6 jobs (macOS and Ubuntu, Python
+  3.10, 3.12, 3.13; the `guard` job runs on PRs only). Working tree clean apart from the runtime folders
+  `.legacyguard/` and `.claude/worktrees/` (never commit them). Recent commits: e839724 7.2b, ebd86f6 7.4 Part B,
+  c3fe2f0 7.1, e90ff7f 7.6 Part A.
+- **591 tests** (2 skipped: the real-oasdiff tests, no binary here) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
+  about 230 to 300 s, Django 6.1.3 installed) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`).
+  **The 3.10 venv lost Django** (temp cleanup; seen 2026-11-25): before running it, do
+  `/private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`. If the venv is gone, recreate it with
+  `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310` and the same pip line. Without Django the drift
+  tests skip instead of failing, so check the skip count (expect 2).
+- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1 and 7.6 Part A are done. Left: 7.6 Parts B to D, 7.5, 7.7
+  (see "Next" below).
+- The run 3 and run 4 write-ups and the README headline (held-out set 2) are committed.
+
+## Working notes from the last session
+- Agents sometimes die with `API Error: Can't reach the API server (ENOTFOUND)`. Check what they left on disk first (a
+  researcher wrote its whole plan file before dying), then resume the **same** agent with SendMessage; its context
+  survives.
+- For a new plan, the loop that worked: researcher writes `docs/research/<date>-sprint<N>-plan.md`, the reviewer reviews it
+  (7.6 took 3 rounds), then ask the user the plan's open decisions with AskUserQuestion and record the answers at the top
+  of the plan, then the implementer builds, then the reviewer (the one that reviewed the plan knows it best) reviews
+  the build. The coordinator writes CLAUDE.md, PROGRESS, ROADMAP and HANDOFF; tell the implementer not to touch them,
+  and tell the reviewer the docs are part of acceptance.
+- After a push, `gh run list --commit <sha>` can be empty for a few seconds: loop until the run id appears, then
+  `gh run watch <id> --exit-status`.
+- The UserPromptSubmit hook in this repo adds "LegacyGuard impact data" blocks to prompts; it is the plugin guarding
+  itself (names mode), not part of the user's message.
 
 ### Sprint 6.8, general runnability (from run 3). Success metric: the unchecked share on both sets, detections second.
 | Task | State | Commit |
@@ -118,10 +145,18 @@ hook end-to-end and ledger-lock hold time not measured; a per-session parse cach
 in `requirements-dev.txt` (installed in `.venv-dev` 6.1.3 and the 3.10 venv 5.2.19). Unverified: the real oasdiff
 binary (never run here), Linux bwrap sibling-ref path, Django 6.0, a real Django project.
 
-**Next:** 7.6 later parts (plan section 10): B code-first OpenAPI (`app.openapi()` in both trees, oasdiff on the
-two JSON texts), C squawk, D buf. Then 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`), which wait for the
-runnability and determinism fixes. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd
-masking) stay queued.
+**Next (start here):** 7.6 Part B, code-first OpenAPI (plan `docs/research/2026-11-sprint7-6-plan.md` section 10):
+a worker spec `kind: "openapi"` that loads the app with `lg_worker.load_app` in both trees (as routes do, with
+`setup_phase()` and the OS sandbox) and returns `json.dumps(app.openapi())` (FastAPI; Flask has no built-in spec), then
+`contract_tools.oasdiff_breaking` on the two JSON texts (`--allow-external-refs=false`, refs are internal). Runs at
+PostToolUse/Stop when a guarded file under `app:`'s package changed; it can wake but cannot block. It would catch a
+schema-only change (a model field renamed) that no route diff sees. Part B needs its own short plan and review (the
+section 10 sketch is not reviewed). Then Part C squawk (`.sql` under `contracts.db`; flags and JSON unverified) and
+Part D buf (Stop only; flags and JSON unverified). After 7.6: 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`),
+which wait for the runnability and determinism fixes. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports,
+empty-mode rule, cwd masking) stay queued. 7.6 Part A optional follow-ups: run the real oasdiff once (timing, JSON
+shape against `tests/oasdiff_fake.py`); Linux bwrap sibling-ref path; Django 6.0 and a real Django project; Stop end to
+end through `stop_audit.handle`; dedupe "not checked" notes at Stop.
 
 **Flaky test to harden:** `tests/test_warm.py` process-id tests fail when the OS pid counter has wrapped below 1000
 (pids under `PID_MASK_MIN` are deliberately not masked, the 6.8d limit). Seen once on 2026-11-21 (pytest ran as pid
@@ -150,7 +185,7 @@ masking) stay queued.
 - 6.8a: `os.path.exists`/`stat`/`listdir` do not see redirected (shadow) files; `_cache_like` is a name heuristic; a SIGKILLed warm server leaks its scratch folder in temp.
 - 6.8c: bypass instance copies only top-level `__init__` assignments; the harvested `__init__` types path is untested end to end; the warm-server path has no dedicated test.
 - Callers do not get guard or date inputs: `diff._merged_edit` merges only literals, fragments, numbers and regexes.
-- Not verified on Linux bubblewrap or on a Django project. The 7.4 FICLONE clone path is untested on a real reflink file system (CI's ext4 picks copy).
+- Not verified on Linux bubblewrap or on a real Django project (7.6 drift ran on fixtures only). The 7.4 FICLONE clone path is untested on a real reflink file system (CI's ext4 picks copy).
 - Untracked `.legacyguard/` and `.claude/worktrees/` are runtime state; do not commit them.
 - Several untested-reason texts were never re-run by hand (run 4's groups were read from the raw reasons).
 
