@@ -57,6 +57,53 @@ def _django_settings(bases: list[Path]) -> str | None:
     return None
 
 
+def _tracked(root: Path, *patterns: str) -> list[str]:
+    try:
+        res = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", *patterns], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [f for f in res.stdout.split("\0") if f and not f.startswith(".legacyguard/")] if res.returncode == 0 else []
+
+
+def _proto_folder(root: Path, scope: str) -> str | None:
+    """Sprint 7.6 Part D (D5): the import root of the repo's one buf module, relative to scope, or None. Only the
+    `version` and `modules[].path` keys of the one tracked buf.yaml are read; two buf.yaml files, a buf.work.yaml, a v2
+    file with more than one module, a parse error, or a folder outside scope give None."""
+    found = _tracked(root, "buf.yaml", "*/buf.yaml", "buf.work.yaml", "*/buf.work.yaml")
+    if len(found) != 1 or not found[0].endswith("buf.yaml") or found[0].endswith("buf.work.yaml"):
+        return None
+    rel = found[0]
+    try:
+        import yaml
+        data = yaml.safe_load((root / rel).read_text())
+    except Exception:  # noqa: BLE001 - an unreadable file writes nothing
+        return None
+    if not isinstance(data, dict):
+        return None
+    folder = rel[: -len("buf.yaml")].rstrip("/")
+    version = str(data.get("version") or "v1")
+    if version == "v2":
+        modules = data.get("modules")
+        if modules is not None:
+            if not isinstance(modules, list) or len(modules) > 1:
+                return None
+            if modules:
+                path = modules[0].get("path") if isinstance(modules[0], dict) else None
+                if not isinstance(path, str) or not path.strip() or path.startswith("/") or ".." in path.split("/"):
+                    return None
+                folder = "/".join(x for x in (folder, path.strip().strip("/")) if x and x != ".")
+    elif version not in ("v1", "v1beta1"):
+        return None
+    s = scope.strip().rstrip("/")
+    if s in ("", "."):
+        return folder or "."
+    if folder == s:
+        return "."
+    if not folder.startswith(s + "/"):
+        return None
+    return folder[len(s) + 1:]
+
+
 def detect(root: str | Path) -> dict | None:
     """What to write for this repo, or None when it is not a Python git repo."""
     root = Path(root)
@@ -74,6 +121,7 @@ def detect(root: str | Path) -> dict | None:
     scope_dir = root / scope
     openapi = next((n for n in OPENAPI_NAMES if (scope_dir / n).exists()), None)
     return {"scope": scope, "source_roots": source_roots, "django_settings": _django_settings(bases), "openapi": openapi,
+            "proto": _proto_folder(root, scope),
             "has_venv": any((root / v).is_dir() for v in VENV_NAMES), "python_files": len(files)}
 
 
@@ -86,8 +134,11 @@ def render(found: dict, today: str | None = None) -> str:
         lines.append(f"source_roots: [{', '.join(found['source_roots'])}]")
     if found["django_settings"]:
         lines.append(f"django_settings: {found['django_settings']}")
-    if found["openapi"]:
-        lines += ["contracts:", f"  http: {found['openapi']}"]
+    contracts = ([f"  http: {found['openapi']}"] if found.get("openapi") else [])
+    contracts += ([f"  proto: {found['proto']}          # the folder your .proto imports are relative to (buf breaking)"]
+                  if found.get("proto") else [])
+    if contracts:
+        lines += ["contracts:"] + contracts
     lines.append("frozen: []                # files Claude must never edit, for example legacy/ledger_v1.py")
     return "\n".join(lines) + "\n"
 

@@ -16,7 +16,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guardlib import baseline, checks, config as cfgmod, contracts_parse as cp, engine, symbols, waivers
+from guardlib import baseline, checks, config as cfgmod, contracts_parse as cp, engine, paths, symbols, waivers
 from runner import diff
 
 
@@ -71,6 +71,8 @@ def load_cfg(root: str, python: str | None = None):
         for key in ("scope", "source_roots", "django_settings", "app", "contracts"):
             if found.get(key):
                 raw[key] = found[key]
+        if found.get("proto"):  # Sprint 7.6 Part D (D5): the import root of the one buf.yaml module
+            raw["contracts"] = {**(raw.get("contracts") or {}), "proto": found["proto"]}
         cfg = cfgmod.Config(root=root, raw=raw)
     if python:
         cfg.raw["python"] = python
@@ -184,6 +186,7 @@ def run(root: str, base: str | None = None, python: str | None = None, index: bo
                 sym = next((s for s in symbols.extract(text)[0] if s.qualname == t.qualname), None)
                 out.lines[f"{t.file}::{t.qualname}"] = sym.line_start if sym else 1
         _drift(cfg, out, str(base_dir), root, changed + contract_files)
+        _buf(cfg, out, str(base_dir), root, changed + contract_files)
         _app_openapi(cfg, out, str(base_dir), root, changed)
     out.notes = list(dict.fromkeys([t for _, t in tool_notes] + out.notes))
     return cfg, out
@@ -203,6 +206,32 @@ def _drift(cfg, out: Outcome, base_dir: str, root: str, files: list[str]) -> Non
         out.notes.append(drift.note)
     for file, b in drift.breaks:
         if not waivers.is_waived(cfg, "contract_break", file, b.item, migration_drift.code_hash(b)):
+            out.breaks.append((file, b))
+
+
+def _buf(cfg, out: Outcome, base_dir: str, root: str, files: list[str]) -> None:
+    """Sprint 7.6 Part D: buf breaking on contracts.proto, base against head, once per run; breaks after the waiver
+    check, notes in out.notes (fails open: a note, no break)."""
+    from guardlib import contract_tools, proto_contract
+    try:
+        if not cfg.contract_path("proto"):
+            note = proto_contract.unset_note(cfg, [f for f in files if paths.in_scope(f, cfg.scope)])
+            if note:
+                out.notes.append(note[1])
+            return
+        problem = proto_contract.folder_problem(cfg)
+        if problem:
+            out.notes.append(problem[0])
+            return
+        if not proto_contract.applies(cfg, files):
+            return
+        proto = proto_contract.compute(cfg, base_dir, root, contract_tools.settings(cfg)["timeout_s"])
+    except Exception as exc:  # noqa: BLE001
+        out.notes.append(f"LegacyGuard: the .proto check failed ({type(exc).__name__}).")
+        return
+    out.notes += [t for _, t in proto.notes]
+    for file, b in proto.breaks:
+        if not waivers.is_waived(cfg, "contract_break", file, b.item, proto_contract.code_hash(root, file, b.item)):
             out.breaks.append((file, b))
 
 
@@ -263,7 +292,8 @@ def annotations(cfg, out: Outcome) -> list[str]:
         line = out.lines.get(f"{r.file}::{r.qualname}", 1)
         lines.append(f"::warning file={r.file},line={line},title=LegacyGuard: {r.qualname} differs on a placeholder instance::{_esc(msg)}")
     for rel, b in out.breaks:
-        if rel.startswith(("django-app:", "app:")):  # drift in a third-party app, or an app ref: not a path GitHub can attach to
+        if rel.startswith(("django-app:", "app:")) or (b.source == "buf" and b.item.split(":")[2:3] == ["-"]):
+            # drift in a third-party app, an app ref, or a path-less buf rule (PACKAGE_*): no path GitHub can attach to
             lines.append(f"::warning title=LegacyGuard contract::{_esc(rel + ': ' + b.text())}")
         else:
             where = f"file={rel},line={b.line}" if getattr(b, "line", None) else f"file={rel}"

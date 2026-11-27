@@ -35,6 +35,7 @@ contracts:
   http: openapi.yaml
   db: migrations/
   messages: schemas/events/
+  proto: proto/          # the folder your .proto imports are relative to
 frozen:
   - legacy/ledger_v1.py
 ```
@@ -46,6 +47,8 @@ Under `behavioral_diff:`, `deterministic: false` turns off the fixed random seed
 `mutants: 8` under `behavioral_diff:` sets how many small bugs are planted in the changed lines after a pass, to show how strong the inputs were (0 turns it off).
 
 With `app:` set (FastAPI, Starlette or Flask) and the index built, a change that reaches a route handler also sends the same HTTP requests to the old and the new app in process, and compares status, content type and body.
+
+With `contracts.proto` set and [buf](https://buf.build/docs/cli/installation/) (1.32.0 or later) on PATH, the Stop audit and CI run `buf breaking` on the `.proto` files under that folder, the session baseline (or the base commit) against the working tree, with LegacyGuard's own buf config (category `FILE`, or `contract_tools.buf_category: PACKAGE | WIRE_JSON | WIRE`); the project's `buf.yaml` is not read. `contract_tools.buf: false` turns it off.
 
 `affected_tests:` (`enabled`, `max_tests`, `timeout_s`) controls running the project's own tests that reach the changed functions after each edit. It needs the test map from `/legacyguard:index`. A test that passed before the session and fails after an edit is reported to Claude like a behavior difference.
 

@@ -368,6 +368,13 @@ the regexes. Real binary run once: JSON and positions confirmed, about 5 ms per 
 7.5, 7.7. Follow-ups: a squawk veto of regex hits in comments and strings (D2 c); a version-gated short list of opt-in
 rules (D9).
 
+**7.6 Part D done (2026-11-26):** plan `docs/research/2026-11-sprint7-6d-plan.md` (reviewed in 3 rounds; user decisions
+D8 one real-binary check, D7 a pinned, checksum-verified buf in CI, D1 Stop and CI only). `buf breaking` compares the
+`.proto` files under the new `contracts.proto` folder, copied into a temp folder with our own `buf.yaml` on each side,
+no network, the OS sandbox when available. FILE category by default. 7.6 (contract tools) is complete. Sprint 7 items
+left: 7.5 (Django routes), 7.7 (`/legacyguard:characterize`). Follow-ups: PreToolUse for buf (measured cost passed the
+gate); a proto parser fallback (D9); the module layout from a project `buf.yaml` (D3 b).
+
 **Sprint 7, open roadmap items that need no new research:** C5 contract tools (oasdiff, squawk, `makemigrations
 --check`, buf when present); D3 `/legacyguard:characterize`; C3 Django route diffing; A2 layer 3 (throwaway copy-on-write working folder); route-diff
 validation on the FastAPI and Flask apps picked in run 1's research.

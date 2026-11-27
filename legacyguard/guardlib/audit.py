@@ -33,7 +33,7 @@ def _migrations(cfg):
     return reader
 
 
-def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None, tool_state=None):
+def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None, tool_state=None, proto=None):
     http = _baseline_http(cfg)
     reader = _migrations(cfg)
     seen_items = set()
@@ -66,6 +66,7 @@ def _contract_findings(cfg, data, changed, drift=None, notes=None, oas=None, too
                                evidence=f"{b.text()}; found by the session audit, so the edit bypassed the pre-write check", item=b.item, code_hash=code_hash,
                                state="waived" if waived else "open", extra={"contract_kind": b.kind})
     _squawk_kept(data, tool_state, seen_items)
+    _buf_findings(cfg, data, proto, seen_items)
     _drift_findings(cfg, data, drift, seen_items)
     _oas_findings(cfg, data, oas, seen_items, static_oas)
     for f in data["findings"]:
@@ -82,6 +83,63 @@ def _squawk_kept(data, tool_state: dict, seen_items: set) -> None:
         if (f["kind"] == "contract_break" and f.get("source") == "squawk" and f["state"] in ("open", "applied")
                 and kinds.get(f["file"]) not in (None, "off")):
             seen_items.add((f["file"], f["item"]))
+
+
+def _buf_findings(cfg, data, proto, seen_items) -> None:
+    """Sprint 7.6 Part D (D6): buf breaks as contract_break findings, before the not_applied sweep. proto None (no
+    .proto under contracts.proto differs from the baseline, or contracts.proto is not set) and kind `off` keep nothing,
+    so the sweep closes open buf findings; every other not-checked kind (config included) keeps them."""
+    from guardlib import proto_contract
+    if proto is None or proto.state == "skip":
+        return
+    if proto.state == "not_checked":
+        if proto.kind == "off":
+            return
+        for f in data["findings"]:
+            if f["kind"] == "contract_break" and f.get("source") == "buf" and f["state"] in ("open", "applied"):
+                seen_items.add((f["file"], f["item"]))
+        return
+    for file, b in proto.breaks:
+        seen_items.add((file, b.item))
+        known = next((f for f in data["findings"] if f["kind"] == "contract_break" and f["file"] == file and f["item"] == b.item), None)
+        if known is not None:
+            if known["state"] == "not_applied":
+                known["state"] = "open"
+            continue
+        code_hash = proto_contract.code_hash(cfg.root, file, b.item)
+        waived = waivers.is_waived(cfg, "contract_break", file, b.item, code_hash)
+        ledger.add_finding(data, kind="contract_break", status=ledger.FAILURE, source="buf", subject=b.subject, file=file,
+                           evidence=f"{b.text()}; found by buf breaking ({proto.category}) against the session baseline",
+                           item=b.item, code_hash=code_hash, state="waived" if waived else "open",
+                           extra={"contract_kind": "proto"})
+
+
+def _proto(cfg, data, changed, log=None):
+    """(outcome or None, notes) for this Stop (Sprint 7.6 Part D, R2-1 order): contracts.proto unset gives at most the
+    buf-unset note and None; an invalid or out-of-scope folder gives not_checked (kind config) on every Stop; no changed
+    .proto under the folder gives None; else buf runs once. Notes go through take_notes (once per session per kind)."""
+    from guardlib import contract_tools, proto_contract
+    try:
+        if not cfg.contract_path("proto"):
+            note = proto_contract.unset_note(cfg, changed)
+            return None, contract_tools.take_notes(data, [note] if note else [])
+        problem = proto_contract.folder_problem(cfg)
+        if problem:
+            proto = proto_contract.ProtoOutcome("not_checked", kind="config", notes=[("buf-folder", problem[0])])
+        elif not proto_contract.applies(cfg, changed):
+            return None, []
+        else:
+            proto = proto_contract.compute(cfg, str(baseline.baseline_dir(cfg)), cfg.root,
+                                           contract_tools.settings(cfg)["timeout_s"])
+            ct = data.setdefault("contract_tools", {})
+            runs = int((ct.get("buf") or {}).get("runs") or 0)
+            ct["buf"] = {"runs": runs + 1, "last": proto.state, "kind": proto.kind}
+    except Exception as exc:  # noqa: BLE001 - hooks fail open: a failed run leaves buf findings unchanged
+        if log:
+            log(f"buf: {type(exc).__name__}: {exc}")
+        proto = proto_contract.ProtoOutcome("not_checked", kind="failed", notes=[
+            ("buf-failed", "LegacyGuard: the .proto check failed inside LegacyGuard.")])
+    return proto, contract_tools.take_notes(data, proto.notes)
 
 
 def _drift_findings(cfg, data, drift, seen_items) -> None:
@@ -284,10 +342,12 @@ def _stale_callers(cfg, data, changed):
         conn.close()
 
 
-def _report_notes(data, notes: list, drift, oas_notes=None) -> None:
-    """Contract-tool notes for the session report (Sprint 7.6), each text once."""
+def _report_notes(data, notes: list, drift, oas_notes=None, proto_notes=None) -> None:
+    """Contract-tool notes for the session report (Sprint 7.6), each text once. proto_notes (Part D): texts already
+    passed through take_notes."""
     ct = data.setdefault("contract_tools", {})
     texts = [t for _, t in notes] + ([drift.note] if drift is not None and drift.note else []) + [t for _, t in oas_notes or []]
+    texts += list(proto_notes or [])
     ct["notes"] = list(dict.fromkeys(texts))
 
 
@@ -303,8 +363,9 @@ def run(cfg, data: dict, log=None) -> list[dict]:
     with scratch.for_trees(cfg, str(baseline.baseline_dir(cfg)), cfg.root, session_cache=True):
         drift = _drift(cfg, data, changed, log)
         oas, oas_notes = _app_openapi(cfg, data, changed, log)  # Sprint 7.6 Part B: the app's generated spec
-        _contract_findings(cfg, data, changed, drift=drift, notes=notes, oas=oas)
-        _report_notes(data, notes, drift, oas_notes)
+        proto, proto_notes = _proto(cfg, data, changed, log)  # Sprint 7.6 Part D: buf breaking on contracts.proto
+        _contract_findings(cfg, data, changed, drift=drift, notes=notes, oas=oas, proto=proto)
+        _report_notes(data, notes, drift, oas_notes, proto_notes)
         _behavior_findings(cfg, data, changed)
     _test_with_code(cfg, data, changed)
     _stale_callers(cfg, data, changed)

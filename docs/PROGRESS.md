@@ -264,3 +264,13 @@ until the reviewer passes it. Newest entries at the bottom.
 - Task 7.6 Part C build review round 1: REVISE (test 7 asserted no `GITHUB_*` names reach squawk, which fails on
   every Actions runner). Fixed, plus a BOM escape, the pg-version note only when squawk runs, a warm-up in the timing
   test. Round 2: PASS. 705 passed, 2 skipped on Python 3.12 and 3.10.
+- Task 7.6 Part D (2026-11-26): `buf breaking` for `.proto` contracts. Plan docs/research/2026-11-sprint7-6d-plan.md
+  went through three review rounds (round 1: a misread v1.53.0 changelog behind the minimum version, folder `.` and
+  scope broke the prefix rules, an undefined unset-key note and lifecycle cases, invented `line=1`, folders named
+  `buf.yaml`, a miscounted rule set, version parsing; round 2: `_proto` order would sweep on an invalid folder, stale
+  test numbers, the 1.52.x claim, AC7). User decisions: D8 one checksum-verified download of buf 1.75.0, D7 a pinned
+  buf in CI, D1 Stop and CI only, the rest as recommended. Built `guardlib/proto_contract.py` and wiring in
+  contract_tools, audit, ci, autosetup, report. The real binary refused `--config` with folder inputs (dropped; our
+  `buf.yaml` inside each side isolates the run) and printed missing imports as COMPILE lines. Timing 0.089 s (3 files),
+  0.259 s (200 files). Build review round 1: PASS; the coordinator made the buf-named folder check case-insensitive
+  (one more test). 781 passed, 2 skipped on Python 3.12 (780 on 3.10 before the one-line fix).

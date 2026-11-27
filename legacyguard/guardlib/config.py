@@ -20,8 +20,10 @@ DEFAULTS = {
     # Sprint 7.6: oasdiff: auto (PATH) | false | a path; makemigrations: auto (when django_settings is set) | false;
     # openapi_from_app (Part B): auto (when app: is set and the app has openapi()) | false.
     # squawk (Part C, .sql files under contracts.db): auto (PATH) | false | a path.
+    # buf (Part D, .proto files under contracts.proto): auto (PATH) | false | a path; buf_category: FILE | PACKAGE |
+    # WIRE_JSON | WIRE (the default FILE comes from contract_tools.settings, so a set value is always the user's).
     "contract_tools": {"oasdiff": "auto", "makemigrations": "auto", "openapi_from_app": "auto", "squawk": "auto",
-                       "pre_edit_timeout_s": 0.8, "timeout_s": 20},
+                       "buf": "auto", "pre_edit_timeout_s": 0.8, "timeout_s": 20},
     "alarm_budget": {"max_prompts_per_session": 3, "may_interrupt": ["frozen", "contract_break", "behavior_difference"],
                      "context_only": ["many_callers", "history_coupling", "untested"]},
 }

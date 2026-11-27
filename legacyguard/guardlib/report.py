@@ -161,7 +161,9 @@ def tools_line(data: dict, cfg) -> str:
     """Sprint 7.6: which contract tools ran (oasdiff, squawk, makemigrations --check), or "" when none applies here."""
     try:
         from guardlib import contract_tools
-        if not (cfg.contract_path("http") or cfg.contract_path("db") or (data.get("contract_tools") or {}).get("makemigrations")
+        if not (cfg.contract_path("http") or cfg.contract_path("db") or cfg.contract_path("proto")
+                or any(f.get("source") == "buf" for f in data.get("findings") or [])
+                or (data.get("contract_tools") or {}).get("makemigrations")
                 or (data.get("contract_tools") or {}).get("notes") or (data.get("contract_tools") or {}).get("app_openapi")
                 or data.get("app_openapi")):
             return ""

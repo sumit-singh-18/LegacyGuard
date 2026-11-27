@@ -2,7 +2,7 @@
 
 Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read docs/HANDOFF.md and continue."
 
-**Next task: Sprint 7.6 Part D (buf for `.proto` contracts, Stop only).** See "Next (start here)" below. Run it with `/sprint-loop`
+**Next task: Sprint 7.5 (Django routes).** 7.6 (contract tools) is complete. See "Next (start here)" below. Run it with `/sprint-loop`
 (plan first, reviewed, user decisions asked, then build and review).
 
 ## Rules the user set (keep these)
@@ -27,18 +27,21 @@ Start a new session in `/Users/sumit/Documents/LegacyGuard/repo` and say: "Read 
 - `docs/validation/2026-11-run4.md`: run 4, the first measurement of Sprint 6.8, on held-out set 2 (`holdout-set-2.md`). Raw data in `2026-11-run4-raw.md` and `-results.json`.
 
 ## State at handoff
-- `main` is pushed to `origin/main` with **7.6 Part C** (squawk) on top of 7.6 Part B and the process-group fix. CI was green on all 6 jobs (macOS and Ubuntu, Python
+- `main` is pushed to `origin/main` with **7.6 Part D** (buf) on top of 7.6 Part C (squawk), Part B and the process-group fix. CI was green on all 6 jobs (macOS and Ubuntu, Python
   3.10, 3.12, 3.13; the `guard` job runs on PRs only). Working tree clean apart from the runtime folders
   `.legacyguard/` and `.claude/worktrees/` (never commit them). Recent commits: e839724 7.2b, ebd86f6 7.4 Part B,
-  c3fe2f0 7.1, e90ff7f 7.6 Part A, fe0d0c5 7.6 Part B, ab1edb3 process-group fix, then 7.6 Part C (see `git log`).
-- **705 tests** (2 skipped: the real-oasdiff tests, no binary here; squawk-cli 2.74.0 is installed in both venvs, so its
-  real-binary tests run) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
+  c3fe2f0 7.1, e90ff7f 7.6 Part A, fe0d0c5 7.6 Part B, ab1edb3 process-group fix, 6060062 7.6 Part C, then 7.6 Part D (see `git log`).
+- **781 tests** (2 skipped: the real-oasdiff tests, no binary here; squawk-cli 2.74.0 is installed in both venvs, so its
+  real-binary tests run). The 9 real-buf tests need `LEGACYGUARD_TEST_BUF=<path to buf 1.75.0>` (or buf on `PATH`); without
+  it they skip (expect 11 skipped). The verified binary was left at
+  `/private/tmp/claude-501/-Users-sumit-Documents-LegacyGuard/51a1ac6f-efe0-499a-958b-a667b5aa61b9/scratchpad/buf-bin/buf`
+  (may be cleared; CI downloads its own, checksum-checked) on Python 3.12 (`.venv-dev/bin/python -m pytest -q`,
   about 230 to 300 s, Django 6.1.3 installed) and Python 3.10 (`/private/tmp/claude-501/venv310/bin/python -m pytest -q`).
   **The 3.10 venv was recreated on 2026-11-26** (it was corrupt again: no `pyvenv.cfg`); FastAPI 0.162.5, Django 5.2.19
   installed. If tests import-fail there, do `/private/tmp/claude-501/venv310/bin/pip install -r requirements-dev.txt`. If the venv is gone, recreate it with
   `/opt/homebrew/bin/python3.10 -m venv /private/tmp/claude-501/venv310` and the same pip line. Without Django the drift
   tests skip instead of failing, so check the skip count (expect 2).
-- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1, 7.6 Parts A, B and C are done. Left: 7.6 Part D, 7.5, 7.7
+- Sprint 7 progress: 7.4 Part A and B, 7.2a, 7.2b, 7.1, 7.6 Parts A to D are done. Left: 7.5, 7.7
   (see "Next" below).
 - The run 3 and run 4 write-ups and the README headline (held-out set 2) are committed.
 
@@ -168,13 +171,23 @@ is now in `requirements-dev.txt`, so CI runs the real-binary tests. Optional fol
 comments and strings (D2 c); a version-gated short list of opt-in rules (D9); refusing a tool binary resolved inside
 the project (squawk and oasdiff).
 
-**Next (start here):** 7.6 Part D, buf (latest v1.75.0 per Part A plan section 10) at Stop only: `buf breaking <tree>
---against <baseline dir> --error-format json` per earlier research; flags and JSON **unverified**; needs a `buf.yaml`
-in the project. It needs its own short plan and review, like Parts B and C (ask the user before any download, as D8
-was asked for squawk). After 7.6: 7.5 (Django routes) and 7.7 (`/legacyguard:characterize`). The 7.4 follow-ups
-(7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd masking) stay queued. 7.6 Part A optional follow-ups: run
-the real oasdiff once (timing, JSON shape against `tests/oasdiff_fake.py`); Linux bwrap sibling-ref path; Django 6.0
-and a real Django project; Stop end to end through `stop_audit.handle`; dedupe "not checked" notes at Stop.
+**7.6 Part D done (2026-11-26, plan reviewed in 3 rounds, build reviewer PASS round 1, committed on main).** See
+CLAUDE.md "Sprint 7.6 Part D" and `docs/research/2026-11-sprint7-6d-plan.md` (user decisions and a build note at its
+top). `buf breaking` on the `.proto` files under the new `contracts.proto` folder, at Stop and in CI, in a temp folder
+with our own `buf.yaml` per side. buf 1.75.0 was run once here (checksum-verified) and is downloaded in CI. Optional
+follow-ups: PreToolUse for buf (measured 0.09 s / 0.26 s, under the gate); a proto parser fallback; reading the module
+layout from a project `buf.yaml`.
+
+**Bug found in passing (not fixed, small):** the README shows `os_sandbox: off`, but YAML loads unquoted `off` as False;
+every caller does `str(...)` and gets "False", which `os_sandbox.active`/`wrap` do not treat as off, so the sandbox
+stays on (fails safe, but silently). `behavioral_diff.cwd_mode: off` has the same problem (`str(... or "auto")` turns
+False into "auto"). Fix in config loading (map False to "off") or quote the values in the README.
+
+**Next (start here):** 7.5, Django route diffing (ROADMAP C3), then 7.7 (`/legacyguard:characterize`). Each needs its
+own plan and review. The 7.4 follow-ups (7.4b bwrap overlay, phase 2 imports, empty-mode rule, cwd masking) stay
+queued. 7.6 Part A optional follow-ups: run the real oasdiff once (timing, JSON shape against `tests/oasdiff_fake.py`);
+Linux bwrap sibling-ref path; Django 6.0 and a real Django project; Stop end to end through `stop_audit.handle`;
+dedupe "not checked" notes at Stop.
 
 **Flaky test to harden:** `tests/test_warm.py` process-id tests fail when the OS pid counter has wrapped below 1000
 (pids under `PID_MASK_MIN` are deliberately not masked, the 6.8d limit). Seen once on 2026-11-21 (pytest ran as pid

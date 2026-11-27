@@ -1,7 +1,10 @@
-"""External contract tools (Sprint 7.6 Parts A and C): find a tool, cache what was found, run it, never raise.
+"""External contract tools (Sprint 7.6 Parts A, C and D): find a tool, cache what was found, run it, never raise.
 
 squawk (Part C) lints `.sql` files under `contracts.db` (PostgreSQL only); its breaking rules add to the built-in
 regex items, they never replace them (`squawk_lint`, `squawk_items`, `checks._squawk_breaks`).
+
+buf (Part D) runs `buf breaking` on the `.proto` files under `contracts.proto` at the Stop audit and in CI
+(`buf_breaking`; files, items and lifecycle in `proto_contract`). No fallback parser: without buf they are unchecked.
 
 oasdiff (`oasdiff breaking <base> <revision> -f json`) replaces the built-in OpenAPI parser for the configured
 contract file when it is installed. Every public function here catches `Exception` and returns None or a safe value.
@@ -47,7 +50,7 @@ MAX_REF_BYTES = 5 * 2**20
 MAX_DEPTH = 200
 SKIP_AFTER_TIMEOUTS = 2
 VERSION_TIMEOUT_S = 2
-TOOLS = ("oasdiff", "squawk")  # Sprint 7.6 Part C: squawk for .sql files under contracts.db
+TOOLS = ("oasdiff", "squawk", "buf")  # Part C: squawk for .sql under contracts.db; Part D: buf for .proto under contracts.proto
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _LEVELS = {"ERR": 3, "err": 3, "error": 3, "WARN": 2, "warn": 2, "warning": 2, "INFO": 1, "info": 1}
 
@@ -115,6 +118,8 @@ def settings(cfg) -> dict:
     out.setdefault("squawk", "auto")  # Sprint 7.6 Part C: auto | false | <path>
     out.setdefault("squawk_pg_version", None)
     out.setdefault("squawk_assume_in_transaction", False)
+    out.setdefault("buf", "auto")  # Sprint 7.6 Part D: auto | false | <path>
+    out.setdefault("buf_category", "FILE")  # FILE | PACKAGE | WIRE_JSON | WIRE
     out.setdefault("pre_edit_timeout_s", 0.8)
     out.setdefault("timeout_s", 20)
     return out
@@ -227,6 +232,8 @@ def refresh(cfg, reset_counters: bool) -> None:
     value, the resolved path or the binary's stat changed, so a Stop does not run `--version` under the ledger lock."""
     try:
         for name in TOOLS:
+            if name == "buf" and not cfg.contract_path("proto"):
+                continue  # Part D: no `buf --version` probe unless contracts.proto is set
             if not reset_counters:
                 cached = _load(cfg).get(name)
                 path, _, _ = _resolve(cfg, name)
@@ -754,6 +761,213 @@ def record_unknown_rules(cfg, names: list[str]) -> None:
         _save(cfg, data)
 
 
+# ---- buf (Sprint 7.6 Part D) ----
+
+BUF_MIN_VERSION = (1, 32, 0)  # R1-1: the first buf that reads a version v2 buf.yaml, which LegacyGuard writes
+BUF_CATEGORIES = ("FILE", "PACKAGE", "WIRE_JSON", "WIRE")
+BUF_MISSING_NOTE = ("LegacyGuard: buf was not found, so .proto changes were not checked. Install buf "
+                    "(https://buf.build/docs/cli/installation/) or set contract_tools.buf in .legacyguard/config.yaml.")
+BUF_CATEGORY_NOTE = ("LegacyGuard: contract_tools.buf_category must be one of FILE, PACKAGE, WIRE_JSON, WIRE; buf used "
+                     "FILE.")
+BUF_FIELDS = ("path", "start_line", "start_column", "end_line", "end_column", "type", "message", "plugin", "policy")
+_BUF_VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)", re.ASCII)
+_BUF_IMPORT_ERR = re.compile(r'^(?:Failure: )?(rev|base)/(\S+?\.proto): import "([^"]+)": ')
+_PROTO_IMPORT = re.compile(rb'^\s*import\s+(?:(?:public|weak)\s+)?"([^"]+)"')
+BUF_IMPORT_MESSAGE = "imported file does not exist"  # buf 1.75.0's COMPILE message for a missing import (run, D8)
+
+
+@dataclass
+class BufResult:
+    """buf's annotations, each with the module path of the new-side file it names (None: no path, e.g. FILE_NO_DELETE
+    or PACKAGE_*), the run's wall time and whether it ran inside the OS sandbox."""
+    lines: list            # [(annotation dict, module path or None)]
+    seconds: float
+    sandboxed: bool
+
+
+def buf_version(word) -> tuple | None:
+    """(major, minor, patch) from the last word of `buf --version` (`1.75.0`, `1.75.1-dev`), else None (tried)."""
+    if not isinstance(word, str):
+        return None
+    m = _BUF_VERSION.match(word)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def buf_category(cfg) -> tuple[str, tuple | None]:
+    """(category, note or None): contract_tools.buf_category after strip().upper(), else FILE with a note."""
+    raw = (cfg.raw.get("contract_tools") or {})
+    if "buf_category" not in raw:
+        return "FILE", None
+    value = raw.get("buf_category")
+    if isinstance(value, str) and value.strip().upper() in BUF_CATEGORIES:
+        return value.strip().upper(), None
+    return "FILE", ("buf-category", BUF_CATEGORY_NOTE)
+
+
+def buf_config_text(category: str) -> str:
+    return f"version: v2\nbreaking:\n  use:\n    - {category}\n"
+
+
+def _pos(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
+def parse_buf(stdout: str) -> list[dict] | None:
+    """The annotations from `buf breaking --error-format json`: one JSON object per line, keys path, start_line,
+    start_column, end_line, end_column, type, message (and plugin, policy), each omitted when empty. None when any line
+    is not that shape (the whole run is rejected). Unknown keys are ignored."""
+    if not isinstance(stdout, str):
+        return None
+    out = []
+    for raw in stdout.split("\n"):
+        if not raw.strip():
+            continue
+        try:
+            x = json.loads(raw)
+        except ValueError:
+            return None
+        if not isinstance(x, dict) or not isinstance(x.get("type"), str) or not x["type"] or not isinstance(x.get("message"), str):
+            return None
+        if "path" in x and not isinstance(x["path"], str):
+            return None
+        if any(k in x and not _pos(x[k]) for k in ("start_line", "start_column", "end_line", "end_column")):
+            return None
+        if any(k in x and not isinstance(x[k], str) for k in ("plugin", "policy")):
+            return None
+        out.append({k: x[k] for k in BUF_FIELDS if k in x})
+    return out
+
+
+def buf_tool(cfg):
+    """The buf Tool, or a Refusal (off, missing, old). Never spawns a process."""
+    tool = find("buf", cfg)
+    if tool is None:
+        reason = find_reason("buf", cfg)
+        if reason == "switched off":
+            return Refusal("", "off")
+        if reason.startswith("configured path"):
+            return Refusal(f"buf {reason}, so .proto changes were not checked.", "missing")
+        return Refusal(BUF_MISSING_NOTE[len("LegacyGuard: "):], "missing")
+    v = buf_version(tool.version)
+    if v is not None and v < BUF_MIN_VERSION:
+        return Refusal(f"buf {tool.version} is older than 1.32.0, the first version that reads a version v2 buf.yaml, "
+                       "which LegacyGuard writes for the check; .proto changes were not checked.", "old")
+    return tool
+
+
+def _buf_path(path: str, tmp: str, rev_files: dict) -> tuple[str, str] | None:
+    """(side, module path) for a path buf printed: rev/<m>, base/<m>, the same under the temp folder, or a bare <m>
+    of the new side. None for anything else."""
+    real = os.path.realpath(tmp)
+    for root in (real, tmp):
+        for side in ("rev", "base"):
+            pre = os.path.join(root, side) + os.sep
+            if path.startswith(pre):
+                return side, path[len(pre):].replace(os.sep, "/")
+    for side in ("rev", "base"):
+        if path.startswith(side + "/"):
+            return side, path[len(side) + 1:]
+    if path in rev_files:
+        return "rev", path
+    return None
+
+
+def _import_name(text: bytes | None, line) -> str | None:
+    try:
+        return _PROTO_IMPORT.match(text.split(b"\n")[line - 1]).group(1).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - the note then names no import
+        return None
+
+
+def buf_breaking(cfg, base_files: dict, rev_files: dict, category: str, timeout: float, prefix: str = ""):
+    """BufResult or Refusal (kinds off, missing, old, timeout, unstartable, failed, compile, imports). Never raises.
+
+    buf runs once, in a fresh temp folder that is its cwd, on `rev#format=dir` against `base#format=dir`: copies of the
+    .proto bytes only, with our own v2 buf.yaml in each side (the input is then its own controlling workspace, so no
+    buf.yaml or buf.work.yaml above it is read), no BUF_* variable from the caller, its cache, config, data and HOME in
+    the temp folder, stdin empty, and inside the OS sandbox when one is available. prefix: the repo path of the folder
+    ("" for the repo root, else "<folder>/"), for the notes. buf 1.75.0 refuses `--config <file>` with a dir input
+    below the config's folder ("contained by module at path"), so no --config is passed (run, D8)."""
+    tmp = None
+    try:
+        tool = buf_tool(cfg)
+        if isinstance(tool, Refusal):
+            return tool
+        tmp = tempfile.mkdtemp(prefix="lg-buf-")
+        for name in ("base", "rev", "cache", "config", "data", "home"):
+            os.mkdir(os.path.join(tmp, name))
+        text = buf_config_text(category)
+        for side, files in (("base", base_files), ("rev", rev_files)):
+            for m, body in files.items():
+                dest = os.path.join(tmp, side, *m.split("/"))
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as fh:
+                    fh.write(body)
+            with open(os.path.join(tmp, side, "buf.yaml"), "w") as fh:
+                fh.write(text)
+        cmd = [tool.path, "breaking", "rev#format=dir", "--against", "base#format=dir", "--error-format", "json",
+               "--disable-symlinks"]
+        env = {k: v for k, v in os.environ.items() if not k.startswith("BUF_")}
+        env.update(BUF_CACHE_DIR=os.path.join(tmp, "cache"), BUF_CONFIG_DIR=os.path.join(tmp, "config"),
+                   BUF_DATA_DIR=os.path.join(tmp, "data"), HOME=os.path.join(tmp, "home"))
+        from runner import os_sandbox
+        mode = str((cfg.raw.get("behavioral_diff") or {}).get("os_sandbox", "auto"))
+        sandboxed = os_sandbox.active(sys.executable, mode)
+        if sandboxed:
+            cmd = os_sandbox.wrap(cmd, sys.executable, writable=[tmp], readonly=[], mode=mode)
+        done, reason, timed_out = _run(cmd, timeout, tmp, env, input=b"", text=False)
+        _update(cfg, "buf", last_seconds=done.seconds if done else None, sandboxed=sandboxed,
+                last_error=None if done else ("timeout: " if timed_out else "") + reason)
+        if done is None:
+            if timed_out:
+                return Refusal(f"buf took longer than {timeout:g} s; .proto changes were not checked.", "timeout")
+            return Refusal(f"buf could not run ({reason}); .proto changes were not checked.", "unstartable")
+        found = parse_buf(done.stdout)
+        if found is None:
+            return Refusal("buf printed output LegacyGuard could not read; .proto changes were not checked.", "failed")
+        if not found and done.returncode != 0:
+            lines = [x for x in (done.stderr or "").splitlines() if x.strip()]
+            if not lines:
+                return Refusal(f"buf exited with code {done.returncode}; .proto changes were not checked.", "failed")
+            first = lines[0].replace(os.path.realpath(tmp) + os.sep, "").replace(tmp + os.sep, "")
+            m = _BUF_IMPORT_ERR.match(first)
+            if m:
+                return Refusal(f'buf could not find import "{m.group(3)}" in {prefix + m.group(2)}; LegacyGuard gives buf '
+                               "only the files under contracts.proto and fetches no dependencies, so .proto changes were "
+                               "not checked.", "imports")
+            return Refusal(f"buf could not check the .proto files: {first[:200]}; nothing was reported.", "failed")
+        if (done.returncode == 0) != (not found) or done.returncode not in (0, 100):
+            return Refusal(f"buf exited with code {done.returncode}; .proto changes were not checked.", "failed")
+        mapped = []
+        for x in found:
+            where = None
+            if "path" in x:
+                where = _buf_path(x["path"], tmp, rev_files)
+                if where is None or (where[0] == "base" and x["type"] != "COMPILE"):
+                    return Refusal("buf reported a file LegacyGuard did not give it; .proto changes were not checked.",
+                                   "failed")
+            mapped.append((x, where))
+        compile_lines = [(x, w) for x, w in mapped if x["type"] == "COMPILE"]
+        if compile_lines:
+            x, w = sorted(compile_lines, key=lambda c: (c[1] is None or c[1][0] != "rev"))[0]
+            side, m = w if w else ("rev", None)
+            rel = prefix + m if m else "?"
+            if x["message"].startswith(BUF_IMPORT_MESSAGE) and m:
+                name = _import_name((rev_files if side == "rev" else base_files).get(m), x.get("start_line"))
+                what = f'import "{name}"' if name else "an import"
+                return Refusal(f"buf could not find {what} in {rel}; LegacyGuard gives buf only the files under "
+                               "contracts.proto and fetches no dependencies, so .proto changes were not checked.", "imports")
+            label = "the new .proto files" if side == "rev" else "the baseline .proto files"
+            return Refusal(f"buf could not compile {label} ({rel}:{x.get('start_line', '?')}: {x['message'][:120]}); "
+                           "nothing was reported.", "compile")
+        return BufResult([(x, w[1] if w else None) for x, w in mapped], done.seconds, sandboxed)
+    except Exception as exc:  # noqa: BLE001
+        return Refusal(f"buf step failed (internal error: {type(exc).__name__}); .proto changes were not checked.", "failed")
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def take_notes(data: dict, notes: list) -> list[str]:
     """The note texts to show now: kind None always; any other kind once per session (session.json tool_notes)."""
     out = []
@@ -809,6 +1023,39 @@ def _squawk_part(cfg) -> str:
     return text
 
 
+def _buf_part(cfg, data: dict) -> str:
+    """Sprint 7.6 Part D: the buf part of the "Contract tools" line: when contracts.proto is set, or (R1-6) when it is
+    not but the ledger holds a buf finding."""
+    if not cfg.contract_path("proto"):
+        if any(f.get("source") == "buf" for f in (data or {}).get("findings") or []):
+            return "buf not run: contracts.proto not set"
+        return ""
+    from guardlib import proto_contract
+    problem = proto_contract.folder_problem(cfg)
+    if problem:
+        return f"buf not run: contracts.proto is invalid ({problem[1]})"
+    e = _load(cfg).get("buf") or {}
+    v = buf_version(e.get("version"))
+    if e.get("path") and v is not None and v < BUF_MIN_VERSION:
+        text = f"buf {e.get('version')} too old"
+    elif e.get("path"):
+        text = f"buf {e.get('version') or '(version unknown)'} ({e['path']})"
+        if e.get("last_seconds") is not None:
+            text += f", last run {e['last_seconds']:.2f} s"
+            if e.get("sandboxed") is False:
+                text += ", no OS sandbox"
+        elif e.get("last_error"):
+            text += f", last run failed ({e['last_error'][:80]})"
+    elif e.get("reason") == "switched off" or str(_config_value(cfg, "buf")).lower() in ("false", "off", "no"):
+        text = "buf switched off"
+    else:
+        text = "buf not found"
+    category, _ = buf_category(cfg)
+    if category != "FILE":
+        text += f", category {category}"
+    return text
+
+
 def report_line(cfg, data: dict) -> str:
     """The "Contract tools" line of the session report."""
     try:
@@ -828,6 +1075,9 @@ def report_line(cfg, data: dict) -> str:
         squawk = _squawk_part(cfg)
         if squawk:
             parts.append(squawk)
+        buf = _buf_part(cfg, data)
+        if buf:
+            parts.append(buf)
         mig = (data.get("contract_tools") or {}).get("makemigrations") or {}
         if mig.get("runs"):
             parts.append(f"makemigrations --check: Django {mig.get('django') or '?'}, {mig['runs']} run{'s' if mig['runs'] != 1 else ''}")

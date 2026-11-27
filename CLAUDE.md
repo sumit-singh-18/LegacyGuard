@@ -54,7 +54,7 @@ by a re-run under the full limit; never a detection, never fails CI, waivable). 
 
 ## Sprint 1 (branch sprint1-foundations, 2026-11-13)
 
-- **Tests:** `tests/` (pytest; 705 tests after 7.6 Part C). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
+- **Tests:** `tests/` (pytest; 781 tests after 7.6 Part D). Run with `.venv-dev/bin/python -m pytest -q`. To run target code on
   another interpreter: `LG_TEST_TARGET_PY=/path/to/python3.x`. CI: `.github/workflows/tests.yml`.
 - **Sandbox, 3 layers:** (1) OS sandbox around the worker (`runner/os_sandbox.py`: sandbox-exec on macOS,
   bubblewrap on Linux, probed once; config `behavioral_diff.os_sandbox: auto|off`). (2) PEP 578 audit hook in
@@ -477,6 +477,55 @@ Plan: docs/research/2026-11-sprint7-6c-plan.md (reviewer PASS round 3; user deci
   hook timing as a separate process.
 - Tests: `tests/test_sql_migration_checks.py` (today's regex behaviour pinned first), `tests/test_squawk.py` (fake and
   real binary; real tests find squawk on `PATH` or in pip's scripts folder), `tests/squawk_fake.py`.
+
+## Sprint 7.6 Part D (on main, 2026-11-26), buf breaking for Protocol Buffers
+
+Plan: docs/research/2026-11-sprint7-6d-plan.md (reviewer PASS round 3; user decisions D8 one checksum-verified
+download, D7 (b) a pinned buf in CI, D1 (b) Stop and CI only, the rest as recommended; build note at its top).
+- **Config:** new `contracts.proto: <folder>` (the import root, relative to scope; `.` is the scope root). Refused with
+  a note (kind `config`, findings kept): names ending `.proto`/`.yaml`/`.yml`, `..`, absolute, outside scope.
+  `contract_tools.buf: auto|false|<path>`, `buf_category: FILE|PACKAGE|WIRE_JSON|WIRE` (default FILE, buf's own; else
+  a `buf-category` note and FILE). Auto-setup (`autosetup._proto_folder`) writes the key once from a single tracked
+  `buf.yaml` (v1, or v2 with one module), relative to scope, only when inside it; `ci.load_cfg` maps it. No project
+  `buf.yaml` is needed or read (D3, D5).
+- **Run (`guardlib/proto_contract.py`, `contract_tools.buf_breaking`):** only `.proto` bytes under the folder are
+  copied into a fresh `lg-buf-*` folder as `base/` and `rev/`, each with our own v2 `buf.yaml` (written after the
+  files, so nothing collected can replace it; any folder component named `buf.yaml`, `buf.work.yaml` or `buf.lock`,
+  any case, refuses the run). Command `buf breaking rev#format=dir --against base#format=dir --error-format json
+  --disable-symlinks`, cwd the temp folder, every `BUF_*` stripped, `BUF_CACHE_DIR`/`BUF_CONFIG_DIR`/`BUF_DATA_DIR`/`HOME`
+  inside it, stdin `b""`, through `_run` → `os_sandbox.run`, wrapped in the OS sandbox when active (D10). A v2
+  `buf.yaml` in the input stops buf's walk-up config search at once, so a parent `buf.yaml`/`buf.work.yaml` is ignored
+  (the real binary showed a parent `except:` silently dropping a rule without it). The real binary refuses
+  `--config`/`--against-config` with a folder input, so they are not passed. Identical sides skip buf.
+- **Output:** one JSON object per line, decided from the lines, not the exit code (100 for breaks and for compile
+  errors). Every rule of the chosen category is a break (source `buf`); `COMPILE` lines are a `compile` or (for
+  "imported file does not exist") `imports` refusal; BSR deps are never fetched (D4). Keys
+  `buf:<rule>:<rel or ->:<message[:80]>:<sha12>`; `line` is None when the positions are 1/1/1/1 (FILE_NO_DELETE,
+  MESSAGE_NO_DELETE, SERVICE_NO_DELETE); path-less rules are filed under the folder and annotated without `file=`.
+  Oldest buf 1.32.0 (first v2 `buf.yaml`; D11), version parsed with an anchored ASCII regex, unknown versions tried.
+- **Hooks:** Stop (`audit._proto` in order: unset → `buf-unset` note once when an in-scope `.proto` changed, None;
+  invalid or out of scope → not checked, kind `config`, every Stop; no `.proto` changed → None; else `compute`) and
+  `ci._buf`; one buf run per Stop. Not PreToolUse or PostToolUse (D1 b), although the measured cost passed the gate.
+- **Lifecycle (D6, `audit._buf_findings`):** switched off, the key removed ("contracts.proto not set" in the report) or
+  a Stop with no `.proto` change sweeps open buf findings; every other not-checked kind (missing, old, timeout, failed,
+  compile, imports, refused, config, too large) keeps them. Lookup by `(file, item)`, so a waiver holds for the
+  session across edits; a new session and CI use the hash. No built-in parser fallback (D9).
+- Also: `ledger.SOURCES` gains `buf`; the "Contract tools" report line has a buf part when `contracts.proto` is set
+  or a buf finding exists; `refresh` probes `buf --version` only when `contracts.proto` is set; the README documents
+  the key. CI (`.github/workflows/tests.yml`) downloads buf v1.75.0 for the runner (`curl -fsSL`, `shasum -a 256 -c`
+  against pinned values, fails on mismatch or an unknown runner) into `$RUNNER_TEMP` and sets `LEGACYGUARD_TEST_BUF`.
+  Real-binary tests find buf via `LEGACYGUARD_TEST_BUF`, then `PATH`, and skip without it or below 1.32.0.
+- Measured (buf 1.75.0, macOS arm64, median of 10): 3-file pair 0.089 s sandboxed (0.067 s not); 200-file module
+  0.259 s (0.216 s). The cache gets only empty folders; HOME and XDG stay empty; the macOS sandbox denies writes and
+  connects.
+- Limits: FILE breaks include file and package moves (by design); buf versions 1.32 to 1.74 were not run (the COMPILE
+  and import behaviour changed in 1.68; 1.52.x garbles MESSAGE_SAME_JSON_FORMAT's message and so its key); a lone CR
+  puts every annotation on line 1 (CI shows `line=1`); a rename gives two findings (FIELD_SAME_NAME and
+  FIELD_SAME_JSON_NAME); imports from outside the folder or BSR deps are never checked; Linux bubblewrap with buf first
+  runs in CI; `getDescriptorAndLocationForDeletedMessage` read only by inference; the SessionStart `--version` probe
+  runs unsandboxed with the full env (as for oasdiff and squawk).
+- Tests: `tests/test_buf.py` (76, 9 need the real binary; `test_fake_matches_real` compares the fake's bytes to the
+  real binary's), `tests/buf_fake.py`.
 
 ## Sprint 7.1 (on main, 2026-11-22), impact on the resolved call graph
 

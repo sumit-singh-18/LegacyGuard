@@ -22,6 +22,22 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Download buf v1.75.0 (real-binary tests of the .proto check)
+        # Pinned release asset with a checksum check (values from the release's sha256.txt); a mismatch fails the job.
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64) asset=buf-Linux-x86_64; sum=fad1e38d6909bbb583a4da81d8c02a01046e2cd663bde7e337dd24277393764b ;;
+            macOS-ARM64) asset=buf-Darwin-arm64; sum=f71b009ebd8530b12fd85b060c6c245e15d6e5110ccc8da48d8b6fa71e59330b ;;
+            *) echo "no pinned buf for ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+          esac
+          dir="$RUNNER_TEMP/buf-bin"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/buf" "https://github.com/bufbuild/buf/releases/download/v1.75.0/$asset"
+          echo "$sum  $dir/buf" | shasum -a 256 -c -
+          chmod +x "$dir/buf"
+          echo "LEGACYGUARD_TEST_BUF=$dir/buf" >> "$GITHUB_ENV"
       - name: Run tests
         run: python -m pytest -q
 
